@@ -27,7 +27,7 @@ export default function Header() {
       {/* Title bar (draggable) */}
       <div className="drag-region flex items-center justify-between px-4 pt-3 pb-1">
         <h1 className="text-sm font-bold text-zinc-900 dark:text-white no-drag">
-          AI Meeting Assistant
+          MeetU
         </h1>
         <div className="flex items-center gap-1.5 no-drag">
           <button

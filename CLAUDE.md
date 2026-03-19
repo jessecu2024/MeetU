@@ -1,4 +1,4 @@
-# AI Meeting Assistant — Claude Code 开发指南
+# MeetU (开会啦) — Claude Code 开发指南
 
 ## ⚠️ 商业合规定位（最重要，贯穿全项目）
 

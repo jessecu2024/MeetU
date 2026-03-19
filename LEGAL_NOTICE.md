@@ -1,6 +1,6 @@
 # Third-Party Licenses / 第三方许可证归属
 
-AI Meeting Assistant 使用了以下开源软件。感谢所有开源作者的贡献。
+MeetU 使用了以下开源软件。感谢所有开源作者的贡献。
 
 ## MIT License
 

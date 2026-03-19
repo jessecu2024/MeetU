@@ -1,8 +1,8 @@
 {
-  "name": "meeting-ai-assistant",
-  "version": "0.1.0",
-  "description": "AI-powered meeting assistant with real-time transcription, translation, and smart speech suggestions",
-  "license": "UNLICENSED",
+  "name": "meetu",
+  "version": "1.0.0",
+  "description": "MeetU (开会啦) — Your AI Meeting Copilot. Real-time transcription, translation, and smart speech suggestions. BYOK. Privacy-first.",
+  "license": "BSL-1.1",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.js",
@@ -49,8 +49,8 @@
     "vite-plugin-electron-renderer": "^0.14.0"
   },
   "build": {
-    "appId": "com.meeting-ai.assistant",
-    "productName": "AI Meeting Assistant",
+    "appId": "com.meetu.app",
+    "productName": "MeetU",
     "directories": {
       "output": "release"
     },

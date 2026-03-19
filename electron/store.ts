@@ -39,7 +39,7 @@ interface StoreSchema {
 }
 
 const store = new Store<StoreSchema>({
-  name: 'meeting-ai-assistant-settings',
+  name: 'meetu-settings',
   defaults: {
     legalAccepted: false,
     isFirstLaunch: true,
