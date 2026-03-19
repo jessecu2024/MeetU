@@ -18,6 +18,7 @@ import MentionAlert from './components/MentionAlert';
 import TranscriptView from './views/TranscriptView';
 import TranslationView from './views/TranslationView';
 import SpeechAssistView from './views/SpeechAssistView';
+import SummaryView from './views/SummaryView';
 
 export default function App() {
   const legalAccepted = useSettingsStore((s) => s.legalAccepted);
@@ -96,13 +97,7 @@ export default function App() {
         {activeTab === 'transcript' && <TranscriptView />}
         {activeTab === 'translation' && <TranslationView />}
         {activeTab === 'speech' && <SpeechAssistView />}
-        {activeTab === 'summary' && (
-          <PlaceholderView
-            en="Meeting Summary"
-            zh="会议摘要"
-            phase="Phase 6"
-          />
-        )}
+        {activeTab === 'summary' && <SummaryView />}
       </div>
 
       {/* Bottom status bar */}
@@ -120,18 +115,6 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function PlaceholderView({ en, zh, phase }: { en: string; zh: string; phase: string }) {
-  return (
-    <div className="flex-1 flex items-center justify-center p-6 text-center">
-      <div>
-        <p className="text-zinc-400 text-sm">{en}</p>
-        <p className="text-zinc-400 text-xs mt-1">{zh}</p>
-        <p className="text-zinc-300 text-xs mt-2">Coming in {phase}</p>
-      </div>
     </div>
   );
 }

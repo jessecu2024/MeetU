@@ -14,6 +14,9 @@ import { useSettingsStore } from './settings-store';
 import { translationService } from '../services/translation';
 import { mentionDetector } from '../services/mention-detector';
 import { speechAdvisor } from '../services/speech-advisor';
+import { summarizer } from '../services/summarizer';
+import { generateMeetingMinutes } from '../services/post-meeting';
+import { useSummaryStore } from './summary-store';
 import type { STTEngine } from '../services/stt-engine/types';
 
 interface MeetingState {
@@ -155,6 +158,14 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     useMentionStore.getState().setActive(true);
     useMentionStore.getState().clearAll();
 
+    // Set up summarizer
+    summarizer.onSummary((summary) => {
+      useSummaryStore.getState().addOrUpdateSummary(summary);
+    });
+    summarizer.start();
+    useSummaryStore.getState().setActive(true);
+    useSummaryStore.getState().clear();
+
     // Listen for audio capture state changes
     const unsubscribe = audioManager.onChange((state) => {
       set({
@@ -241,8 +252,29 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     // Stop AI services
     translationService.stop();
     mentionDetector.stop();
+    summarizer.stop();
     useTranslationStore.getState().setActive(false);
     useMentionStore.getState().setActive(false);
+    useSummaryStore.getState().setActive(false);
+
+    // Generate final summary before ending session
+    const summaryStore = useSummaryStore.getState();
+    summaryStore.setGeneratingMinutes(true);
+    try {
+      // Generate one last real-time summary
+      await summarizer.generateNow();
+      // Generate full meeting minutes
+      const minutes = await generateMeetingMinutes(
+        meetingId || -1, recordingDuration, summaryStore.summaries
+      );
+      summaryStore.setMeetingMinutes(minutes);
+    } catch (err) {
+      summaryStore.setMinutesError(
+        err instanceof Error ? err.message : 'Minutes generation failed / 纪要生成失败'
+      );
+    } finally {
+      summaryStore.setGeneratingMinutes(false);
+    }
 
     // End transcript session
     useTranscriptStore.getState().endSession();

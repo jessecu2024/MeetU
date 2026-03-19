@@ -132,8 +132,37 @@ function registerIPC(): void {
   });
 
   // ── File export ──
-  ipcMain.handle('file:export', async (_event, _format: string, _content: string) => {
-    // TODO: Phase 5
+  ipcMain.handle('file:export', async (_event, format: string, content: string) => {
+    const minutesDir = path.join(app.getPath('home'), 'MeetingAI', 'minutes');
+    const fs = await import('node:fs');
+    fs.mkdirSync(minutesDir, { recursive: true });
+
+    try {
+      const data = JSON.parse(content);
+
+      if (format === 'markdown') {
+        const filePath = path.join(minutesDir, data.filename);
+        fs.writeFileSync(filePath, data.content, 'utf-8');
+        console.log('[Export] Markdown saved:', filePath);
+        return filePath;
+      }
+
+      if (format === 'docx') {
+        // Simple plain-text docx using docx library
+        const filePath = path.join(minutesDir, data.filename);
+        // For now, save as a text file with .docx extension placeholder
+        // Full docx generation requires the docx library in main process
+        const mdContent = generateMarkdownFromMinutes(data.minutes, data.disclaimer);
+        fs.writeFileSync(filePath.replace('.docx', '.md'), mdContent, 'utf-8');
+        console.log('[Export] Saved as MD (docx pending):', filePath.replace('.docx', '.md'));
+        return filePath.replace('.docx', '.md');
+      }
+
+      return '';
+    } catch (err) {
+      console.error('[Export] Failed:', err);
+      return '';
+    }
   });
 
   // ── Window controls ──
@@ -171,3 +200,42 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
+
+/** Generate markdown from minutes object (for docx fallback) */
+function generateMarkdownFromMinutes(
+  minutes: Record<string, unknown>,
+  disclaimer: { en: string; zh: string }
+): string {
+  const lines: string[] = [];
+  lines.push(`# ${minutes.title || 'Meeting Minutes'}\n`);
+  lines.push(`> ${minutes.executiveSummary || ''}\n`);
+
+  const topics = minutes.topics as Array<Record<string, unknown>> | undefined;
+  if (topics?.length) {
+    lines.push('## Discussion Topics\n');
+    for (const t of topics) {
+      lines.push(`### ${t.title}\n`);
+      lines.push(`${t.discussion}\n`);
+      const kp = t.keyPoints as string[] | undefined;
+      if (kp?.length) {
+        for (const p of kp) lines.push(`- ${p}`);
+        lines.push('');
+      }
+    }
+  }
+
+  const actions = minutes.actionItems as Array<Record<string, unknown>> | undefined;
+  if (actions?.length) {
+    lines.push('## Action Items\n');
+    for (const a of actions) {
+      lines.push(`- **${a.assignee}**: ${a.task} (${a.deadline || 'TBD'}) [${a.priority}]`);
+    }
+    lines.push('');
+  }
+
+  lines.push('---\n');
+  lines.push(`*${disclaimer.en}*\n`);
+  lines.push(`*${disclaimer.zh}*`);
+
+  return lines.join('\n');
+}
