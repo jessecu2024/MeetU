@@ -1,80 +1,68 @@
 // ============================================================
-// STT (Speech-to-Text) 引擎统一接口
-// 支持 Deepgram, Whisper API, 讯飞, 本地 Whisper 等
+// STT (Speech-to-Text) Engine Interface / 语音识别引擎统一接口
+// Supports: Deepgram, Whisper API, iFlytek, Alibaba, local Whisper
 // ============================================================
 
-/** 支持的 STT 引擎 ID */
+/** Supported STT engine IDs */
 export type STTEngineId =
-  | 'deepgram'        // Deepgram（海外推荐）
+  | 'deepgram'        // Deepgram (global)
   | 'whisper_api'     // OpenAI Whisper API
-  | 'xfyun'           // 讯飞语音（国内推荐）
-  | 'aliyun_speech'   // 阿里语音（国内）
-  | 'local_whisper';  // 本地 Whisper.cpp（离线）
+  | 'xfyun'           // iFlytek (China)
+  | 'aliyun_speech'   // Alibaba Speech (China)
+  | 'local_whisper';  // Local Whisper.cpp (offline)
 
-/** STT 配置 */
+/** STT configuration */
 export interface STTConfig {
-  sampleRate: number;        // 采样率，通常 16000
-  language?: string;         // 语言 hint（可选，auto-detect）
-  enableDiarization?: boolean; // 是否启用说话人分离
-  enablePunctuation?: boolean; // 是否自动插入标点
-  interimResults?: boolean;    // 是否返回中间结果
+  sampleRate: number;
+  language?: string;
+  enableDiarization?: boolean;
+  enablePunctuation?: boolean;
+  interimResults?: boolean;
 }
 
-/** 转写结果 */
+/** Transcript result */
 export interface TranscriptResult {
-  id: string;                  // 唯一 ID
-  text: string;                // 转写文本
-  isFinal: boolean;            // 是否为最终结果（false = 中间结果）
-  speaker?: string;            // 说话人标识
-  language?: string;           // 检测到的语言
-  startMs: number;             // 开始时间戳（毫秒）
-  endMs: number;               // 结束时间戳（毫秒）
-  confidence: number;          // 置信度 0-1
+  id: string;
+  text: string;
+  isFinal: boolean;
+  speaker?: string;
+  language?: string;
+  startMs: number;
+  endMs: number;
+  confidence: number;
 }
 
-/** STT 引擎信息（用于 UI 展示） */
+/** STT engine info for UI display */
 export interface STTEngineInfo {
   id: STTEngineId;
   name: string;
   nameEn: string;
   region: 'global' | 'china' | 'local';
   description: string;
+  descriptionEn: string;
   requiresApiKey: boolean;
   apiKeyGuideUrl?: string;
-  pricing: string;             // 价格描述
-  strengths: string[];         // 优势
+  pricing: string;
+  strengths: string[];
 }
 
-/** ⭐ STT 引擎统一接口 */
+/** STT Engine interface */
 export interface STTEngine {
   readonly id: STTEngineId;
   readonly name: string;
   readonly region: 'global' | 'china' | 'local';
   readonly supportsRealtime: boolean;
 
-  /** 设置 API Key */
   setApiKey(key: string): void;
-
-  /** 测试连接 */
   testConnection(): Promise<{ ok: boolean; error?: string }>;
-
-  /** 开始实时转写会话 */
   startSession(config: STTConfig): Promise<void>;
-
-  /** 喂入音频数据 */
   feedAudio(chunk: ArrayBuffer): void;
-
-  /** 注册转写结果回调 */
   onTranscript(callback: (result: TranscriptResult) => void): void;
-
-  /** 停止会话 */
   stopSession(): Promise<void>;
-
-  /** 是否正在运行 */
   isRunning(): boolean;
 }
 
-/** 所有引擎的静态信息 */
+/** All engine static info (bilingual) */
 export const STT_ENGINE_INFO: STTEngineInfo[] = [
   {
     id: 'deepgram',
@@ -82,21 +70,23 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     nameEn: 'Deepgram',
     region: 'global',
     description: '延迟低、精度高，英文最佳',
+    descriptionEn: 'Low latency, high accuracy, best for English',
     requiresApiKey: true,
     apiKeyGuideUrl: 'https://console.deepgram.com/signup',
-    pricing: '$0.0043/分钟（Pay-as-you-go）',
-    strengths: ['超低延迟 ~300ms', '流式实时转写', '说话人分离', '多语言支持'],
+    pricing: '$0.0043/min (Pay-as-you-go)',
+    strengths: ['Ultra-low latency ~300ms', 'Real-time streaming', 'Speaker diarization', 'Multi-language'],
   },
   {
     id: 'whisper_api',
     name: 'Whisper API (OpenAI)',
-    nameEn: 'Whisper API',
+    nameEn: 'Whisper API (OpenAI)',
     region: 'global',
     description: '高精度，多语言，延迟略高',
+    descriptionEn: 'High accuracy, 99 languages, slightly higher latency',
     requiresApiKey: true,
     apiKeyGuideUrl: 'https://platform.openai.com/api-keys',
-    pricing: '$0.006/分钟',
-    strengths: ['高精度', '99种语言', '自动语言检测'],
+    pricing: '$0.006/min',
+    strengths: ['High accuracy', '99 languages', 'Auto language detection'],
   },
   {
     id: 'xfyun',
@@ -104,21 +94,23 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     nameEn: 'iFlytek Speech',
     region: 'china',
     description: '中文识别率最高，支持方言',
+    descriptionEn: 'Best Chinese recognition, dialect support',
     requiresApiKey: true,
     apiKeyGuideUrl: 'https://console.xfyun.cn/services/iat',
-    pricing: '免费500小时/年',
-    strengths: ['中文识别率最高', '支持方言', '免费额度大', '实时流式'],
+    pricing: 'Free 500h/year',
+    strengths: ['Best Chinese accuracy', 'Dialect support', 'Large free tier', 'Real-time streaming'],
   },
   {
     id: 'aliyun_speech',
     name: '阿里语音 (Paraformer)',
-    nameEn: 'Alibaba Speech',
+    nameEn: 'Alibaba Speech (Paraformer)',
     region: 'china',
     description: '中文优秀，与通义千问同生态',
+    descriptionEn: 'Excellent Chinese, same ecosystem as Qwen',
     requiresApiKey: true,
     apiKeyGuideUrl: 'https://nls-portal.console.aliyun.com/',
-    pricing: '免费额度 + ¥1.8/小时',
-    strengths: ['中文优秀', '阿里云生态', 'Paraformer 模型'],
+    pricing: 'Free tier + ¥1.8/hr',
+    strengths: ['Excellent Chinese', 'Alibaba Cloud ecosystem', 'Paraformer model'],
   },
   {
     id: 'local_whisper',
@@ -126,8 +118,9 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     nameEn: 'Local Whisper (Offline)',
     region: 'local',
     description: '完全离线，无需网络，隐私最佳',
+    descriptionEn: 'Fully offline, no network needed, best privacy',
     requiresApiKey: false,
-    pricing: '免费（需要 GPU 或 Apple Silicon）',
-    strengths: ['完全离线', '零成本', '数据不出本机', '隐私最佳'],
+    pricing: 'Free (requires GPU or Apple Silicon)',
+    strengths: ['Fully offline', 'Zero cost', 'Data never leaves device', 'Best privacy'],
   },
 ];

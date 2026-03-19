@@ -1,29 +1,30 @@
 // ============================================================
-// Electron 主进程入口
-// 创建悬浮窗、注册 IPC 处理器、管理生命周期
+// Electron Main Process
+// Creates floating window, registers IPC handlers, manages lifecycle
 // ============================================================
 
 import { app, BrowserWindow, ipcMain, screen, globalShortcut } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getSetting, setSetting } from './store';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 
-/** 创建主窗口（悬浮模式） */
+/** Create main window (floating mode) */
 function createWindow(): void {
-  const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize;
+  const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
 
   mainWindow = new BrowserWindow({
     width: 420,
     height: 620,
-    x: screenW - 440,      // 屏幕右侧
+    x: screenW - 440,
     y: 80,
-    frame: false,           // 无边框
+    frame: false,
     transparent: false,
-    alwaysOnTop: true,      // 悬浮置顶
+    alwaysOnTop: true,
     resizable: true,
     minimizable: true,
     skipTaskbar: false,
@@ -33,11 +34,10 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,       // 需要访问原生模块
+      sandbox: false,
     },
   });
 
-  // vite-plugin-electron 在开发模式注入 VITE_DEV_SERVER_URL
   const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL'];
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL);
@@ -51,14 +51,12 @@ function createWindow(): void {
   });
 }
 
-/** 注册全局快捷键 */
+/** Register global shortcuts */
 function registerShortcuts(): void {
-  // Ctrl/Cmd + Shift + M: 开始/暂停录制
   globalShortcut.register('CommandOrControl+Shift+M', () => {
     mainWindow?.webContents.send('shortcut:toggle-recording');
   });
 
-  // Ctrl/Cmd + Shift + H: 显示/隐藏窗口
   globalShortcut.register('CommandOrControl+Shift+H', () => {
     if (mainWindow?.isVisible()) {
       mainWindow.hide();
@@ -68,46 +66,43 @@ function registerShortcuts(): void {
   });
 }
 
-/** 注册 IPC 处理器 */
+/** Register IPC handlers */
 function registerIPC(): void {
-  // ── 设置相关 ──
+  // ── Settings (encrypted store) ──
   ipcMain.handle('settings:get', async (_event, key: string) => {
-    // TODO: 从 electron-store 读取设置
-    return null;
+    return getSetting(key);
   });
 
   ipcMain.handle('settings:set', async (_event, key: string, value: unknown) => {
-    // TODO: 写入 electron-store
+    setSetting(key, value);
   });
 
-  // ── 音频相关 ──
+  // ── Audio ──
   ipcMain.handle('audio:start', async () => {
-    // TODO: 启动音频捕获
     console.log('[Main] Audio capture starting...');
+    // TODO: Phase 2 - native audio capture
   });
 
   ipcMain.handle('audio:stop', async () => {
-    // TODO: 停止音频捕获
     console.log('[Main] Audio capture stopping...');
   });
 
   ipcMain.handle('audio:get-devices', async () => {
-    // TODO: 获取音频设备列表
     return [];
   });
 
-  // ── 数据库相关 ──
-  ipcMain.handle('db:query', async (_event, sql: string, params?: unknown[]) => {
-    // TODO: 执行 SQLite 查询
+  // ── Database ──
+  ipcMain.handle('db:query', async (_event, _sql: string, _params?: unknown[]) => {
+    // TODO: Phase 3 - SQLite queries
     return [];
   });
 
-  // ── 文件相关 ──
-  ipcMain.handle('file:export', async (_event, format: string, content: string) => {
-    // TODO: 导出文件（Word/PDF/Markdown）
+  // ── File export ──
+  ipcMain.handle('file:export', async (_event, _format: string, _content: string) => {
+    // TODO: Phase 5 - Word/PDF/Markdown export
   });
 
-  // ── 窗口控制 ──
+  // ── Window controls ──
   ipcMain.on('window:minimize', () => mainWindow?.minimize());
   ipcMain.on('window:close', () => mainWindow?.close());
   ipcMain.on('window:toggle-top', () => {
@@ -119,7 +114,7 @@ function registerIPC(): void {
   });
 }
 
-// ── App 生命周期 ──
+// ── App lifecycle ──
 app.whenReady().then(() => {
   createWindow();
   registerShortcuts();

@@ -1,56 +1,79 @@
 // ============================================================
 // Settings Store (Zustand)
-// 管理用户设置，包括 AI 提供商选择、STT 引擎、UI 偏好等
+// Manages user settings with electron-store persistence
+// API Keys are encrypted via electron's safeStorage
 // ============================================================
 
 import { create } from 'zustand';
 import type { AIProviderId, AIFunction, UserAIConfig } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
 
+// Type for electron API (injected via preload)
+declare global {
+  interface Window {
+    electronAPI?: {
+      settings: {
+        get: (key: string) => Promise<unknown>;
+        set: (key: string, value: unknown) => Promise<void>;
+      };
+      window: {
+        minimize: () => void;
+        close: () => void;
+        toggleTop: () => void;
+        setOpacity: (v: number) => void;
+      };
+      [key: string]: unknown;
+    };
+  }
+}
+
 interface UserProfile {
-  name: string;            // 用户姓名（用于@检测）
-  nameEn: string;          // 英文名（用于@检测）
-  aliases: string[];       // 其他可能被叫到的名字/昵称
-  role: string;            // 职位/角色
-  preferredLanguage: 'zh' | 'en';  // 偏好语言
+  name: string;
+  nameEn: string;
+  aliases: string[];
+  role: string;
+  preferredLanguage: 'zh' | 'en';
 }
 
 interface AppSettings {
   theme: 'light' | 'dark' | 'system';
-  windowOpacity: number;   // 0.5-1.0
+  windowOpacity: number;
   windowAlwaysOnTop: boolean;
   fontSize: 'small' | 'medium' | 'large';
   autoStartRecording: boolean;
-  summaryIntervalMinutes: number;  // 摘要更新间隔
-  audioRetentionDays: number;      // 音频保留天数
+  summaryIntervalMinutes: number;
+  audioRetentionDays: number;
 }
 
 interface SettingsState {
-  // ── 法律同意状态 ──
+  // ── Legal consent ──
   legalAccepted: boolean;
 
-  // ── 初始化状态 ──
+  // ── Initialization ──
   isFirstLaunch: boolean;
-  onboardingStep: number;  // 0=选区域, 1=选AI, 2=输入Key, 3=测试, 4=选STT, 5=完成
+  onboardingStep: number;
+  settingsModalOpen: boolean;
+  settingsLoaded: boolean;
 
-  // ── 用户资料 ──
+  // ── User profile ──
   userProfile: UserProfile;
 
-  // ── AI 配置 ──
+  // ── AI configuration ──
   userRegion: 'global' | 'china' | null;
   aiConfig: UserAIConfig;
 
-  // ── STT 配置 ──
+  // ── STT configuration ──
   sttEngine: STTEngineId;
   sttApiKeys: Partial<Record<STTEngineId, string>>;
 
-  // ── 应用设置 ──
+  // ── App settings ──
   appSettings: AppSettings;
 
-  // ── 术语表 ──
+  // ── Glossary ──
   customTerms: Array<{ source: string; target: string }>;
 
   // ── Actions ──
+  loadFromStore: () => Promise<void>;
   acceptLegal: () => void;
   setOnboardingStep: (step: number) => void;
   completeOnboarding: () => void;
@@ -65,17 +88,26 @@ interface SettingsState {
   updateAppSettings: (settings: Partial<AppSettings>) => void;
   addCustomTerm: (source: string, target: string) => void;
   removeCustomTerm: (index: number) => void;
+  openSettingsModal: () => void;
+  closeSettingsModal: () => void;
 }
 
-export const useSettingsStore = create<SettingsState>((set) => ({
-  // ── 法律同意状态 ──
+/** Helper to persist a setting to electron-store */
+function persist(key: string, value: unknown) {
+  window.electronAPI?.settings.set(key, value).catch(() => {});
+}
+
+export const useSettingsStore = create<SettingsState>((set, get) => ({
+  // ── Legal consent ──
   legalAccepted: false,
 
-  // ── 初始化状态 ──
+  // ── Initialization ──
   isFirstLaunch: true,
   onboardingStep: 0,
+  settingsModalOpen: false,
+  settingsLoaded: false,
 
-  // ── 用户资料 ──
+  // ── User profile ──
   userProfile: {
     name: '',
     nameEn: '',
@@ -84,7 +116,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     preferredLanguage: 'zh',
   },
 
-  // ── AI 配置 ──
+  // ── AI configuration ──
   userRegion: null,
   aiConfig: {
     defaultProvider: 'claude',
@@ -93,11 +125,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     selectedModels: {},
   },
 
-  // ── STT 配置 ──
+  // ── STT configuration ──
   sttEngine: 'deepgram',
   sttApiKeys: {},
 
-  // ── 应用设置 ──
+  // ── App settings ──
   appSettings: {
     theme: 'system',
     windowOpacity: 0.95,
@@ -108,69 +140,168 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     audioRetentionDays: 30,
   },
 
-  // ── 术语表 ──
+  // ── Glossary ──
   customTerms: [],
 
   // ── Actions ──
-  acceptLegal: () => set({ legalAccepted: true }),
+
+  /** Load all settings from electron-store on startup */
+  loadFromStore: async () => {
+    if (!window.electronAPI) return;
+    try {
+      const all = await window.electronAPI.settings.get('all') as Record<string, unknown> | null;
+      if (!all) { set({ settingsLoaded: true }); return; }
+
+      const aiConfigRaw = all.aiConfig as Record<string, unknown> | undefined;
+      set({
+        settingsLoaded: true,
+        legalAccepted: (all.legalAccepted as boolean) || false,
+        isFirstLaunch: all.isFirstLaunch !== false, // default true
+        userRegion: (all.userRegion as 'global' | 'china' | null) || null,
+        aiConfig: {
+          defaultProvider: (aiConfigRaw?.defaultProvider as AIProviderId) || 'claude',
+          functionOverrides: (aiConfigRaw?.functionOverrides as Record<string, AIProviderId>) || {},
+          apiKeys: (aiConfigRaw?.apiKeys as Record<string, string>) || {},
+          selectedModels: (aiConfigRaw?.selectedModels as Record<string, string>) || {},
+        },
+        sttEngine: (all.sttEngine as STTEngineId) || 'deepgram',
+        sttApiKeys: (all.sttApiKeys as Record<string, string>) || {},
+        userProfile: (all.userProfile as UserProfile) || get().userProfile,
+        appSettings: { ...get().appSettings, ...(all.appSettings as Partial<AppSettings>) },
+        customTerms: (all.customTerms as Array<{ source: string; target: string }>) || [],
+      });
+    } catch {
+      set({ settingsLoaded: true });
+    }
+  },
+
+  acceptLegal: () => {
+    set({ legalAccepted: true });
+    persist('legalAccepted', true);
+  },
 
   setOnboardingStep: (step) => set({ onboardingStep: step }),
 
-  completeOnboarding: () => set({ isFirstLaunch: false }),
+  completeOnboarding: () => {
+    set({ isFirstLaunch: false });
+    persist('isFirstLaunch', false);
+    // Persist all config at completion
+    const s = get();
+    persist('userRegion', s.userRegion);
+    persist('aiConfig', {
+      defaultProvider: s.aiConfig.defaultProvider,
+      functionOverrides: s.aiConfig.functionOverrides || {},
+      selectedModels: s.aiConfig.selectedModels || {},
+    });
+    persist('sttEngine', s.sttEngine);
+    persist('userProfile', s.userProfile);
+  },
 
-  setUserRegion: (region) => set((state) => ({
-    userRegion: region,
-    aiConfig: {
-      ...state.aiConfig,
-      defaultProvider: region === 'china' ? 'deepseek' : 'claude',
-    },
-    sttEngine: region === 'china' ? 'xfyun' : 'deepgram',
-  })),
+  setUserRegion: (region) => {
+    set((state) => ({
+      userRegion: region,
+      aiConfig: {
+        ...state.aiConfig,
+        defaultProvider: region === 'china' ? 'deepseek' : 'claude',
+      },
+      sttEngine: region === 'china' ? 'xfyun' : 'deepgram',
+    }));
+    persist('userRegion', region);
+  },
 
-  setDefaultProvider: (id) => set((state) => ({
-    aiConfig: { ...state.aiConfig, defaultProvider: id },
-  })),
+  setDefaultProvider: (id) => {
+    set((state) => ({
+      aiConfig: { ...state.aiConfig, defaultProvider: id },
+    }));
+    const s = get();
+    persist('aiConfig', {
+      defaultProvider: s.aiConfig.defaultProvider,
+      functionOverrides: s.aiConfig.functionOverrides || {},
+      selectedModels: s.aiConfig.selectedModels || {},
+    });
+  },
 
-  setApiKey: (provider, key) => set((state) => ({
-    aiConfig: {
-      ...state.aiConfig,
-      apiKeys: { ...state.aiConfig.apiKeys, [provider]: key },
-    },
-  })),
+  setApiKey: (provider, key) => {
+    set((state) => ({
+      aiConfig: {
+        ...state.aiConfig,
+        apiKeys: { ...state.aiConfig.apiKeys, [provider]: key },
+      },
+    }));
+    // Encrypt and persist via electron-store
+    persist('apiKey', { provider, apiKey: key });
+  },
 
-  setFunctionOverride: (fn, provider) => set((state) => ({
-    aiConfig: {
-      ...state.aiConfig,
-      functionOverrides: { ...state.aiConfig.functionOverrides, [fn]: provider },
-    },
-  })),
+  setFunctionOverride: (fn, provider) => {
+    set((state) => ({
+      aiConfig: {
+        ...state.aiConfig,
+        functionOverrides: { ...state.aiConfig.functionOverrides, [fn]: provider },
+      },
+    }));
+    const s = get();
+    persist('aiConfig', {
+      defaultProvider: s.aiConfig.defaultProvider,
+      functionOverrides: s.aiConfig.functionOverrides || {},
+      selectedModels: s.aiConfig.selectedModels || {},
+    });
+  },
 
-  setSelectedModel: (provider, modelId) => set((state) => ({
-    aiConfig: {
-      ...state.aiConfig,
-      selectedModels: { ...state.aiConfig.selectedModels, [provider]: modelId },
-    },
-  })),
+  setSelectedModel: (provider, modelId) => {
+    set((state) => ({
+      aiConfig: {
+        ...state.aiConfig,
+        selectedModels: { ...state.aiConfig.selectedModels, [provider]: modelId },
+      },
+    }));
+    const s = get();
+    persist('aiConfig', {
+      defaultProvider: s.aiConfig.defaultProvider,
+      functionOverrides: s.aiConfig.functionOverrides || {},
+      selectedModels: s.aiConfig.selectedModels || {},
+    });
+  },
 
-  setSTTEngine: (id) => set({ sttEngine: id }),
+  setSTTEngine: (id) => {
+    set({ sttEngine: id });
+    persist('sttEngine', id);
+  },
 
-  setSTTApiKey: (engine, key) => set((state) => ({
-    sttApiKeys: { ...state.sttApiKeys, [engine]: key },
-  })),
+  setSTTApiKey: (engine, key) => {
+    set((state) => ({
+      sttApiKeys: { ...state.sttApiKeys, [engine]: key },
+    }));
+    persist('sttApiKey', { engine, apiKey: key });
+  },
 
-  updateUserProfile: (profile) => set((state) => ({
-    userProfile: { ...state.userProfile, ...profile },
-  })),
+  updateUserProfile: (profile) => {
+    set((state) => ({
+      userProfile: { ...state.userProfile, ...profile },
+    }));
+    persist('userProfile', get().userProfile);
+  },
 
-  updateAppSettings: (settings) => set((state) => ({
-    appSettings: { ...state.appSettings, ...settings },
-  })),
+  updateAppSettings: (settings) => {
+    set((state) => ({
+      appSettings: { ...state.appSettings, ...settings },
+    }));
+    persist('appSettings', get().appSettings);
+  },
 
-  addCustomTerm: (source, target) => set((state) => ({
-    customTerms: [...state.customTerms, { source, target }],
-  })),
+  addCustomTerm: (source, target) => {
+    set((state) => ({
+      customTerms: [...state.customTerms, { source, target }],
+    }));
+    persist('customTerms', get().customTerms);
+  },
 
-  removeCustomTerm: (index) => set((state) => ({
-    customTerms: state.customTerms.filter((_, i) => i !== index),
-  })),
+  removeCustomTerm: (index) => {
+    set((state) => ({
+      customTerms: state.customTerms.filter((_, i) => i !== index),
+    }));
+    persist('customTerms', get().customTerms);
+  },
+
+  openSettingsModal: () => set({ settingsModalOpen: true }),
+  closeSettingsModal: () => set({ settingsModalOpen: false }),
 }));

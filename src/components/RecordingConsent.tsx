@@ -1,8 +1,11 @@
 // ============================================================
-// 录音前同意提醒 — 每次开始录音时显示
+// Recording Consent / 录音前同意提醒
+// Shown each time before starting a recording
+// Bilingual: English first, Chinese second
 // ============================================================
 
 import { useState } from 'react';
+import { RECORDING_CONSENT_EN, RECORDING_CONSENT_ZH } from '../config/legal-texts';
 
 interface RecordingConsentProps {
   onConfirm: () => void;
@@ -25,24 +28,26 @@ export default function RecordingConsent({ onConfirm, onCancel }: RecordingConse
             </svg>
           </div>
           <h3 className="text-base font-semibold text-zinc-900 dark:text-white">
-            准备开始录音
+            {RECORDING_CONSENT_EN.title}
           </h3>
+          <p className="text-xs text-zinc-500 mt-0.5">{RECORDING_CONSENT_ZH.title}</p>
         </div>
 
-        <p className="text-sm text-zinc-600 dark:text-zinc-400 text-center mb-4 leading-relaxed">
-          请确保您已获得所有会议参与者的同意。
-          根据您所在地区的法律，未经同意录音可能违法。
-        </p>
+        <div className="text-sm text-zinc-600 dark:text-zinc-400 text-center mb-4 leading-relaxed space-y-2">
+          <p>{RECORDING_CONSENT_EN.body}</p>
+          <p className="text-zinc-500 text-xs">{RECORDING_CONSENT_ZH.body}</p>
+        </div>
 
-        <label className="flex items-center gap-2 mb-4 cursor-pointer select-none
-          justify-center">
+        <label className="flex items-center gap-2 mb-4 cursor-pointer select-none justify-center">
           <input
             type="checkbox"
             checked={dontShowAgain}
             onChange={(e) => setDontShowAgain(e.target.checked)}
             className="w-3.5 h-3.5 rounded border-zinc-300 text-blue-600 cursor-pointer"
           />
-          <span className="text-xs text-zinc-500">本次会话不再提醒</span>
+          <span className="text-xs text-zinc-500">
+            {RECORDING_CONSENT_EN.dontShowAgain} / {RECORDING_CONSENT_ZH.dontShowAgain}
+          </span>
         </label>
 
         <div className="flex gap-2">
@@ -53,14 +58,15 @@ export default function RecordingConsent({ onConfirm, onCancel }: RecordingConse
               text-zinc-600 dark:text-zinc-400
               hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors"
           >
-            取消
+            {RECORDING_CONSENT_EN.cancel} / {RECORDING_CONSENT_ZH.cancel}
           </button>
           <button
             onClick={() => onConfirm()}
             className="flex-1 py-2.5 rounded-xl text-sm font-medium
               bg-blue-600 text-white hover:bg-blue-700 transition-colors"
           >
-            已确认，开始录音
+            {RECORDING_CONSENT_EN.confirm}
+            <span className="block text-xs opacity-80">{RECORDING_CONSENT_ZH.confirm}</span>
           </button>
         </div>
       </div>
