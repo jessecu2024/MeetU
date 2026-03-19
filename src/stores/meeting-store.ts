@@ -189,7 +189,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       // Hook up audio chunks to STT engine via capture manager callback
       if (useRealAudio) {
         captureManager.onAudioChunk((data: Float32Array) => {
-          sttEngine.feedAudio(data.buffer);
+          sttEngine.feedAudio(data.buffer as ArrayBuffer);
         });
       }
 

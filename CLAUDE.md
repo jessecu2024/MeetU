@@ -133,7 +133,7 @@ Electron 本身是 MIT 许可，可商用。但内置 Chromium 的 ffmpeg 包含
 ## 目录结构
 
 ```
-meeting-ai-assistant/
+meetu/
 ├── CLAUDE.md                          ← 你正在读的文件
 ├── LICENSE                            ← 商业许可证
 ├── LEGAL_NOTICE.md                    ← 第三方许可证归属

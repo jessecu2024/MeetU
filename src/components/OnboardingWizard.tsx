@@ -351,7 +351,7 @@ export default function OnboardingWizard() {
                   {en} <span className="text-zinc-400 font-normal">/ {zh}</span>
                 </label>
                 <input type="text" placeholder={placeholder}
-                  value={(store.userProfile as Record<string, string>)[key] || ''}
+                  value={(store.userProfile as unknown as Record<string, string>)[key] || ''}
                   onChange={(e) => store.updateUserProfile({ [key]: e.target.value })}
                   className="w-full px-3 py-2.5 rounded-lg border border-zinc-300 dark:border-zinc-600
                     bg-white dark:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500" />

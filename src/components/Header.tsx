@@ -26,9 +26,12 @@ export default function Header() {
     <div className="flex-shrink-0">
       {/* Title bar (draggable) */}
       <div className="drag-region flex items-center justify-between px-4 pt-3 pb-1">
-        <h1 className="text-sm font-bold text-zinc-900 dark:text-white no-drag">
-          MeetU
-        </h1>
+        <div className="no-drag">
+          <h1 className="text-sm font-bold text-zinc-900 dark:text-white">
+            MeetU <span className="font-normal text-xs text-zinc-400">/ 开会啦</span>
+          </h1>
+          <p className="text-[9px] text-zinc-400 -mt-0.5">Your AI Meeting Assistant / 你的会议 AI 秘书</p>
+        </div>
         <div className="flex items-center gap-1.5 no-drag">
           <button
             onClick={openSettings}

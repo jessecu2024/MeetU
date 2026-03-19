@@ -24,8 +24,8 @@ export async function initDatabase(): Promise<boolean> {
     const dbPath = path.join(dbDir, 'meetings.db');
 
     db = new Database(dbPath);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+    db!.pragma('journal_mode = WAL');
+    db!.pragma('foreign_keys = ON');
 
     // Create tables
     createTables();

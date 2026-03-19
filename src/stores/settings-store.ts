@@ -27,14 +27,22 @@ declare global {
         get: (key: string) => Promise<unknown>;
         set: (key: string, value: unknown) => Promise<void>;
       };
+      db: {
+        query: (sql: string, params?: unknown[]) => Promise<unknown>;
+      };
+      file: {
+        export: (format: string, content: string) => Promise<unknown>;
+      };
       window: {
         minimize: () => void;
         close: () => void;
         toggleTop: () => void;
         setOpacity: (v: number) => void;
       };
+      onShortcut: {
+        toggleRecording: (cb: () => void) => void;
+      };
       platform: string;
-      [key: string]: unknown;
     };
   }
 }

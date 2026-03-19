@@ -27,6 +27,7 @@ function createWindow(): void {
     height: 700,
     x: screenW - 440,
     y: 80,
+    icon: path.join(__dirname, '../resources/icons/logo.svg'),
     frame: false,
     transparent: false,
     alwaysOnTop: true,
