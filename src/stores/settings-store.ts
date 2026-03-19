@@ -12,6 +12,17 @@ import type { STTEngineId } from '../services/stt-engine/types';
 declare global {
   interface Window {
     electronAPI?: {
+      audio: {
+        getSources: () => Promise<Array<{ id: string; name: string }>>;
+        startRecording: () => Promise<string>;
+        stopRecording: () => Promise<string>;
+        appendChunk: (data: ArrayBuffer) => Promise<void>;
+        isRecording: () => Promise<boolean>;
+        getRecordingsPath: () => Promise<string>;
+        getDevices: () => Promise<unknown[]>;
+        onChunk: (cb: (chunk: ArrayBuffer) => void) => void;
+        onLevel: (cb: (level: number) => void) => void;
+      };
       settings: {
         get: (key: string) => Promise<unknown>;
         set: (key: string, value: unknown) => Promise<void>;
@@ -22,6 +33,7 @@ declare global {
         toggleTop: () => void;
         setOpacity: (v: number) => void;
       };
+      platform: string;
       [key: string]: unknown;
     };
   }

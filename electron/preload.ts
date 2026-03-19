@@ -1,15 +1,19 @@
 // ============================================================
 // Preload Script
-// 通过 contextBridge 安全地暴露主进程 API 给渲染进程
+// Securely expose main process APIs to renderer via contextBridge
 // ============================================================
 
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // ── 音频 ──
+  // ── Audio ──
   audio: {
-    start: () => ipcRenderer.invoke('audio:start'),
-    stop: () => ipcRenderer.invoke('audio:stop'),
+    getSources: () => ipcRenderer.invoke('audio:get-sources'),
+    startRecording: () => ipcRenderer.invoke('audio:start-recording'),
+    stopRecording: () => ipcRenderer.invoke('audio:stop-recording'),
+    appendChunk: (data: ArrayBuffer) => ipcRenderer.invoke('audio:append-chunk', data),
+    isRecording: () => ipcRenderer.invoke('audio:is-recording'),
+    getRecordingsPath: () => ipcRenderer.invoke('audio:get-recordings-path'),
     getDevices: () => ipcRenderer.invoke('audio:get-devices'),
     onChunk: (cb: (chunk: ArrayBuffer) => void) =>
       ipcRenderer.on('audio:chunk', (_e, chunk) => cb(chunk)),
@@ -43,25 +47,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ai:test-connection', provider),
   },
 
-  // ── 设置 ──
+  // ── Settings ──
   settings: {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: unknown) => ipcRenderer.invoke('settings:set', key, value),
   },
 
-  // ── 数据库 ──
+  // ── Database ──
   db: {
     query: (sql: string, params?: unknown[]) =>
       ipcRenderer.invoke('db:query', sql, params),
   },
 
-  // ── 文件 ──
+  // ── File ──
   file: {
     export: (format: string, content: string) =>
       ipcRenderer.invoke('file:export', format, content),
   },
 
-  // ── 窗口 ──
+  // ── Window ──
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
     close: () => ipcRenderer.send('window:close'),
@@ -69,9 +73,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setOpacity: (v: number) => ipcRenderer.send('window:set-opacity', v),
   },
 
-  // ── 快捷键回调 ──
+  // ── Shortcuts ──
   onShortcut: {
     toggleRecording: (cb: () => void) =>
       ipcRenderer.on('shortcut:toggle-recording', () => cb()),
   },
+
+  // ── Platform info ──
+  platform: process.platform,
 });
