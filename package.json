@@ -1,0 +1,75 @@
+{
+  "name": "meeting-ai-assistant",
+  "version": "0.1.0",
+  "description": "AI-powered meeting assistant with real-time transcription, translation, and smart speech suggestions",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && electron-builder",
+    "preview": "vite preview",
+    "electron:build": "vite build && electron-builder --mac --win",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/ electron/ --ext .ts,.tsx",
+    "check-licenses": "node scripts/check-licenses.cjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "date-fns": "^3.6.0",
+    "docx": "^8.5.0",
+    "electron-store": "^10.0.0",
+    "lucide-react": "^0.383.0",
+    "pdfkit": "^0.15.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "uuid": "^9.0.0",
+    "ws": "^8.16.0",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/uuid": "^9.0.0",
+    "@types/ws": "^8.5.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "autoprefixer": "^10.4.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.0",
+    "eslint": "^9.0.0",
+    "license-checker": "^25.0.1",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0",
+    "vite-plugin-electron": "^0.28.0",
+    "vite-plugin-electron-renderer": "^0.14.0"
+  },
+  "build": {
+    "appId": "com.meeting-ai.assistant",
+    "productName": "AI Meeting Assistant",
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "afterPack": "./scripts/replace-ffmpeg.cjs"
+  }
+}
