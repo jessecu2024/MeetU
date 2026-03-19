@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { useSettingsStore } from './stores/settings-store';
 import { useMeetingStore } from './stores/meeting-store';
+import { useMentionStore } from './stores/mention-store';
 import { initializeProviders, providerRegistry } from './services/ai-provider';
 import LegalDisclaimer from './components/LegalDisclaimer';
 import OnboardingWizard from './components/OnboardingWizard';
@@ -13,7 +14,10 @@ import SettingsModal from './components/SettingsModal';
 import Header from './components/Header';
 import TabBar, { type TabId } from './components/TabBar';
 import RecordingConsent from './components/RecordingConsent';
+import MentionAlert from './components/MentionAlert';
 import TranscriptView from './views/TranscriptView';
+import TranslationView from './views/TranslationView';
+import SpeechAssistView from './views/SpeechAssistView';
 
 export default function App() {
   const legalAccepted = useSettingsStore((s) => s.legalAccepted);
@@ -31,6 +35,8 @@ export default function App() {
   const dismissConsent = useMeetingStore((s) => s.dismissConsent);
   const isRecording = useMeetingStore((s) => s.isRecording);
 
+  const showMentionAlert = useMentionStore((s) => s.showAlert);
+
   const [activeTab, setActiveTab] = useState<TabId>('transcript');
 
   useEffect(() => {
@@ -43,7 +49,6 @@ export default function App() {
     });
   }, [loadFromStore]);
 
-  // Loading
   if (!settingsLoaded) {
     return (
       <div className="h-screen flex items-center justify-center bg-white dark:bg-zinc-900">
@@ -52,31 +57,28 @@ export default function App() {
     );
   }
 
-  // Step 1: Legal disclaimer
   if (!legalAccepted) {
     return <LegalDisclaimer onAccept={acceptLegal} />;
   }
 
-  // Step 2: First launch onboarding
   if (isFirstLaunch) {
     return <OnboardingWizard />;
   }
 
   const hasAiKey = !!aiConfig.apiKeys[aiConfig.defaultProvider];
 
-  // Step 3: Main UI
   return (
     <div className="h-screen flex flex-col bg-white dark:bg-zinc-900">
-      {/* Modals */}
+      {/* Modals & Overlays */}
       {settingsModalOpen && <SettingsModal />}
       {showRecordingConsent && (
         <RecordingConsent
-          onConfirm={() => {
-            dismissConsent();
-            confirmStartRecording();
-          }}
+          onConfirm={() => { dismissConsent(); confirmStartRecording(); }}
           onCancel={cancelRecording}
         />
+      )}
+      {showMentionAlert && (
+        <MentionAlert onGoToSpeech={() => setActiveTab('speech')} />
       )}
 
       {/* Header with recording controls */}
@@ -92,25 +94,13 @@ export default function App() {
       {/* Tab content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {activeTab === 'transcript' && <TranscriptView />}
-        {activeTab === 'translation' && (
-          <PlaceholderView
-            en="Real-time Translation"
-            zh="实时翻译"
-            phase="Phase 4"
-          />
-        )}
-        {activeTab === 'speech' && (
-          <PlaceholderView
-            en="Speech Assistant"
-            zh="发言助手"
-            phase="Phase 4"
-          />
-        )}
+        {activeTab === 'translation' && <TranslationView />}
+        {activeTab === 'speech' && <SpeechAssistView />}
         {activeTab === 'summary' && (
           <PlaceholderView
             en="Meeting Summary"
             zh="会议摘要"
-            phase="Phase 5"
+            phase="Phase 6"
           />
         )}
       </div>

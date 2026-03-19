@@ -8,7 +8,12 @@ import { captureManager } from '../services/audio/capture';
 import { mockCaptureManager } from '../services/audio/mock-capture';
 import { sttRegistry } from '../services/stt-engine/engine-registry';
 import { useTranscriptStore } from './transcript-store';
+import { useTranslationStore } from './translation-store';
+import { useMentionStore } from './mention-store';
 import { useSettingsStore } from './settings-store';
+import { translationService } from '../services/translation';
+import { mentionDetector } from '../services/mention-detector';
+import { speechAdvisor } from '../services/speech-advisor';
 import type { STTEngine } from '../services/stt-engine/types';
 
 interface MeetingState {
@@ -116,7 +121,39 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
     sttEngine.onTranscript((result) => {
       useTranscriptStore.getState().addResult(result);
+
+      // Feed final results to translation + mention detection
+      if (result.isFinal) {
+        const entry = {
+          id: result.id, text: result.text, isFinal: true,
+          speaker: result.speaker, language: result.language,
+          startMs: result.startMs, endMs: result.endMs,
+          confidence: result.confidence, timestamp: Date.now(),
+        };
+        translationService.processEntry(entry);
+        mentionDetector.processEntry(entry);
+      }
     });
+
+    // Set up translation service
+    translationService.onTranslation((entry) => {
+      useTranslationStore.getState().addOrUpdate(entry);
+    });
+    translationService.start();
+    useTranslationStore.getState().setActive(true);
+    useTranslationStore.getState().clear();
+
+    // Set up mention detector + speech advisor
+    mentionDetector.onMention((mention) => {
+      useMentionStore.getState().addMention(mention);
+      speechAdvisor.generateAdvice(mention);
+    });
+    mentionDetector.start();
+    speechAdvisor.onAdvice((advice) => {
+      useMentionStore.getState().addOrUpdateAdvice(advice);
+    });
+    useMentionStore.getState().setActive(true);
+    useMentionStore.getState().clearAll();
 
     // Listen for audio capture state changes
     const unsubscribe = audioManager.onChange((state) => {
@@ -200,6 +237,12 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         );
       } catch { /* DB not available */ }
     }
+
+    // Stop AI services
+    translationService.stop();
+    mentionDetector.stop();
+    useTranslationStore.getState().setActive(false);
+    useMentionStore.getState().setActive(false);
 
     // End transcript session
     useTranscriptStore.getState().endSession();
