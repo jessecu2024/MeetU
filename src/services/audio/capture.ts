@@ -22,6 +22,8 @@ export type CaptureListener = (state: Partial<CaptureState>) => void;
 const BUFFER_SIZE = 4096;
 const SEND_INTERVAL_MS = 500; // Send chunks to main process every 500ms
 
+export type AudioChunkCallback = (data: Float32Array) => void;
+
 class AudioCaptureManager {
   private micStream: MediaStream | null = null;
   private systemStream: MediaStream | null = null;
@@ -32,6 +34,15 @@ class AudioCaptureManager {
   private chunkBuffer: Float32Array[] = [];
   private sendInterval: ReturnType<typeof setInterval> | null = null;
   private listeners: CaptureListener[] = [];
+  private audioChunkCallbacks: AudioChunkCallback[] = [];
+
+  /** Register a callback to receive raw audio chunks (for STT) */
+  onAudioChunk(cb: AudioChunkCallback): () => void {
+    this.audioChunkCallbacks.push(cb);
+    return () => {
+      this.audioChunkCallbacks = this.audioChunkCallbacks.filter(c => c !== cb);
+    };
+  }
   private _state: CaptureState = {
     systemAudio: false,
     microphone: false,
@@ -119,6 +130,7 @@ class AudioCaptureManager {
 
     this.analyser = null;
     this.chunkBuffer = [];
+    this.audioChunkCallbacks = [];
 
     // Stop WAV file recording
     const savedPath = await window.electronAPI?.audio.stopRecording() as string;
@@ -245,7 +257,12 @@ class AudioCaptureManager {
     this.scriptProcessor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
     this.scriptProcessor.onaudioprocess = (e) => {
       const data = e.inputBuffer.getChannelData(0);
-      this.chunkBuffer.push(new Float32Array(data));
+      const copy = new Float32Array(data);
+      this.chunkBuffer.push(copy);
+      // Feed audio to STT engines
+      for (const cb of this.audioChunkCallbacks) {
+        cb(copy);
+      }
     };
     mixGain.connect(this.scriptProcessor);
     this.scriptProcessor.connect(ctx.destination);

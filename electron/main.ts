@@ -11,6 +11,7 @@ import {
   startRecording, stopRecording, appendFloat32Chunk,
   isRecording as isFileRecording, getRecordingsPath
 } from './audio/file-manager';
+import { initDatabase, runQuery } from './database';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -126,8 +127,8 @@ function registerIPC(): void {
   });
 
   // ── Database ──
-  ipcMain.handle('db:query', async (_event, _sql: string, _params?: unknown[]) => {
-    return [];
+  ipcMain.handle('db:query', async (_event, sql: string, params?: unknown[]) => {
+    return runQuery(sql, params);
   });
 
   // ── File export ──
@@ -148,7 +149,8 @@ function registerIPC(): void {
 }
 
 // ── App lifecycle ──
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await initDatabase();
   createWindow();
   registerShortcuts();
   registerIPC();

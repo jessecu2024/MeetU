@@ -1,33 +1,45 @@
 // ============================================================
 // Meeting Store (Zustand)
-// Manages recording state, audio levels, and meeting lifecycle
+// Manages recording state, audio, STT engine, and meeting lifecycle
 // ============================================================
 
 import { create } from 'zustand';
 import { captureManager } from '../services/audio/capture';
 import { mockCaptureManager } from '../services/audio/mock-capture';
+import { sttRegistry } from '../services/stt-engine/engine-registry';
+import { useTranscriptStore } from './transcript-store';
+import { useSettingsStore } from './settings-store';
+import type { STTEngine } from '../services/stt-engine/types';
 
 interface MeetingState {
   // ── Recording state ──
   isRecording: boolean;
   isPaused: boolean;
   recordingStartTime: number | null;
-  recordingDuration: number;        // seconds
+  recordingDuration: number;
   recordingFilePath: string;
+  meetingId: number | null;
 
   // ── Audio state ──
   systemAudioActive: boolean;
   microphoneActive: boolean;
-  currentVolume: number;            // 0-1
-  useMock: boolean;                 // Using mock audio
+  currentVolume: number;
+  useMock: boolean;
   audioError: string | null;
 
-  // ── Recording consent ──
+  // ── STT state ──
+  sttActive: boolean;
+  sttMock: boolean;
+  sttEngineId: string | null;
+
+  // ── Consent ──
   showRecordingConsent: boolean;
   consentDismissedThisSession: boolean;
 
-  // ── Duration ticker ──
+  // ── Internal ──
   _durationInterval: ReturnType<typeof setInterval> | null;
+  _sttEngine: STTEngine | null;
+  _audioChunkCallback: ((chunk: Float32Array) => void) | null;
 
   // ── Actions ──
   requestStartRecording: () => void;
@@ -37,7 +49,6 @@ interface MeetingState {
   dismissConsent: () => void;
 }
 
-/** Detect if real audio capture is likely available */
 function canUseRealCapture(): boolean {
   return !!window.electronAPI?.audio?.getSources;
 }
@@ -48,6 +59,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   recordingStartTime: null,
   recordingDuration: 0,
   recordingFilePath: '',
+  meetingId: null,
 
   systemAudioActive: false,
   microphoneActive: false,
@@ -55,31 +67,59 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   useMock: false,
   audioError: null,
 
+  sttActive: false,
+  sttMock: false,
+  sttEngineId: null,
+
   showRecordingConsent: false,
   consentDismissedThisSession: false,
 
   _durationInterval: null,
+  _sttEngine: null,
+  _audioChunkCallback: null,
 
-  /** Step 1: User clicks record → show consent dialog (unless dismissed) */
   requestStartRecording: () => {
-    const { consentDismissedThisSession } = get();
-    if (consentDismissedThisSession) {
-      // Skip consent, start directly
+    if (get().consentDismissedThisSession) {
       get().confirmStartRecording();
     } else {
       set({ showRecordingConsent: true });
     }
   },
 
-  /** Step 2: User confirms consent → start capture */
   confirmStartRecording: async () => {
     set({ showRecordingConsent: false });
 
-    const useReal = canUseRealCapture();
-    const manager = useReal ? captureManager : mockCaptureManager;
+    const useRealAudio = canUseRealCapture();
+    const audioManager = useRealAudio ? captureManager : mockCaptureManager;
 
-    // Listen for state changes from capture manager
-    const unsubscribe = manager.onChange((state) => {
+    // Create meeting in database
+    let meetingId = -1;
+    try {
+      const result = await window.electronAPI?.db.query(
+        "INSERT INTO meetings (ai_provider, stt_engine) VALUES (?, ?)",
+        [useSettingsStore.getState().aiConfig.defaultProvider,
+         useSettingsStore.getState().sttEngine]
+      ) as { lastInsertRowid?: number } | undefined;
+      meetingId = (result?.lastInsertRowid as number) || -1;
+    } catch { /* DB not available */ }
+
+    // Set up STT engine
+    const settings = useSettingsStore.getState();
+    const { engine: sttEngine, isMock: sttIsMock } = sttRegistry.getConfiguredEngine(
+      settings.sttEngine,
+      settings.sttApiKeys
+    );
+
+    // Register transcript callback
+    const transcriptStore = useTranscriptStore.getState();
+    transcriptStore.startSession(meetingId, sttIsMock ? 'mock' : sttEngine.id, sttIsMock);
+
+    sttEngine.onTranscript((result) => {
+      useTranscriptStore.getState().addResult(result);
+    });
+
+    // Listen for audio capture state changes
+    const unsubscribe = audioManager.onChange((state) => {
       set({
         systemAudioActive: state.systemAudio ?? get().systemAudioActive,
         microphoneActive: state.microphone ?? get().microphoneActive,
@@ -90,7 +130,23 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     });
 
     try {
-      await manager.start();
+      // Start STT session
+      await sttEngine.startSession({
+        sampleRate: 16000,
+        enableDiarization: true,
+        enablePunctuation: true,
+        interimResults: true,
+      });
+
+      // Hook up audio chunks to STT engine via capture manager callback
+      if (useRealAudio) {
+        captureManager.onAudioChunk((data: Float32Array) => {
+          sttEngine.feedAudio(data.buffer);
+        });
+      }
+
+      // Start audio capture
+      await audioManager.start();
 
       const startTime = Date.now();
       const interval = setInterval(() => {
@@ -100,33 +156,53 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       set({
         isRecording: true,
         recordingStartTime: startTime,
-        useMock: !useReal,
+        meetingId,
+        useMock: !useRealAudio,
+        sttActive: true,
+        sttMock: sttIsMock,
+        sttEngineId: sttIsMock ? 'mock' : sttEngine.id,
         _durationInterval: interval,
+        _sttEngine: sttEngine,
       });
     } catch (err) {
-      console.error('[MeetingStore] Start recording failed:', err);
+      console.error('[MeetingStore] Start failed:', err);
       set({
-        audioError: err instanceof Error ? err.message : 'Failed to start recording / 启动录音失败',
+        audioError: err instanceof Error ? err.message : 'Failed to start / 启动失败',
       });
       unsubscribe();
     }
   },
 
-  /** User cancels the consent dialog */
   cancelRecording: () => {
     set({ showRecordingConsent: false });
   },
 
-  /** Stop recording */
   stopRecording: async () => {
-    const { useMock, _durationInterval } = get();
+    const { useMock, _durationInterval, _sttEngine, meetingId, recordingDuration } = get();
 
-    if (_durationInterval) {
-      clearInterval(_durationInterval);
+    if (_durationInterval) clearInterval(_durationInterval);
+
+    // Stop STT
+    if (_sttEngine) {
+      await _sttEngine.stopSession().catch(() => {});
     }
 
-    const manager = useMock ? mockCaptureManager : captureManager;
-    const savedPath = await manager.stop();
+    // Stop audio
+    const audioManager = useMock ? mockCaptureManager : captureManager;
+    const savedPath = await audioManager.stop();
+
+    // Update meeting in database
+    if (meetingId && meetingId > 0) {
+      try {
+        await window.electronAPI?.db.query(
+          "UPDATE meetings SET end_time = datetime('now'), duration_sec = ?, audio_path = ?, status = 'ended' WHERE id = ?",
+          [recordingDuration, savedPath, meetingId]
+        );
+      } catch { /* DB not available */ }
+    }
+
+    // End transcript session
+    useTranscriptStore.getState().endSession();
 
     set({
       isRecording: false,
@@ -136,11 +212,12 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       systemAudioActive: false,
       microphoneActive: false,
       recordingFilePath: savedPath || get().recordingFilePath,
+      sttActive: false,
       _durationInterval: null,
+      _sttEngine: null,
     });
   },
 
-  /** Dismiss consent for this session */
   dismissConsent: () => {
     set({ consentDismissedThisSession: true });
   },
