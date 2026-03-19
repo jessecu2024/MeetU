@@ -1,7 +1,7 @@
 {
   "name": "meetu",
   "version": "1.0.0",
-  "description": "MeetU (开会啦) — Your AI Meeting Copilot. Real-time transcription, translation, and smart speech suggestions. BYOK. Privacy-first.",
+  "description": "MeetU (开会啦) — Your AI Meeting Assistant. Real-time transcription, translation, and smart speech suggestions. BYOK. Privacy-first.",
   "license": "BSL-1.1",
   "private": true,
   "type": "module",
