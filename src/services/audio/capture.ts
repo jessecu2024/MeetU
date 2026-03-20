@@ -165,7 +165,12 @@ class AudioCaptureManager {
       for (const cb of this.audioChunkCallbacks) cb(copy);
     };
     this.analyser.connect(this.scriptProcessor);
-    this.scriptProcessor.connect(ctx.destination);
+    // Connect to a silent gain node (NOT ctx.destination) to keep pipeline alive
+    // without interfering with system audio output
+    const silentSink = ctx.createGain();
+    silentSink.gain.value = 0;
+    silentSink.connect(ctx.destination);
+    this.scriptProcessor.connect(silentSink);
 
     this.volumeInterval = setInterval(() => this.updateVolume(), 100);
     console.log(`[Audio] Pipeline ready — mic:${hasMic} sys:${hasSys}`);
