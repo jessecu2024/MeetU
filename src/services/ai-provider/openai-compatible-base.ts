@@ -8,6 +8,7 @@ import type {
   AIProvider, AIProviderId, RegionAvailability, ModelOption,
   Message, ChatOptions, ChatResponse, StreamEvent, ConnectionTestResult
 } from './types';
+import { aiFetch } from './ai-fetch';
 
 export abstract class OpenAICompatibleProvider implements AIProvider {
   abstract readonly id: AIProviderId;
@@ -61,7 +62,7 @@ export abstract class OpenAICompatibleProvider implements AIProvider {
     const start = Date.now();
     try {
       const testModel = this.models.find(m => m.tier === 'fast')?.id || this.currentModel;
-      const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+      const res = await aiFetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({
@@ -99,7 +100,7 @@ export abstract class OpenAICompatibleProvider implements AIProvider {
     const start = Date.now();
     const body = this.buildRequestBody(messages, options);
 
-    const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+    const res = await aiFetch(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(body),
@@ -123,56 +124,19 @@ export abstract class OpenAICompatibleProvider implements AIProvider {
   }
 
   async *streamChat(messages: Message[], options?: ChatOptions): AsyncGenerator<StreamEvent> {
-    const body = this.buildRequestBody(messages, { ...options, stream: true });
-
-    const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      yield { type: 'error', error: err.error?.message || res.statusText };
-      return;
-    }
-
-    const reader = res.body?.getReader();
-    if (!reader) return;
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        if (data === '[DONE]') {
-          yield { type: 'done' };
-          return;
-        }
-        try {
-          const event = JSON.parse(data);
-          const delta = event.choices?.[0]?.delta?.content;
-          if (delta) yield { type: 'text_delta', text: delta };
-          if (event.usage) {
-            yield {
-              type: 'done',
-              usage: {
-                inputTokens: event.usage.prompt_tokens || 0,
-                outputTokens: event.usage.completion_tokens || 0,
-              },
-            };
-          }
-        } catch { /* skip */ }
-      }
+    // IPC proxy doesn't support streaming — fall back to non-streaming chat
+    try {
+      const response = await this.chat(messages, options);
+      yield { type: 'text_delta', text: response.content };
+      yield {
+        type: 'done',
+        usage: {
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+        },
+      };
+    } catch (err) {
+      yield { type: 'error', error: err instanceof Error ? err.message : 'Unknown error' };
     }
   }
 }

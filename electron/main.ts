@@ -204,6 +204,37 @@ function registerIPC(): void {
     }
   });
 
+  // ── AI: Proxy fetch (bypass CORS) ──
+  // All AI API calls go through main process to avoid CORS restrictions
+  ipcMain.handle('ai:fetch', async (_event, url: string, init: { method?: string; headers?: Record<string, string>; body?: string }) => {
+    console.log(`[AI Fetch] ${init.method || 'GET'} ${url}`);
+    try {
+      const res = await fetch(url, {
+        method: init.method || 'GET',
+        headers: init.headers || {},
+        body: init.body || undefined,
+      });
+      console.log(`[AI Fetch] Response: ${res.status} ${res.statusText}`);
+      const text = await res.text();
+      return {
+        ok: res.ok,
+        status: res.status,
+        statusText: res.statusText,
+        body: text,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown network error';
+      console.error(`[AI Fetch] Error:`, msg);
+      return {
+        ok: false,
+        status: 0,
+        statusText: 'Network Error',
+        body: '',
+        error: msg,
+      };
+    }
+  });
+
   // ── Window controls ──
   ipcMain.on('window:minimize', () => mainWindow?.minimize());
   ipcMain.on('window:close', () => mainWindow?.close());

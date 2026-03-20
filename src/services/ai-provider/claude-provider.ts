@@ -7,6 +7,7 @@ import type {
   AIProvider, AIProviderId, RegionAvailability, ModelOption,
   Message, ChatOptions, ChatResponse, StreamEvent, ConnectionTestResult
 } from './types';
+import { aiFetch } from './ai-fetch';
 
 export class ClaudeProvider implements AIProvider {
   readonly id: AIProviderId = 'claude';
@@ -54,7 +55,7 @@ export class ClaudeProvider implements AIProvider {
 
   async validateApiKey(key: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/v1/messages`, {
+      const res = await aiFetch(`${this.baseUrl}/v1/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -76,7 +77,7 @@ export class ClaudeProvider implements AIProvider {
   async testConnection(): Promise<ConnectionTestResult> {
     const start = Date.now();
     try {
-      const res = await fetch(`${this.baseUrl}/v1/messages`, {
+      const res = await aiFetch(`${this.baseUrl}/v1/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -130,7 +131,7 @@ export class ClaudeProvider implements AIProvider {
     if (systemMsg) body.system = systemMsg.content;
     if (options?.temperature !== undefined) body.temperature = options.temperature;
 
-    const res = await fetch(`${this.baseUrl}/v1/messages`, {
+    const res = await aiFetch(`${this.baseUrl}/v1/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -158,75 +159,20 @@ export class ClaudeProvider implements AIProvider {
   }
 
   async *streamChat(messages: Message[], options?: ChatOptions): AsyncGenerator<StreamEvent> {
-    const model = options?.model || this.currentModel;
-
-    const systemMsg = messages.find(m => m.role === 'system');
-    const chatMessages = messages.filter(m => m.role !== 'system');
-
-    const body: Record<string, unknown> = {
-      model,
-      max_tokens: options?.maxTokens || 4096,
-      stream: true,
-      messages: chatMessages.map(m => ({ role: m.role, content: m.content })),
-    };
-    if (systemMsg) body.system = systemMsg.content;
-    if (options?.temperature !== undefined) body.temperature = options.temperature;
-
-    const res = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      yield { type: 'error', error: err.error?.message || res.statusText };
-      return;
-    }
-
-    const reader = res.body?.getReader();
-    if (!reader) return;
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6);
-        if (data === '[DONE]') {
-          yield { type: 'done' };
-          return;
-        }
-        try {
-          const event = JSON.parse(data);
-          if (event.type === 'content_block_delta' && event.delta?.text) {
-            yield { type: 'text_delta', text: event.delta.text };
-          }
-          if (event.type === 'message_delta' && event.usage) {
-            yield {
-              type: 'done',
-              usage: {
-                inputTokens: event.usage.input_tokens || 0,
-                outputTokens: event.usage.output_tokens || 0,
-              },
-            };
-          }
-        } catch {
-          // skip malformed events
-        }
-      }
+    // IPC proxy doesn't support streaming — fall back to non-streaming chat
+    // and emit the full response as a single text_delta + done event
+    try {
+      const response = await this.chat(messages, options);
+      yield { type: 'text_delta', text: response.content };
+      yield {
+        type: 'done',
+        usage: {
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+        },
+      };
+    } catch (err) {
+      yield { type: 'error', error: err instanceof Error ? err.message : 'Unknown error' };
     }
   }
 }

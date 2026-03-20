@@ -7,6 +7,7 @@ import type {
   Message, ChatOptions, ChatResponse, StreamEvent, ConnectionTestResult
 } from './types';
 import { OpenAICompatibleProvider } from './openai-compatible-base';
+import { aiFetch } from './ai-fetch';
 
 export class OpenAIProvider extends OpenAICompatibleProvider {
   readonly id: AIProviderId = 'openai';
@@ -75,7 +76,7 @@ export class GeminiProvider extends OpenAICompatibleProvider {
     const start = Date.now();
     const testModel = this.models.find(m => m.tier === 'fast')?.id || this.currentModel;
     try {
-      const res = await fetch(this.geminiUrl(testModel, 'generateContent'), {
+      const res = await aiFetch(this.geminiUrl(testModel, 'generateContent'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -113,7 +114,7 @@ export class GeminiProvider extends OpenAICompatibleProvider {
     };
     if (systemInstruction) body.systemInstruction = systemInstruction;
 
-    const res = await fetch(this.geminiUrl(model, 'generateContent'), {
+    const res = await aiFetch(this.geminiUrl(model, 'generateContent'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -138,63 +139,19 @@ export class GeminiProvider extends OpenAICompatibleProvider {
   }
 
   async *streamChat(messages: Message[], options?: ChatOptions): AsyncGenerator<StreamEvent> {
-    const model = options?.model || this.currentModel;
-    const { contents, systemInstruction } = this.toGeminiContents(messages);
-
-    const body: Record<string, unknown> = {
-      contents,
-      generationConfig: {
-        maxOutputTokens: options?.maxTokens || 4096,
-        ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-      },
-    };
-    if (systemInstruction) body.systemInstruction = systemInstruction;
-
-    const res = await fetch(this.geminiUrl(model, 'streamGenerateContent') + '&alt=sse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      yield { type: 'error', error: err.error?.message || res.statusText };
-      return;
-    }
-
-    const reader = res.body?.getReader();
-    if (!reader) return;
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        if (!data) continue;
-        try {
-          const event = JSON.parse(data);
-          const text = event.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) yield { type: 'text_delta', text };
-          if (event.usageMetadata) {
-            yield {
-              type: 'done',
-              usage: {
-                inputTokens: event.usageMetadata.promptTokenCount || 0,
-                outputTokens: event.usageMetadata.candidatesTokenCount || 0,
-              },
-            };
-          }
-        } catch { /* skip */ }
-      }
+    // IPC proxy doesn't support streaming — fall back to non-streaming chat
+    try {
+      const response = await this.chat(messages, options);
+      yield { type: 'text_delta', text: response.content };
+      yield {
+        type: 'done',
+        usage: {
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+        },
+      };
+    } catch (err) {
+      yield { type: 'error', error: err instanceof Error ? err.message : 'Unknown error' };
     }
   }
 }
