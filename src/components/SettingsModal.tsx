@@ -5,10 +5,11 @@
 // Bilingual: English first, Chinese second
 // ============================================================
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import { sttRegistry } from '../services/stt-engine/engine-registry';
+import { listAudioDevices } from '../services/audio/capture';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
 import { STT_ENGINE_INFO } from '../services/stt-engine/types';
@@ -42,6 +43,14 @@ export default function SettingsModal() {
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [sttKeyDraft, setSttKeyDraft] = useState('');
   const [sttTestResult, setSttTestResult] = useState<TestResult>({ status: 'idle' });
+  const [audioDevices, setAudioDevices] = useState<Array<{ deviceId: string; label: string; isStereoMix: boolean }>>([]);
+  const [showAudioGuide, setShowAudioGuide] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'app') {
+      listAudioDevices().then(setAudioDevices);
+    }
+  }, [activeTab]);
 
   const handleTestConnection = async (providerId: AIProviderId) => {
     setTestResults(prev => ({ ...prev, [providerId]: { status: 'testing' } }));
@@ -514,32 +523,71 @@ export default function SettingsModal() {
                 </select>
               </div>
 
-              {/* Audio capture mode */}
+              {/* Audio input device */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                  Audio Source <span className="text-zinc-400 font-normal">/ 音频来源</span>
+                  Audio Input Device <span className="text-zinc-400 font-normal">/ 音频输入设备</span>
                 </label>
-                <div className="flex gap-2">
-                  {([
-                    { id: 'mic_only' as const, label: 'Mic Only', desc: 'Won\'t affect speakers' },
-                    { id: 'mic_and_system' as const, label: 'Mic + System', desc: 'May mute speakers' },
-                  ]).map(m => (
-                    <button key={m.id}
-                      onClick={() => store.updateAppSettings({ audioMode: m.id })}
-                      className={`flex-1 py-2 px-2 rounded-lg text-sm font-medium border transition-colors ${
-                        store.appSettings.audioMode === m.id
-                          ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
-                          : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400'
-                      }`}>
-                      {m.label}
-                    </button>
+                <select
+                  value={store.appSettings.audioDeviceId}
+                  onChange={(e) => {
+                    const device = audioDevices.find(d => d.deviceId === e.target.value);
+                    store.updateAppSettings({
+                      audioDeviceId: e.target.value,
+                      audioDeviceLabel: device?.label || 'Default',
+                    });
+                  }}
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
+                    bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  {audioDevices.map(d => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label}{d.isStereoMix ? ' ⭐ Recommended' : ''}
+                    </option>
                   ))}
-                </div>
-                {store.appSettings.audioMode === 'mic_and_system' && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                    Warning: System audio capture may redirect sound away from your speakers/headphones.
-                    <span className="block">注意：系统音频捕获可能导致扬声器/耳机没有声音。</span>
+                </select>
+
+                {audioDevices.some(d => d.isStereoMix) && (
+                  <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                    ⭐ "Stereo Mix" detected — select it to capture meeting audio without affecting playback.
+                    <span className="block">检测到"立体声混音"— 选择它可录制会议音频且不影响播放。</span>
                   </p>
+                )}
+
+                <button
+                  onClick={() => setShowAudioGuide(!showAudioGuide)}
+                  className="text-xs text-blue-600 hover:underline mt-1.5">
+                  {showAudioGuide ? 'Hide guide ▲' : 'How to capture meeting audio / 如何录制会议声音 ▼'}
+                </button>
+
+                {showAudioGuide && (
+                  <div className="mt-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs space-y-2">
+                    <p className="font-medium text-blue-800 dark:text-blue-300">
+                      To transcribe what others say in a meeting, enable "Stereo Mix" on Windows:
+                    </p>
+                    <ol className="list-decimal list-inside space-y-0.5 text-blue-700 dark:text-blue-400">
+                      <li>Right-click the volume icon in taskbar → Sound settings</li>
+                      <li>Go to "Recording" tab (or "More sound settings" → Recording)</li>
+                      <li>Right-click empty area → "Show Disabled Devices"</li>
+                      <li>Right-click "Stereo Mix" → Enable</li>
+                      <li>Come back here and select "Stereo Mix" above</li>
+                    </ol>
+                    <hr className="border-blue-200 dark:border-blue-700" />
+                    <p className="font-medium text-blue-800 dark:text-blue-300">
+                      如需转写会议中别人说的话，请在 Windows 中启用"立体声混音"：
+                    </p>
+                    <ol className="list-decimal list-inside space-y-0.5 text-blue-700 dark:text-blue-400">
+                      <li>右键点击任务栏音量图标 → 声音设置</li>
+                      <li>进入"录制"选项卡（或"更多声音设置" → 录制）</li>
+                      <li>右键空白区域 → "显示已禁用的设备"</li>
+                      <li>右键"立体声混音" → 启用</li>
+                      <li>回到这里，在上方选择"立体声混音"</li>
+                    </ol>
+                    <button
+                      onClick={() => listAudioDevices().then(setAudioDevices)}
+                      className="mt-1 px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors">
+                      Refresh device list / 刷新设备列表
+                    </button>
+                  </div>
                 )}
               </div>
 

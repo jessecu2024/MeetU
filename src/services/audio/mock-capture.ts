@@ -8,7 +8,7 @@ import type { CaptureState, CaptureListener } from './capture';
 
 class MockCaptureManager {
   private _state: CaptureState = {
-    systemAudio: false,
+    deviceName: 'Mock',
     microphone: false,
     recording: false,
     volume: 0,
@@ -50,7 +50,7 @@ class MockCaptureManager {
     this.emit({
       recording: true,
       microphone: true,
-      systemAudio: false,
+      deviceName: 'Mock',
       filePath,
       error: 'Mock mode — using simulated audio / 模拟模式 — 使用模拟音频数据',
     });
@@ -82,7 +82,7 @@ class MockCaptureManager {
     this.emit({
       recording: false,
       microphone: false,
-      systemAudio: false,
+      deviceName: 'Mock',
       volume: 0,
     });
 

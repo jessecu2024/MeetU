@@ -8,9 +8,10 @@ import { useMeetingStore } from '../stores/meeting-store';
 
 export default function Header() {
   const openSettings = useSettingsStore((s) => s.openSettingsModal);
+  const audioDeviceLabel = useSettingsStore((s) => s.appSettings.audioDeviceLabel);
   const {
     isRecording, recordingDuration, currentVolume,
-    systemAudioActive, microphoneActive, useMock,
+    microphoneActive, useMock,
     sttMock, audioError, lastSaveResult,
     requestStartRecording, stopRecording, clearSaveResult,
   } = useMeetingStore();
@@ -100,15 +101,14 @@ export default function Header() {
             </div>
 
             {/* Source status */}
-            <div className="flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-3 text-xs flex-wrap">
               <span className={microphoneActive ? 'text-green-600' : 'text-zinc-400'}>
-                {microphoneActive ? '🎤 Mic ✓' : '🎤 Mic ✗'}
+                {microphoneActive ? '🎤 ' : '🎤 ✗ '}
+                <span className="max-w-[120px] inline-block truncate align-bottom"
+                  title={audioDeviceLabel}>
+                  {audioDeviceLabel || 'Default'}
+                </span>
               </span>
-              {systemAudioActive ? (
-                <span className="text-green-600">🔊 System ✓</span>
-              ) : (
-                <span className="text-zinc-400">🔊 Mic Only</span>
-              )}
               {sttMock && (
                 <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30
                   text-amber-700 dark:text-amber-400 font-medium">

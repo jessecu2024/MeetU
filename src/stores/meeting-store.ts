@@ -106,9 +106,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const useRealAudio = canUseRealCapture();
     const audioManager = useRealAudio ? captureManager : mockCaptureManager;
 
-    // Set audio mode from settings (mic_only by default to avoid stealing system sound)
+    // Set audio input device from settings
     if (useRealAudio) {
-      captureManager.setAudioMode(useSettingsStore.getState().appSettings.audioMode);
+      const { audioDeviceId, audioDeviceLabel } = useSettingsStore.getState().appSettings;
+      captureManager.setDevice(audioDeviceId, audioDeviceLabel);
     }
 
     // Create meeting in database
@@ -186,7 +187,6 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     // Listen for audio capture state changes
     const unsubscribe = audioManager.onChange((state) => {
       set({
-        systemAudioActive: state.systemAudio ?? get().systemAudioActive,
         microphoneActive: state.microphone ?? get().microphoneActive,
         currentVolume: state.volume ?? get().currentVolume,
         recordingFilePath: state.filePath ?? get().recordingFilePath,
