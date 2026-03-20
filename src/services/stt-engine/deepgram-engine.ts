@@ -54,9 +54,6 @@ export class DeepgramEngine implements STTEngine {
       diarize: String(config.enableDiarization ?? true),
       interim_results: String(config.interimResults ?? true),
       language: config.language || 'multi',
-      sample_rate: String(config.sampleRate || 16000),
-      encoding: 'linear16',
-      channels: '1',
     };
 
     const api = (window as unknown as { electronAPI?: {
@@ -104,25 +101,17 @@ export class DeepgramEngine implements STTEngine {
   feedAudio(chunk: ArrayBuffer): void {
     if (!this.running) return;
 
-    // Convert Float32 to Int16 for Deepgram (expects linear16)
-    const float32 = new Float32Array(chunk);
-    const int16 = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-      const s = Math.max(-1, Math.min(1, float32[i]));
-      int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-
+    // Send webm/opus chunks directly — Deepgram auto-detects format
     this.feedCount++;
     if (this.feedCount <= 3 || this.feedCount % 100 === 0) {
-      console.log(`[Deepgram] feedAudio #${this.feedCount}: ${int16.byteLength} bytes (int16)`);
+      console.log(`[Deepgram] feedAudio #${this.feedCount}: ${chunk.byteLength} bytes (webm/opus)`);
     }
 
-    // Send to main process WebSocket
     const api = (window as unknown as { electronAPI?: {
       stt?: { feedAudio?: (buf: ArrayBuffer) => void }
     } }).electronAPI;
 
-    api?.stt?.feedAudio?.(int16.buffer);
+    api?.stt?.feedAudio?.(chunk);
   }
 
   onTranscript(callback: (result: TranscriptResult) => void): void {

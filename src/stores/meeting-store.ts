@@ -246,8 +246,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     try {
       // Hook up audio chunks to STT engine via capture manager callback
       if (useRealAudio && !activeSttIsMock) {
-        captureManager.onAudioChunk((data: Float32Array) => {
-          activeSttEngine.feedAudio(data.buffer as ArrayBuffer);
+        captureManager.onAudioChunk((data: ArrayBuffer) => {
+          activeSttEngine.feedAudio(data);
         });
       }
 

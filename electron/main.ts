@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSetting, setSetting } from './store';
 import {
-  startRecording, stopRecording, appendFloat32Chunk,
+  startRecording, stopRecording, appendChunk,
   isRecording as isFileRecording, getRecordingsPath
 } from './audio/file-manager';
 import { initDatabase, runQuery } from './database';
@@ -134,8 +134,8 @@ function registerIPC(): void {
     return filePath;
   });
 
-  ipcMain.handle('audio:append-chunk', async (_event, float32Data: ArrayBuffer) => {
-    appendFloat32Chunk(float32Data);
+  ipcMain.handle('audio:append-chunk', async (_event, data: ArrayBuffer) => {
+    appendChunk(data);
   });
 
   ipcMain.handle('audio:is-recording', async () => {
@@ -351,7 +351,7 @@ function registerIPC(): void {
 
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
-    const fileName = `MeetU_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.wav`;
+    const fileName = `MeetU_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.webm`;
     const destPath = path.join(saveDir, fileName);
 
     try {
