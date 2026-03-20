@@ -3,12 +3,23 @@
 // Steps: Region → AI Provider → API Key → Test → STT → User Info
 // ============================================================
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useSettingsStore } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
 import { STT_ENGINE_INFO } from '../services/stt-engine/types';
+
+/** API Key format patterns for pre-validation (no network request) */
+const API_KEY_PATTERNS: Record<AIProviderId, { pattern: RegExp; hint: string; hintZh: string; placeholder: string }> = {
+  claude: { pattern: /^sk-ant-[a-zA-Z0-9_-]{20,}$/, hint: 'Should start with "sk-ant-"', hintZh: '应以 "sk-ant-" 开头', placeholder: 'sk-ant-...' },
+  openai: { pattern: /^sk-[a-zA-Z0-9_-]{20,}$/, hint: 'Should start with "sk-"', hintZh: '应以 "sk-" 开头', placeholder: 'sk-...' },
+  gemini: { pattern: /^AIza[a-zA-Z0-9_-]{20,}$/, hint: 'Should start with "AIza"', hintZh: '应以 "AIza" 开头', placeholder: 'AIza...' },
+  deepseek: { pattern: /^sk-[a-zA-Z0-9_-]{20,}$/, hint: 'Should start with "sk-"', hintZh: '应以 "sk-" 开头', placeholder: 'sk-...' },
+  qwen: { pattern: /^.{20,}$/, hint: 'At least 20 characters', hintZh: '至少 20 个字符', placeholder: 'your-api-key' },
+  minimax: { pattern: /^.{20,}$/, hint: 'At least 20 characters', hintZh: '至少 20 个字符', placeholder: 'your-api-key' },
+  glm: { pattern: /^.{20,}$/, hint: 'At least 20 characters', hintZh: '至少 20 个字符', placeholder: 'your-api-key' },
+};
 
 const STEPS = [
   { en: 'Choose Your Network', zh: '选择你的网络环境', subEn: 'Determines which AI services are available', subZh: '决定哪些 AI 服务可用' },
@@ -43,29 +54,50 @@ export default function OnboardingWizard() {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testError, setTestError] = useState('');
   const [testLatency, setTestLatency] = useState(0);
+  const [testModel, setTestModel] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
+
+  const currentProviderId = store.aiConfig.defaultProvider;
+  const keyPattern = API_KEY_PATTERNS[currentProviderId];
+  const keyFormatValid = useMemo(() => {
+    if (!apiKeyInput.trim()) return null; // empty = no validation yet
+    return keyPattern.pattern.test(apiKeyInput.trim());
+  }, [apiKeyInput, keyPattern]);
 
   const goNext = () => {
     if (step < STEPS.length - 1) setStep(step + 1);
     else store.completeOnboarding();
   };
   const goBack = () => { if (step > 0) setStep(step - 1); };
+  const handleExit = () => {
+    const confirmed = window.confirm(
+      'Exit setup? You can finish later in Settings.\n退出设置？你可以稍后在设置中完成。'
+    );
+    if (confirmed) store.completeOnboarding();
+  };
 
   const handleTest = async () => {
     setTestStatus('testing');
     setTestError('');
+    setTestModel('');
     try {
       const provider = providerRegistry.get(store.aiConfig.defaultProvider);
       if (!provider) throw new Error('Provider not found / 提供商未找到');
+      console.log(`[AI Test] Testing ${provider.name} (${provider.id})...`);
       const result = await provider.testConnection();
+      console.log(`[AI Test] Result:`, result);
       if (result.ok) {
         setTestStatus('success');
         setTestLatency(result.latencyMs);
+        setTestModel(result.model || provider.currentModel);
+        store.setConnectionStatus(store.aiConfig.defaultProvider, 'connected');
       } else {
         setTestStatus('error');
         setTestError(result.error || 'Connection failed / 连接失败');
+        store.setConnectionStatus(store.aiConfig.defaultProvider, 'failed');
       }
     } catch (err) {
+      console.error('[AI Test] Exception:', err);
       setTestStatus('error');
       setTestError(err instanceof Error ? err.message : 'Unknown error / 未知错误');
     }
@@ -75,8 +107,28 @@ export default function OnboardingWizard() {
 
   return (
     <div className="h-screen flex flex-col bg-white dark:bg-zinc-900">
+      {/* Top nav: Back + Close */}
+      <div className="flex items-center justify-between px-4 pt-3 pb-1 flex-shrink-0">
+        {step > 0 ? (
+          <button onClick={goBack}
+            className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
+            ← Back / 返回
+          </button>
+        ) : (
+          <div />
+        )}
+        <button
+          onClick={handleExit}
+          className="w-8 h-8 rounded-lg flex items-center justify-center
+            hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-zinc-700 text-sm"
+          title="Exit setup / 退出设置"
+        >
+          ✕
+        </button>
+      </div>
+
       {/* Progress bar */}
-      <div className="px-6 pt-5 flex gap-1.5">
+      <div className="px-6 pt-1 flex gap-1.5">
         {STEPS.map((_, i) => (
           <div key={i} className={`h-1 flex-1 rounded-full transition-colors ${
             i <= step ? 'bg-blue-500' : 'bg-zinc-200 dark:bg-zinc-700'}`} />
@@ -119,7 +171,13 @@ export default function OnboardingWizard() {
         {/* Step 1: Choose AI Provider */}
         {step === 1 && store.userRegion && (
           <div className="space-y-2.5">
-            {PROVIDER_CARDS[store.userRegion].map((p) => (
+            {PROVIDER_CARDS[store.userRegion].map((p) => {
+              const connStatus = store.getConnectionStatus(p.id);
+              const statusDot = connStatus === 'connected' ? '🟢'
+                : connStatus === 'failed' ? '🔴'
+                : connStatus === 'untested' ? '🟡'
+                : '⚪';
+              return (
               <button key={p.id}
                 onClick={() => { store.setDefaultProvider(p.id); goNext(); }}
                 className={`w-full p-4 rounded-xl border text-left transition-all hover:border-blue-400 ${
@@ -127,8 +185,9 @@ export default function OnboardingWizard() {
                     ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
                     : 'border-zinc-200 dark:border-zinc-700'}`}>
                 <div className="flex items-center justify-between">
-                  <div>
+                  <div className="flex-1">
                     <div className="flex items-center gap-2">
+                      <span className="text-sm" title={connStatus}>{statusDot}</span>
                       <span className="font-medium text-zinc-900 dark:text-white">{p.name}</span>
                       {p.badge && (
                         <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
@@ -142,7 +201,8 @@ export default function OnboardingWizard() {
                   </div>
                 </div>
               </button>
-            ))}
+              );
+            })}
 
             <div className="mt-4 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20
               border border-blue-200 dark:border-blue-800">
@@ -161,19 +221,38 @@ export default function OnboardingWizard() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
-                {providerRegistry.get(store.aiConfig.defaultProvider)?.name} API Key
+                {providerRegistry.get(currentProviderId)?.name} API Key
               </label>
               <input
                 type="password"
-                placeholder="sk-..."
+                placeholder={keyPattern.placeholder}
                 value={apiKeyInput}
                 onChange={(e) => setApiKeyInput(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-lg border border-zinc-300 dark:border-zinc-600
+                className={`w-full px-3 py-2.5 rounded-lg border
                   bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white
-                  focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  keyFormatValid === false
+                    ? 'border-amber-400 dark:border-amber-500'
+                    : keyFormatValid === true
+                      ? 'border-green-400 dark:border-green-500'
+                      : 'border-zinc-300 dark:border-zinc-600'
+                }`} />
+              {keyFormatValid === false && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1.5">
+                  This doesn't look like a valid {providerRegistry.get(currentProviderId)?.nameEn} API Key. {keyPattern.hint}
+                  <span className="block text-amber-500">
+                    这不像有效的 {providerRegistry.get(currentProviderId)?.name} API Key。{keyPattern.hintZh}
+                  </span>
+                </p>
+              )}
+              {keyFormatValid === true && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1.5">
+                  Format looks good / 格式正确
+                </p>
+              )}
             </div>
 
-            <a href={providerRegistry.get(store.aiConfig.defaultProvider)?.apiKeyGuideUrl}
+            <a href={providerRegistry.get(currentProviderId)?.apiKeyGuideUrl}
               target="_blank" rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline">
               Get API Key / 前往获取 API Key →
@@ -190,9 +269,10 @@ export default function OnboardingWizard() {
 
             <button
               onClick={() => {
-                store.setApiKey(store.aiConfig.defaultProvider, apiKeyInput);
-                const provider = providerRegistry.get(store.aiConfig.defaultProvider);
-                if (provider) provider.setApiKey(apiKeyInput);
+                const trimmedKey = apiKeyInput.trim();
+                store.setApiKey(currentProviderId, trimmedKey);
+                const provider = providerRegistry.get(currentProviderId);
+                if (provider) provider.setApiKey(trimmedKey);
                 goNext();
               }}
               disabled={!apiKeyInput.trim()}
@@ -228,18 +308,28 @@ export default function OnboardingWizard() {
               )}
               {testStatus === 'testing' && (
                 <>
-                  <div className="text-4xl mb-3 animate-spin">⏳</div>
-                  <p className="text-zinc-600 dark:text-zinc-400">Connecting... / 连接中...</p>
+                  <div className="text-4xl mb-3">
+                    <span className="inline-block animate-spin">⏳</span>
+                  </div>
+                  <p className="text-zinc-600 dark:text-zinc-400 font-medium">
+                    Testing... / 测试中...
+                  </p>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Sending test request to {providerRegistry.get(currentProviderId)?.nameEn}...
+                  </p>
                 </>
               )}
               {testStatus === 'success' && (
                 <>
                   <div className="text-4xl mb-3">✅</div>
                   <p className="text-green-700 dark:text-green-300 font-medium">
-                    Connection Successful! / 连接成功！
+                    Connected! / 连接成功！
                   </p>
                   <p className="text-sm text-green-600 dark:text-green-400 mt-1">
-                    Latency {testLatency}ms · {providerRegistry.get(store.aiConfig.defaultProvider)?.name}
+                    Latency: {testLatency}ms / 延迟: {testLatency}ms
+                  </p>
+                  <p className="text-xs text-green-500 dark:text-green-500 mt-0.5">
+                    Model: {testModel} · {providerRegistry.get(currentProviderId)?.name}
                   </p>
                 </>
               )}
@@ -249,9 +339,9 @@ export default function OnboardingWizard() {
                   <p className="text-red-700 dark:text-red-300 font-medium">
                     Connection Failed / 连接失败
                   </p>
-                  <p className="text-sm text-red-500 mt-1">{testError}</p>
-                  <p className="text-xs text-red-400 mt-2">
-                    Please check if Key is correct and network is reachable / 请检查 Key 是否正确、网络是否可达
+                  <p className="text-sm text-red-500 dark:text-red-400 mt-1 break-words px-2">{testError}</p>
+                  <p className="text-xs text-red-400 dark:text-red-500 mt-2">
+                    Please check your API Key and network / 请检查 API Key 和网络连接
                   </p>
                 </>
               )}
@@ -377,15 +467,6 @@ export default function OnboardingWizard() {
         )}
       </div>
 
-      {/* Footer nav */}
-      {step > 0 && (
-        <div className="px-6 pb-5">
-          <button onClick={goBack}
-            className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
-            ← Back / 返回上一步
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -2,7 +2,10 @@
 // OpenAI GPT Provider
 // ============================================================
 
-import type { AIProviderId, RegionAvailability, ModelOption } from './types';
+import type {
+  AIProviderId, RegionAvailability, ModelOption,
+  Message, ChatOptions, ChatResponse, StreamEvent, ConnectionTestResult
+} from './types';
 import { OpenAICompatibleProvider } from './openai-compatible-base';
 
 export class OpenAIProvider extends OpenAICompatibleProvider {
@@ -41,36 +44,157 @@ export class GeminiProvider extends OpenAICompatibleProvider {
   ];
   currentModel = 'gemini-2.0-flash';
 
-  // Gemini 使用不同的 API 格式，需要覆盖
-  protected getHeaders(): Record<string, string> {
-    return {
-      'Content-Type': 'application/json',
-    };
+  /** Gemini API endpoint builder */
+  private geminiUrl(model: string, method: string): string {
+    return `${this.baseUrl}/v1beta/models/${model}:${method}?key=${this['apiKey']}`;
   }
 
-  // Gemini REST API 使用不同的 endpoint 和格式
-  async testConnection() {
+  /** Convert standard messages to Gemini's contents format */
+  private toGeminiContents(messages: Message[]): { contents: unknown[]; systemInstruction?: unknown } {
+    const systemMsg = messages.find(m => m.role === 'system');
+    const chatMessages = messages.filter(m => m.role !== 'system');
+
+    const contents = chatMessages.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
+
+    const result: { contents: unknown[]; systemInstruction?: unknown } = { contents };
+    if (systemMsg) {
+      result.systemInstruction = { parts: [{ text: systemMsg.content }] };
+    }
+    return result;
+  }
+
+  // ── Gemini uses URL param auth, not Bearer token ──
+  protected getHeaders(): Record<string, string> {
+    return { 'Content-Type': 'application/json' };
+  }
+
+  async testConnection(): Promise<ConnectionTestResult> {
     const start = Date.now();
+    const testModel = this.models.find(m => m.tier === 'fast')?.id || this.currentModel;
     try {
-      const res = await fetch(
-        `${this.baseUrl}/v1beta/models/${this.currentModel}:generateContent?key=${this['apiKey']}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: 'ping' }] }],
-            generationConfig: { maxOutputTokens: 10 },
-          }),
-        }
-      );
+      const res = await fetch(this.geminiUrl(testModel, 'generateContent'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'ping' }] }],
+          generationConfig: { maxOutputTokens: 10 },
+        }),
+      });
       const latencyMs = Date.now() - start;
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        return { ok: false, latencyMs, error: err.error?.message || `HTTP ${res.status}` };
+        const status = res.status;
+        let errorMsg = err.error?.message || `HTTP ${status}`;
+        if (status === 400) errorMsg = `Invalid API Key / API Key 无效: ${errorMsg}`;
+        else if (status === 403) errorMsg = `API Key forbidden — check Gemini API is enabled / API Key 被禁止: ${errorMsg}`;
+        else if (status === 429) errorMsg = `Rate limited — try again later / 请求过于频繁: ${errorMsg}`;
+        return { ok: false, latencyMs, error: errorMsg };
       }
-      return { ok: true, latencyMs, model: this.currentModel };
+      return { ok: true, latencyMs, model: testModel };
     } catch (err) {
-      return { ok: false, latencyMs: Date.now() - start, error: err instanceof Error ? err.message : '网络错误' };
+      return { ok: false, latencyMs: Date.now() - start, error: err instanceof Error ? err.message : 'Network error / 网络错误' };
+    }
+  }
+
+  async chat(messages: Message[], options?: ChatOptions): Promise<ChatResponse> {
+    const model = options?.model || this.currentModel;
+    const start = Date.now();
+    const { contents, systemInstruction } = this.toGeminiContents(messages);
+
+    const body: Record<string, unknown> = {
+      contents,
+      generationConfig: {
+        maxOutputTokens: options?.maxTokens || 4096,
+        ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      },
+    };
+    if (systemInstruction) body.systemInstruction = systemInstruction;
+
+    const res = await fetch(this.geminiUrl(model, 'generateContent'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Gemini API error: ${err.error?.message || res.statusText}`);
+    }
+
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '';
+    return {
+      content: text,
+      model,
+      usage: {
+        inputTokens: data.usageMetadata?.promptTokenCount || 0,
+        outputTokens: data.usageMetadata?.candidatesTokenCount || 0,
+      },
+      latencyMs: Date.now() - start,
+    };
+  }
+
+  async *streamChat(messages: Message[], options?: ChatOptions): AsyncGenerator<StreamEvent> {
+    const model = options?.model || this.currentModel;
+    const { contents, systemInstruction } = this.toGeminiContents(messages);
+
+    const body: Record<string, unknown> = {
+      contents,
+      generationConfig: {
+        maxOutputTokens: options?.maxTokens || 4096,
+        ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      },
+    };
+    if (systemInstruction) body.systemInstruction = systemInstruction;
+
+    const res = await fetch(this.geminiUrl(model, 'streamGenerateContent') + '&alt=sse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      yield { type: 'error', error: err.error?.message || res.statusText };
+      return;
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) return;
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (!data) continue;
+        try {
+          const event = JSON.parse(data);
+          const text = event.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) yield { type: 'text_delta', text };
+          if (event.usageMetadata) {
+            yield {
+              type: 'done',
+              usage: {
+                inputTokens: event.usageMetadata.promptTokenCount || 0,
+                outputTokens: event.usageMetadata.candidatesTokenCount || 0,
+              },
+            };
+          }
+        } catch { /* skip */ }
+      }
     }
   }
 }

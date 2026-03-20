@@ -65,6 +65,9 @@ interface AppSettings {
   audioRetentionDays: number;
 }
 
+/** Connection status for each AI provider */
+export type ConnectionStatus = 'connected' | 'untested' | 'failed' | 'unconfigured';
+
 interface SettingsState {
   // ── Legal consent ──
   legalAccepted: boolean;
@@ -81,6 +84,7 @@ interface SettingsState {
   // ── AI configuration ──
   userRegion: 'global' | 'china' | null;
   aiConfig: UserAIConfig;
+  connectionStatuses: Partial<Record<AIProviderId, ConnectionStatus>>;
 
   // ── STT configuration ──
   sttEngine: STTEngineId;
@@ -100,6 +104,8 @@ interface SettingsState {
   setUserRegion: (region: 'global' | 'china') => void;
   setDefaultProvider: (id: AIProviderId) => void;
   setApiKey: (provider: AIProviderId, key: string) => void;
+  setConnectionStatus: (provider: AIProviderId, status: ConnectionStatus) => void;
+  getConnectionStatus: (provider: AIProviderId) => ConnectionStatus;
   setFunctionOverride: (fn: AIFunction, provider: AIProviderId) => void;
   setSelectedModel: (provider: AIProviderId, modelId: string) => void;
   setSTTEngine: (id: STTEngineId) => void;
@@ -144,6 +150,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     apiKeys: {},
     selectedModels: {},
   },
+  connectionStatuses: {},
 
   // ── STT configuration ──
   sttEngine: 'deepgram',
@@ -167,7 +174,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   /** Load all settings from electron-store on startup */
   loadFromStore: async () => {
-    if (!window.electronAPI) return;
+    if (!window.electronAPI) {
+      console.warn('[Settings] electronAPI not available, using defaults');
+      set({ settingsLoaded: true });
+      return;
+    }
     try {
       const all = await window.electronAPI.settings.get('all') as Record<string, unknown> | null;
       if (!all) { set({ settingsLoaded: true }); return; }
@@ -190,7 +201,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         appSettings: { ...get().appSettings, ...(all.appSettings as Partial<AppSettings>) },
         customTerms: (all.customTerms as Array<{ source: string; target: string }>) || [],
       });
-    } catch {
+    } catch (err) {
+      console.error('[Settings] Failed to load settings:', err);
       set({ settingsLoaded: true });
     }
   },
@@ -247,9 +259,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         ...state.aiConfig,
         apiKeys: { ...state.aiConfig.apiKeys, [provider]: key },
       },
+      connectionStatuses: {
+        ...state.connectionStatuses,
+        [provider]: key ? 'untested' : 'unconfigured',
+      },
     }));
     // Encrypt and persist via electron-store
     persist('apiKey', { provider, apiKey: key });
+  },
+
+  setConnectionStatus: (provider, status) => {
+    set((state) => ({
+      connectionStatuses: { ...state.connectionStatuses, [provider]: status },
+    }));
+  },
+
+  getConnectionStatus: (provider) => {
+    const state = get();
+    const hasKey = !!state.aiConfig.apiKeys[provider];
+    if (!hasKey) return 'unconfigured';
+    return state.connectionStatuses[provider] || 'untested';
   },
 
   setFunctionOverride: (fn, provider) => {

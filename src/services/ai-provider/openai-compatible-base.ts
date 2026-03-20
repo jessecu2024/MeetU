@@ -73,14 +73,24 @@ export abstract class OpenAICompatibleProvider implements AIProvider {
       const latencyMs = Date.now() - start;
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        return { ok: false, latencyMs, error: err.error?.message || `HTTP ${res.status}` };
+        const status = res.status;
+        let errorMsg = err.error?.message || `HTTP ${status}`;
+        if (status === 401) errorMsg = `Invalid API Key / API Key 无效 (${status})`;
+        else if (status === 403) errorMsg = `Access denied / 访问被拒绝 (${status}): ${errorMsg}`;
+        else if (status === 429) errorMsg = `Rate limited / 请求频率过高 (${status})`;
+        else if (status >= 500) errorMsg = `Server error / 服务端错误 (${status}): ${errorMsg}`;
+        return { ok: false, latencyMs, error: errorMsg };
       }
       return { ok: true, latencyMs, model: testModel };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      let errorMsg = `Network error / 网络错误: ${msg}`;
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError'))
+        errorMsg = 'Cannot reach server — check network/VPN / 无法连接服务器，请检查网络或 VPN';
       return {
         ok: false,
         latencyMs: Date.now() - start,
-        error: err instanceof Error ? err.message : '网络错误',
+        error: errorMsg,
       };
     }
   }

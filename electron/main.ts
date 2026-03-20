@@ -3,7 +3,7 @@
 // Creates floating window, registers IPC handlers, manages lifecycle
 // ============================================================
 
-import { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer, session } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSetting, setSetting } from './store';
@@ -23,21 +23,23 @@ function createWindow(): void {
   const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
 
   mainWindow = new BrowserWindow({
-    width: 420,
-    height: 700,
-    x: screenW - 440,
+    width: 450,
+    height: 750,
+    x: screenW - 470,
     y: 80,
-    icon: path.join(__dirname, '../resources/icons/logo.svg'),
-    frame: false,
+    title: 'MeetU',
+    icon: path.join(__dirname, '../resources/icons/icon.png'),
+    frame: true,
     transparent: false,
-    alwaysOnTop: true,
+    alwaysOnTop: false,
     resizable: true,
     minimizable: true,
     skipTaskbar: false,
     hasShadow: true,
-    roundedCorners: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
+      // preload.cjs is a plain CommonJS file copied directly (not built by vite-plugin-electron)
+      // This avoids the ESM/CJS format issue with package.json "type":"module"
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -54,6 +56,33 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // ── Bypass CORS for AI API endpoints ──
+  // Desktop apps don't need CORS restrictions; AI providers don't set CORS headers for browser origins
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const url = details.url;
+    const isAiApi =
+      url.includes('api.anthropic.com') ||
+      url.includes('api.openai.com') ||
+      url.includes('generativelanguage.googleapis.com') ||
+      url.includes('api.deepseek.com') ||
+      url.includes('dashscope.aliyuncs.com') ||
+      url.includes('api.minimax.chat') ||
+      url.includes('open.bigmodel.cn');
+
+    if (isAiApi) {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'access-control-allow-origin': ['*'],
+          'access-control-allow-headers': ['*'],
+          'access-control-allow-methods': ['POST, GET, OPTIONS, PUT, DELETE'],
+        },
+      });
+    } else {
+      callback({ responseHeaders: details.responseHeaders });
+    }
   });
 }
 
@@ -76,11 +105,20 @@ function registerShortcuts(): void {
 function registerIPC(): void {
   // ── Settings (encrypted store) ──
   ipcMain.handle('settings:get', async (_event, key: string) => {
-    return getSetting(key);
+    try {
+      return getSetting(key);
+    } catch (err) {
+      console.error('[Main] settings:get error:', err);
+      return null;
+    }
   });
 
   ipcMain.handle('settings:set', async (_event, key: string, value: unknown) => {
-    setSetting(key, value);
+    try {
+      setSetting(key, value);
+    } catch (err) {
+      console.error('[Main] settings:set error:', err);
+    }
   });
 
   // ── Audio: Desktop Capturer Sources ──
@@ -181,9 +219,9 @@ function registerIPC(): void {
 // ── App lifecycle ──
 app.whenReady().then(async () => {
   await initDatabase();
-  createWindow();
-  registerShortcuts();
   registerIPC();
+  registerShortcuts();
+  createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
