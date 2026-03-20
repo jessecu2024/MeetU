@@ -24,6 +24,8 @@ const SEND_INTERVAL_MS = 500; // Send chunks to main process every 500ms
 
 export type AudioChunkCallback = (data: Float32Array) => void;
 
+export type AudioMode = 'mic_only' | 'mic_and_system';
+
 class AudioCaptureManager {
   private micStream: MediaStream | null = null;
   private systemStream: MediaStream | null = null;
@@ -35,6 +37,12 @@ class AudioCaptureManager {
   private sendInterval: ReturnType<typeof setInterval> | null = null;
   private listeners: CaptureListener[] = [];
   private audioChunkCallbacks: AudioChunkCallback[] = [];
+  private audioMode: AudioMode = 'mic_only';
+
+  /** Set audio capture mode */
+  setAudioMode(mode: AudioMode): void {
+    this.audioMode = mode;
+  }
 
   /** Register a callback to receive raw audio chunks (for STT) */
   onAudioChunk(cb: AudioChunkCallback): () => void {
@@ -84,8 +92,13 @@ class AudioCaptureManager {
     // 1. Capture microphone
     await this.startMicrophone();
 
-    // 2. Try to capture system audio (Windows only for now)
-    await this.startSystemAudio();
+    // 2. Optionally capture system audio (off by default — can steal audio from speakers)
+    if (this.audioMode === 'mic_and_system') {
+      await this.startSystemAudio();
+    } else {
+      console.log('[Capture] Mic-only mode — system audio not captured');
+      this.emit({ systemAudio: false });
+    }
 
     // Set up audio processing pipeline
     this.setupProcessing();

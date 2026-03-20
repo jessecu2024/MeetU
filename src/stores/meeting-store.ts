@@ -100,6 +100,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const useRealAudio = canUseRealCapture();
     const audioManager = useRealAudio ? captureManager : mockCaptureManager;
 
+    // Set audio mode from settings (mic_only by default to avoid stealing system sound)
+    if (useRealAudio) {
+      captureManager.setAudioMode(useSettingsStore.getState().appSettings.audioMode);
+    }
+
     // Create meeting in database
     let meetingId = -1;
     try {
@@ -183,19 +188,53 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       });
     });
 
+    // Start STT session — fallback to mock if it fails
+    let activeSttEngine = sttEngine;
+    let activeSttIsMock = sttIsMock;
     try {
-      // Start STT session
       await sttEngine.startSession({
         sampleRate: 16000,
         enableDiarization: true,
         enablePunctuation: true,
         interimResults: true,
       });
+      console.log(`[MeetingStore] STT engine started: ${sttEngine.id}`);
+    } catch (err) {
+      console.error(`[MeetingStore] STT engine "${sttEngine.id}" failed, falling back to mock:`, err);
+      set({
+        audioError: `STT engine failed: ${err instanceof Error ? err.message : 'Unknown error'} — using demo mode / STT 引擎失败，使用演示模式`,
+      });
 
+      // Fall back to mock STT
+      const mockEngine = sttRegistry.getMock();
+      if ('setUserName' in mockEngine) {
+        (mockEngine as import('../services/stt-engine/mock-engine').MockSTTEngine)
+          .setUserName(settings.userProfile.name, settings.userProfile.nameEn);
+      }
+      mockEngine.onTranscript((result) => {
+        useTranscriptStore.getState().addResult(result);
+        if (result.isFinal) {
+          const entry = {
+            id: result.id, text: result.text, isFinal: true,
+            speaker: result.speaker, language: result.language,
+            startMs: result.startMs, endMs: result.endMs,
+            confidence: result.confidence, timestamp: Date.now(),
+          };
+          translationService.processEntry(entry);
+          mentionDetector.processEntry(entry);
+        }
+      });
+      await mockEngine.startSession({ sampleRate: 16000 });
+      activeSttEngine = mockEngine;
+      activeSttIsMock = true;
+      transcriptStore.startSession(meetingId, 'mock', true);
+    }
+
+    try {
       // Hook up audio chunks to STT engine via capture manager callback
-      if (useRealAudio) {
+      if (useRealAudio && !activeSttIsMock) {
         captureManager.onAudioChunk((data: Float32Array) => {
-          sttEngine.feedAudio(data.buffer as ArrayBuffer);
+          activeSttEngine.feedAudio(data.buffer as ArrayBuffer);
         });
       }
 
@@ -213,10 +252,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         meetingId,
         useMock: !useRealAudio,
         sttActive: true,
-        sttMock: sttIsMock,
-        sttEngineId: sttIsMock ? 'mock' : sttEngine.id,
+        sttMock: activeSttIsMock,
+        sttEngineId: activeSttIsMock ? 'mock' : activeSttEngine.id,
         _durationInterval: interval,
-        _sttEngine: sttEngine,
+        _sttEngine: activeSttEngine,
       });
     } catch (err) {
       console.error('[MeetingStore] Start failed:', err);

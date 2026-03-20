@@ -8,6 +8,7 @@
 import { useState } from 'react';
 import { useSettingsStore } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
+import { sttRegistry } from '../services/stt-engine/engine-registry';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
 import { STT_ENGINE_INFO } from '../services/stt-engine/types';
@@ -39,6 +40,8 @@ export default function SettingsModal() {
   const [editingKey, setEditingKey] = useState('');
   const [editingProvider, setEditingProvider] = useState<AIProviderId | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
+  const [sttKeyDraft, setSttKeyDraft] = useState('');
+  const [sttTestResult, setSttTestResult] = useState<TestResult>({ status: 'idle' });
 
   const handleTestConnection = async (providerId: AIProviderId) => {
     setTestResults(prev => ({ ...prev, [providerId]: { status: 'testing' } }));
@@ -57,6 +60,24 @@ export default function SettingsModal() {
         ...prev,
         [providerId]: { status: 'error', error: err instanceof Error ? err.message : 'Unknown error' },
       }));
+    }
+  };
+
+  const handleTestSTT = async (engineId: STTEngineId, apiKey: string) => {
+    if (!apiKey.trim()) return;
+    setSttTestResult({ status: 'testing' });
+    const start = Date.now();
+    try {
+      const engine = sttRegistry.get(engineId);
+      if (!engine) throw new Error('Engine not found');
+      engine.setApiKey(apiKey);
+      const result = await engine.testConnection();
+      const latencyMs = Date.now() - start;
+      setSttTestResult(result.ok
+        ? { status: 'ok', latencyMs }
+        : { status: 'error', error: result.error || 'Connection failed' });
+    } catch (err) {
+      setSttTestResult({ status: 'error', error: err instanceof Error ? err.message : 'Unknown error' });
     }
   };
 
@@ -317,6 +338,7 @@ export default function SettingsModal() {
               {(() => {
                 const currentEngine = STT_ENGINE_INFO.find(e => e.id === store.sttEngine);
                 if (!currentEngine?.requiresApiKey) return null;
+                const savedKey = store.sttApiKeys[store.sttEngine] || '';
                 return (
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
@@ -325,13 +347,55 @@ export default function SettingsModal() {
                     <div className="flex gap-2">
                       <input
                         type="password"
-                        value={store.sttApiKeys[store.sttEngine] || ''}
-                        onChange={(e) => store.setSTTApiKey(store.sttEngine, e.target.value)}
+                        value={sttKeyDraft || savedKey}
+                        onChange={(e) => setSttKeyDraft(e.target.value)}
                         placeholder="Enter API Key..."
                         className="flex-1 px-3 py-2 text-sm rounded-lg border border-zinc-300 dark:border-zinc-600
                           bg-white dark:bg-zinc-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                       />
+                      <button
+                        onClick={() => {
+                          const key = sttKeyDraft || savedKey;
+                          if (key.trim()) {
+                            store.setSTTApiKey(store.sttEngine, key);
+                            setSttKeyDraft('');
+                            handleTestSTT(store.sttEngine, key);
+                          }
+                        }}
+                        className="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700">
+                        Save
+                      </button>
                     </div>
+
+                    {/* STT test result */}
+                    {sttTestResult.status !== 'idle' && (
+                      <div className="mt-2">
+                        {sttTestResult.status === 'testing' && (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+                            <span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full" />
+                            Testing connection...
+                          </span>
+                        )}
+                        {sttTestResult.status === 'ok' && (
+                          <span className="text-xs text-green-700 dark:text-green-400">
+                            ✅ Connected {sttTestResult.latencyMs ? `(${sttTestResult.latencyMs}ms)` : ''}
+                          </span>
+                        )}
+                        {sttTestResult.status === 'error' && (
+                          <div>
+                            <span className="text-xs text-red-600 dark:text-red-400">
+                              ❌ {sttTestResult.error}
+                            </span>
+                            <button
+                              onClick={() => handleTestSTT(store.sttEngine, savedKey)}
+                              className="ml-2 text-xs text-blue-600 hover:underline">
+                              Retry
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {currentEngine.apiKeyGuideUrl && (
                       <a href={currentEngine.apiKeyGuideUrl} target="_blank" rel="noopener noreferrer"
                         className="text-xs text-blue-600 hover:underline mt-1 inline-block">
@@ -448,6 +512,35 @@ export default function SettingsModal() {
                   <option value={10}>10 min</option>
                   <option value={15}>15 min</option>
                 </select>
+              </div>
+
+              {/* Audio capture mode */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                  Audio Source <span className="text-zinc-400 font-normal">/ 音频来源</span>
+                </label>
+                <div className="flex gap-2">
+                  {([
+                    { id: 'mic_only' as const, label: 'Mic Only', desc: 'Won\'t affect speakers' },
+                    { id: 'mic_and_system' as const, label: 'Mic + System', desc: 'May mute speakers' },
+                  ]).map(m => (
+                    <button key={m.id}
+                      onClick={() => store.updateAppSettings({ audioMode: m.id })}
+                      className={`flex-1 py-2 px-2 rounded-lg text-sm font-medium border transition-colors ${
+                        store.appSettings.audioMode === m.id
+                          ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
+                          : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400'
+                      }`}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+                {store.appSettings.audioMode === 'mic_and_system' && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    Warning: System audio capture may redirect sound away from your speakers/headphones.
+                    <span className="block">注意：系统音频捕获可能导致扬声器/耳机没有声音。</span>
+                  </p>
+                )}
               </div>
 
               {/* Region */}

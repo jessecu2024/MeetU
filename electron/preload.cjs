@@ -23,6 +23,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ── STT ──
   stt: {
+    testConnection: (engineId, apiKey) =>
+      ipcRenderer.invoke('stt:test-connection', engineId, apiKey),
+    startSession: (engineId, apiKey, params) =>
+      ipcRenderer.invoke('stt:start-session', engineId, apiKey, params),
+    feedAudio: (int16Buffer) =>
+      ipcRenderer.invoke('stt:feed-audio', int16Buffer),
+    stopSession: () =>
+      ipcRenderer.invoke('stt:stop-session'),
+    onTranscript: (cb) =>
+      ipcRenderer.on('stt:transcript', (_e, result) => cb(result)),
+    onError: (cb) =>
+      ipcRenderer.on('stt:error', (_e, error) => cb(error)),
+    onClosed: (cb) =>
+      ipcRenderer.on('stt:closed', () => cb()),
     onResult: (cb) =>
       ipcRenderer.on('stt:result', (_e, result) => cb(result)),
     onStatus: (cb) =>

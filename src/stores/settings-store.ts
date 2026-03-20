@@ -63,6 +63,7 @@ interface AppSettings {
   autoStartRecording: boolean;
   summaryIntervalMinutes: number;
   audioRetentionDays: number;
+  audioMode: 'mic_only' | 'mic_and_system';
 }
 
 /** Connection status for each AI provider */
@@ -167,6 +168,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     autoStartRecording: false,
     summaryIntervalMinutes: 5,
     audioRetentionDays: 30,
+    audioMode: 'mic_only',
   },
 
   // ── Glossary ──

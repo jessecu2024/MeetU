@@ -103,9 +103,11 @@ export default function Header() {
               <span className={microphoneActive ? 'text-green-600' : 'text-zinc-400'}>
                 {microphoneActive ? '🎤 Mic ✓' : '🎤 Mic ✗'}
               </span>
-              <span className={systemAudioActive ? 'text-green-600' : 'text-zinc-400'}>
-                {systemAudioActive ? '🔊 System ✓' : '🔊 System ✗'}
-              </span>
+              {systemAudioActive ? (
+                <span className="text-green-600">🔊 System ✓</span>
+              ) : (
+                <span className="text-zinc-400">🔊 Mic Only</span>
+              )}
               {sttMock && (
                 <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30
                   text-amber-700 dark:text-amber-400 font-medium">
@@ -124,13 +126,6 @@ export default function Header() {
               <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20
                 rounded-lg px-2 py-1">
                 {audioError}
-              </p>
-            )}
-
-            {!systemAudioActive && !useMock && (
-              <p className="text-xs text-zinc-400">
-                System audio not available — recording microphone only
-                <span className="block">系统音频不可用 — 仅录制麦克风</span>
               </p>
             )}
           </div>

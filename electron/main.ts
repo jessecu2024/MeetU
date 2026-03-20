@@ -235,6 +235,114 @@ function registerIPC(): void {
     }
   });
 
+  // ── STT: Deepgram WebSocket proxy (runs in main process to bypass CORS) ──
+  let dgWebSocket: import('ws').WebSocket | null = null;
+
+  ipcMain.handle('stt:test-connection', async (_event, engineId: string, apiKey: string) => {
+    console.log(`[STT] Testing connection: ${engineId}`);
+    if (engineId === 'deepgram') {
+      try {
+        const res = await fetch('https://api.deepgram.com/v1/projects', {
+          headers: { 'Authorization': `Token ${apiKey}` },
+        });
+        console.log(`[STT] Deepgram test: ${res.status}`);
+        if (res.ok) return { ok: true };
+        const body = await res.text().catch(() => '');
+        return { ok: false, error: `HTTP ${res.status}: ${body.substring(0, 200)}` };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Network error';
+        console.error(`[STT] Deepgram test error:`, msg);
+        return { ok: false, error: msg };
+      }
+    }
+    return { ok: false, error: `Engine ${engineId} test not implemented` };
+  });
+
+  ipcMain.handle('stt:start-session', async (_event, engineId: string, apiKey: string, params: Record<string, string>) => {
+    if (engineId !== 'deepgram') return { ok: false, error: 'Only deepgram supported via IPC' };
+
+    const WebSocket = (await import('ws')).default;
+    const qs = new URLSearchParams(params).toString();
+    const url = `wss://api.deepgram.com/v1/listen?${qs}`;
+    console.log(`[STT] Deepgram WebSocket connecting: ${url}`);
+
+    return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      dgWebSocket = new WebSocket(url, {
+        headers: { 'Authorization': `Token ${apiKey}` },
+      });
+
+      const timeout = setTimeout(() => {
+        console.error('[STT] Deepgram WebSocket connection timeout');
+        dgWebSocket?.close();
+        dgWebSocket = null;
+        resolve({ ok: false, error: 'Connection timeout (10s)' });
+      }, 10000);
+
+      dgWebSocket.on('open', () => {
+        clearTimeout(timeout);
+        console.log('[STT] Deepgram WebSocket connected');
+        resolve({ ok: true });
+      });
+
+      dgWebSocket.on('message', (data: Buffer) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'Results' && msg.channel?.alternatives?.[0]) {
+            const alt = msg.channel.alternatives[0];
+            if (!alt.transcript) return;
+            const result = {
+              text: alt.transcript,
+              isFinal: msg.is_final ?? false,
+              speaker: alt.words?.[0]?.speaker !== undefined
+                ? `Speaker ${alt.words[0].speaker}` : undefined,
+              language: msg.channel?.detected_language || undefined,
+              startMs: Math.round((msg.start || 0) * 1000),
+              endMs: Math.round(((msg.start || 0) + (msg.duration || 0)) * 1000),
+              confidence: alt.confidence || 0,
+            };
+            console.log(`[STT] Transcript: "${result.text.substring(0, 60)}..." final=${result.isFinal}`);
+            mainWindow?.webContents.send('stt:transcript', result);
+          }
+        } catch { /* skip malformed */ }
+      });
+
+      dgWebSocket.on('error', (err: Error) => {
+        clearTimeout(timeout);
+        console.error('[STT] Deepgram WebSocket error:', err.message);
+        if (!dgWebSocket || dgWebSocket.readyState !== WebSocket.OPEN) {
+          resolve({ ok: false, error: `WebSocket error: ${err.message}` });
+        }
+        mainWindow?.webContents.send('stt:error', err.message);
+      });
+
+      dgWebSocket.on('close', () => {
+        console.log('[STT] Deepgram WebSocket closed');
+        dgWebSocket = null;
+        mainWindow?.webContents.send('stt:closed');
+      });
+    });
+  });
+
+  ipcMain.handle('stt:feed-audio', async (_event, int16Buffer: ArrayBuffer) => {
+    if (dgWebSocket && dgWebSocket.readyState === 1 /* OPEN */) {
+      dgWebSocket.send(Buffer.from(int16Buffer));
+    }
+  });
+
+  ipcMain.handle('stt:stop-session', async () => {
+    console.log('[STT] Stopping session');
+    if (dgWebSocket) {
+      try {
+        if (dgWebSocket.readyState === 1) {
+          dgWebSocket.send(JSON.stringify({ type: 'CloseStream' }));
+        }
+        dgWebSocket.close();
+      } catch { /* ignore */ }
+      dgWebSocket = null;
+    }
+    return { ok: true };
+  });
+
   // ── Window controls ──
   ipcMain.on('window:minimize', () => mainWindow?.minimize());
   ipcMain.on('window:close', () => mainWindow?.close());

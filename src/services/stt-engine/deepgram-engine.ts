@@ -1,6 +1,6 @@
 // ============================================================
-// Deepgram STT Engine — Real-time WebSocket streaming (BYOK)
-// wss://api.deepgram.com/v1/listen
+// Deepgram STT Engine — Real-time streaming via main process IPC
+// WebSocket runs in Electron main process to bypass CORS
 // ============================================================
 
 import type { STTEngine, STTEngineId, STTConfig, TranscriptResult } from './types';
@@ -12,11 +12,9 @@ export class DeepgramEngine implements STTEngine {
   readonly supportsRealtime = true;
 
   private apiKey = '';
-  private ws: WebSocket | null = null;
   private callback: ((result: TranscriptResult) => void) | null = null;
   private running = false;
   private resultCounter = 0;
-  private sessionStartTime = 0;
 
   setApiKey(key: string): void {
     this.apiKey = key;
@@ -24,6 +22,17 @@ export class DeepgramEngine implements STTEngine {
 
   async testConnection(): Promise<{ ok: boolean; error?: string }> {
     if (!this.apiKey) return { ok: false, error: 'No API Key configured' };
+
+    // Route through main process IPC to bypass CORS
+    const api = (window as unknown as { electronAPI?: {
+      stt?: { testConnection?: (id: string, key: string) => Promise<{ ok: boolean; error?: string }> }
+    } }).electronAPI;
+
+    if (api?.stt?.testConnection) {
+      return api.stt.testConnection('deepgram', this.apiKey);
+    }
+
+    // Fallback: direct fetch (may fail due to CORS)
     try {
       const res = await fetch('https://api.deepgram.com/v1/projects', {
         headers: { 'Authorization': `Token ${this.apiKey}` },
@@ -37,10 +46,9 @@ export class DeepgramEngine implements STTEngine {
   async startSession(config: STTConfig): Promise<void> {
     if (!this.apiKey) throw new Error('Deepgram API Key not configured');
 
-    this.sessionStartTime = Date.now();
     this.resultCounter = 0;
 
-    const params = new URLSearchParams({
+    const params: Record<string, string> = {
       model: 'nova-2',
       punctuate: 'true',
       diarize: String(config.enableDiarization ?? true),
@@ -49,60 +57,50 @@ export class DeepgramEngine implements STTEngine {
       sample_rate: String(config.sampleRate || 16000),
       encoding: 'linear16',
       channels: '1',
+    };
+
+    const api = (window as unknown as { electronAPI?: {
+      stt?: {
+        startSession?: (id: string, key: string, params: Record<string, string>) => Promise<{ ok: boolean; error?: string }>;
+        onTranscript?: (cb: (result: { text: string; isFinal: boolean; speaker?: string; language?: string; startMs: number; endMs: number; confidence: number }) => void) => void;
+        onError?: (cb: (error: string) => void) => void;
+        onClosed?: (cb: () => void) => void;
+      }
+    } }).electronAPI;
+
+    if (!api?.stt?.startSession) {
+      throw new Error('Electron IPC not available — cannot start Deepgram session');
+    }
+
+    // Listen for transcripts from main process
+    api.stt.onTranscript?.((result) => {
+      if (!this.callback || !this.running) return;
+      this.callback({
+        id: `dg-${++this.resultCounter}`,
+        ...result,
+      });
     });
 
-    const url = `wss://api.deepgram.com/v1/listen?${params}`;
-
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(url, ['token', this.apiKey]);
-
-      this.ws.onopen = () => {
-        this.running = true;
-        console.log('[Deepgram] WebSocket connected');
-        resolve();
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
-            const alt = data.channel.alternatives[0];
-            if (!alt.transcript) return;
-
-            const result: TranscriptResult = {
-              id: `dg-${++this.resultCounter}`,
-              text: alt.transcript,
-              isFinal: data.is_final ?? false,
-              speaker: alt.words?.[0]?.speaker !== undefined
-                ? `Speaker ${alt.words[0].speaker}`
-                : undefined,
-              language: data.channel?.detected_language || undefined,
-              startMs: Math.round((data.start || 0) * 1000),
-              endMs: Math.round(((data.start || 0) + (data.duration || 0)) * 1000),
-              confidence: alt.confidence || 0,
-            };
-
-            this.callback?.(result);
-          }
-        } catch {
-          // Skip malformed messages
-        }
-      };
-
-      this.ws.onerror = (err) => {
-        console.error('[Deepgram] WebSocket error:', err);
-        if (!this.running) reject(new Error('Deepgram connection failed'));
-      };
-
-      this.ws.onclose = () => {
-        this.running = false;
-        console.log('[Deepgram] WebSocket closed');
-      };
+    api.stt.onError?.((error) => {
+      console.error('[Deepgram] Error from main process:', error);
     });
+
+    api.stt.onClosed?.(() => {
+      console.log('[Deepgram] Session closed by main process');
+      this.running = false;
+    });
+
+    // Start WebSocket in main process
+    const result = await api.stt.startSession('deepgram', this.apiKey, params);
+    if (!result.ok) {
+      throw new Error(result.error || 'Deepgram connection failed');
+    }
+
+    this.running = true;
   }
 
   feedAudio(chunk: ArrayBuffer): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.running) return;
 
     // Convert Float32 to Int16 for Deepgram (expects linear16)
     const float32 = new Float32Array(chunk);
@@ -112,7 +110,12 @@ export class DeepgramEngine implements STTEngine {
       int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
 
-    this.ws.send(int16.buffer);
+    // Send to main process WebSocket
+    const api = (window as unknown as { electronAPI?: {
+      stt?: { feedAudio?: (buf: ArrayBuffer) => void }
+    } }).electronAPI;
+
+    api?.stt?.feedAudio?.(int16.buffer);
   }
 
   onTranscript(callback: (result: TranscriptResult) => void): void {
@@ -121,14 +124,12 @@ export class DeepgramEngine implements STTEngine {
 
   async stopSession(): Promise<void> {
     this.running = false;
-    if (this.ws) {
-      // Send close message per Deepgram protocol
-      if (this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'CloseStream' }));
-      }
-      this.ws.close();
-      this.ws = null;
-    }
+
+    const api = (window as unknown as { electronAPI?: {
+      stt?: { stopSession?: () => Promise<{ ok: boolean }> }
+    } }).electronAPI;
+
+    await api?.stt?.stopSession?.();
   }
 
   isRunning(): boolean {
