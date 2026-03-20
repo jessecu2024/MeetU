@@ -42,10 +42,10 @@ class STTEngineRegistry {
    * Get the best available engine based on user config.
    * Falls back to mock if no engine is configured/available.
    */
-  getConfiguredEngine(
+  async getConfiguredEngine(
     preferredId: STTEngineId,
     apiKeys: Partial<Record<STTEngineId, string>>
-  ): { engine: STTEngine; isMock: boolean } {
+  ): Promise<{ engine: STTEngine; isMock: boolean }> {
     // Try preferred engine
     const preferred = this.engines.get(preferredId);
     const preferredKey = apiKeys[preferredId];
@@ -54,10 +54,15 @@ class STTEngineRegistry {
       return { engine: preferred, isMock: false };
     }
 
-    // Try local whisper (no key needed)
+    // Try local whisper (no key needed) — only if model is actually available
     if (preferredId === 'local_whisper') {
       const local = this.engines.get('local_whisper');
-      if (local) return { engine: local, isMock: false };
+      if (local) {
+        const test = await local.testConnection().catch(() => ({ ok: false }));
+        if (test.ok) return { engine: local, isMock: false };
+        // local_whisper is a stub — fall through to mock
+        console.log('[STT] local_whisper not available, falling back to demo mode');
+      }
     }
 
     // Try any engine with a configured key

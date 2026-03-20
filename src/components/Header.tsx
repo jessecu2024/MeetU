@@ -11,7 +11,7 @@ export default function Header() {
   const {
     isRecording, recordingDuration, currentVolume,
     systemAudioActive, microphoneActive, useMock,
-    audioError, requestStartRecording, stopRecording,
+    sttMock, audioError, requestStartRecording, stopRecording,
   } = useMeetingStore();
 
   const formatDuration = (seconds: number) => {
@@ -24,38 +24,19 @@ export default function Header() {
 
   return (
     <div className="flex-shrink-0">
-      {/* Title bar (draggable) */}
-      <div className="drag-region flex items-center justify-between px-4 pt-3 pb-1">
-        <div className="no-drag">
-          <h1 className="text-sm font-bold text-zinc-900 dark:text-white">
-            MeetU <span className="font-normal text-xs text-zinc-400">/ 开会啦</span>
-          </h1>
-          <p className="text-[9px] text-zinc-400 -mt-0.5">Your AI Meeting Assistant / 你的会议 AI 秘书</p>
+      {/* App info + settings */}
+      <div className="flex items-center justify-between px-4 pt-3 pb-1">
+        <div>
+          <p className="text-[9px] text-zinc-400">Your AI Meeting Assistant / 你的会议 AI 秘书</p>
         </div>
-        <div className="flex items-center gap-1.5 no-drag">
-          <button
-            onClick={openSettings}
-            className="w-7 h-7 rounded-lg flex items-center justify-center
-              hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 text-sm"
-            title="Settings / 设置"
-          >
-            ⚙
-          </button>
-          <button
-            onClick={() => window.electronAPI?.window.minimize()}
-            className="w-7 h-7 rounded-lg flex items-center justify-center
-              hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 text-sm"
-          >
-            —
-          </button>
-          <button
-            onClick={() => window.electronAPI?.window.close()}
-            className="w-7 h-7 rounded-lg flex items-center justify-center
-              hover:bg-red-50 dark:hover:bg-red-900/20 text-zinc-500 hover:text-red-600 text-sm"
-          >
-            ✕
-          </button>
-        </div>
+        <button
+          onClick={openSettings}
+          className="w-7 h-7 rounded-lg flex items-center justify-center
+            hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 text-sm"
+          title="Settings / 设置"
+        >
+          ⚙
+        </button>
       </div>
 
       {/* Recording controls */}
@@ -125,9 +106,15 @@ export default function Header() {
               <span className={systemAudioActive ? 'text-green-600' : 'text-zinc-400'}>
                 {systemAudioActive ? '🔊 System ✓' : '🔊 System ✗'}
               </span>
-              {useMock && (
+              {sttMock && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30
+                  text-amber-700 dark:text-amber-400 font-medium">
+                  Demo Mode / 演示模式
+                </span>
+              )}
+              {useMock && !sttMock && (
                 <span className="text-amber-500">
-                  Mock Mode / 模拟模式
+                  Mock Audio / 模拟音频
                 </span>
               )}
             </div>

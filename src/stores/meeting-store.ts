@@ -113,10 +113,16 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
     // Set up STT engine
     const settings = useSettingsStore.getState();
-    const { engine: sttEngine, isMock: sttIsMock } = sttRegistry.getConfiguredEngine(
+    const { engine: sttEngine, isMock: sttIsMock } = await sttRegistry.getConfiguredEngine(
       settings.sttEngine,
       settings.sttApiKeys
     );
+
+    // Pass user name to mock engine for @mention demo
+    if (sttIsMock && 'setUserName' in sttEngine) {
+      (sttEngine as import('../services/stt-engine/mock-engine').MockSTTEngine)
+        .setUserName(settings.userProfile.name, settings.userProfile.nameEn);
+    }
 
     // Register transcript callback
     const transcriptStore = useTranscriptStore.getState();

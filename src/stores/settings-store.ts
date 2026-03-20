@@ -76,6 +76,7 @@ interface SettingsState {
   isFirstLaunch: boolean;
   onboardingStep: number;
   settingsModalOpen: boolean;
+  settingsModalTab: 'ai' | 'stt' | 'profile' | 'app' | null;
   settingsLoaded: boolean;
 
   // ── User profile ──
@@ -114,7 +115,7 @@ interface SettingsState {
   updateAppSettings: (settings: Partial<AppSettings>) => void;
   addCustomTerm: (source: string, target: string) => void;
   removeCustomTerm: (index: number) => void;
-  openSettingsModal: () => void;
+  openSettingsModal: (tab?: 'ai' | 'stt' | 'profile' | 'app' | unknown) => void;
   closeSettingsModal: () => void;
 }
 
@@ -131,6 +132,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   isFirstLaunch: true,
   onboardingStep: 0,
   settingsModalOpen: false,
+  settingsModalTab: null,
   settingsLoaded: false,
 
   // ── User profile ──
@@ -351,6 +353,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     persist('customTerms', get().customTerms);
   },
 
-  openSettingsModal: () => set({ settingsModalOpen: true }),
-  closeSettingsModal: () => set({ settingsModalOpen: false }),
+  openSettingsModal: (tab?: unknown) => {
+    const validTabs = ['ai', 'stt', 'profile', 'app'];
+    const resolvedTab = typeof tab === 'string' && validTabs.includes(tab) ? tab as 'ai' | 'stt' | 'profile' | 'app' : null;
+    set({ settingsModalOpen: true, settingsModalTab: resolvedTab });
+  },
+  closeSettingsModal: () => set({ settingsModalOpen: false, settingsModalTab: null }),
 }));

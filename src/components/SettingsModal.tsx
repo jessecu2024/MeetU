@@ -35,7 +35,7 @@ type TestResult = { status: 'idle' | 'testing' | 'ok' | 'error'; latencyMs?: num
 
 export default function SettingsModal() {
   const store = useSettingsStore();
-  const [activeTab, setActiveTab] = useState<Tab>('ai');
+  const [activeTab, setActiveTab] = useState<Tab>(store.settingsModalTab || 'ai');
   const [editingKey, setEditingKey] = useState('');
   const [editingProvider, setEditingProvider] = useState<AIProviderId | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});

@@ -6,11 +6,13 @@
 
 import { useEffect, useRef } from 'react';
 import { useTranscriptStore, type TranscriptEntry } from '../stores/transcript-store';
+import { useSettingsStore } from '../stores/settings-store';
 
 export default function TranscriptView() {
   const entries = useTranscriptStore((s) => s.entries);
   const isMockMode = useTranscriptStore((s) => s.isMockMode);
   const activeEngine = useTranscriptStore((s) => s.activeEngineId);
+  const openSettings = useSettingsStore((s) => s.openSettingsModal);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isRecording = !!activeEngine;
 
@@ -45,12 +47,34 @@ export default function TranscriptView() {
           <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
           <span className="text-zinc-500">
             {isMockMode
-              ? 'Mock Mode — simulated transcription / 模拟模式'
+              ? <><span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30
+                  text-amber-700 dark:text-amber-400 font-medium mr-1">Demo</span>
+                  Simulated meeting / 模拟会议演示</>
               : `Live: ${activeEngine}`}
           </span>
           <span className="ml-auto text-zinc-400">
             {entries.filter(e => e.isFinal).length} segments
           </span>
+        </div>
+      )}
+
+      {/* Demo mode banner */}
+      {isMockMode && isRecording && (
+        <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-900/20
+          border border-amber-200 dark:border-amber-800">
+          <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+            Demo Mode: Showing simulated data. To transcribe real audio, configure an STT engine in Settings → Speech Engine.
+          </p>
+          <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5 leading-relaxed">
+            演示模式：显示模拟数据。如需转写真实音频，请在设置→语音引擎中配置 STT。
+          </p>
+          <button
+            onClick={() => openSettings('stt')}
+            className="mt-1.5 text-xs px-2.5 py-1 rounded-md bg-amber-600 text-white
+              hover:bg-amber-700 transition-colors font-medium"
+          >
+            Configure STT / 配置语音引擎
+          </button>
         </div>
       )}
 
