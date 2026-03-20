@@ -13,7 +13,6 @@ declare global {
   interface Window {
     electronAPI?: {
       audio: {
-        getSources: () => Promise<Array<{ id: string; name: string }>>;
         startRecording: () => Promise<string>;
         stopRecording: () => Promise<string>;
         appendChunk: (data: ArrayBuffer) => Promise<void>;

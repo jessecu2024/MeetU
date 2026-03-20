@@ -3,7 +3,7 @@
 // Creates floating window, registers IPC handlers, manages lifecycle
 // ============================================================
 
-import { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer, session, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, dialog, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSetting, setSetting } from './store';
@@ -118,20 +118,6 @@ function registerIPC(): void {
       setSetting(key, value);
     } catch (err) {
       console.error('[Main] settings:set error:', err);
-    }
-  });
-
-  // ── Audio: Desktop Capturer Sources ──
-  ipcMain.handle('audio:get-sources', async () => {
-    try {
-      const sources = await desktopCapturer.getSources({
-        types: ['screen', 'window'],
-        thumbnailSize: { width: 0, height: 0 },
-      });
-      return sources.map(s => ({ id: s.id, name: s.name }));
-    } catch (err) {
-      console.error('[Main] Failed to get desktop sources:', err);
-      return [];
     }
   });
 

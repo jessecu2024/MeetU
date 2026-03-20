@@ -8,7 +8,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   // ── Audio ──
   audio: {
-    getSources: () => ipcRenderer.invoke('audio:get-sources'),
     startRecording: () => ipcRenderer.invoke('audio:start-recording'),
     stopRecording: () => ipcRenderer.invoke('audio:stop-recording'),
     appendChunk: (data) => ipcRenderer.invoke('audio:append-chunk', data),

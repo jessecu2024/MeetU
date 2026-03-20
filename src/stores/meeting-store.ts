@@ -62,7 +62,7 @@ interface MeetingState {
 }
 
 function canUseRealCapture(): boolean {
-  return !!window.electronAPI?.audio?.getSources;
+  return !!window.electronAPI?.audio?.startRecording;
 }
 
 export const useMeetingStore = create<MeetingState>((set, get) => ({
