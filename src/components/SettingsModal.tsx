@@ -21,22 +21,42 @@ const TABS: Array<{ id: Tab; en: string; zh: string }> = [
   { id: 'app', en: 'Preferences', zh: '偏好设置' },
 ];
 
+const API_KEY_PLACEHOLDERS: Record<AIProviderId, string> = {
+  claude: 'sk-ant-...',
+  openai: 'sk-...',
+  gemini: 'AIza...',
+  deepseek: 'sk-...',
+  qwen: 'sk-...',
+  minimax: 'eyJ...',
+  glm: '...',
+};
+
+type TestResult = { status: 'idle' | 'testing' | 'ok' | 'error'; latencyMs?: number; error?: string };
+
 export default function SettingsModal() {
   const store = useSettingsStore();
   const [activeTab, setActiveTab] = useState<Tab>('ai');
   const [editingKey, setEditingKey] = useState('');
   const [editingProvider, setEditingProvider] = useState<AIProviderId | null>(null);
-  const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'error'>>({});
+  const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
 
   const handleTestConnection = async (providerId: AIProviderId) => {
-    setTestStatus(prev => ({ ...prev, [providerId]: 'testing' }));
+    setTestResults(prev => ({ ...prev, [providerId]: { status: 'testing' } }));
     try {
       const provider = providerRegistry.get(providerId);
-      if (!provider) throw new Error('Not found');
+      if (!provider) throw new Error('Provider not found');
       const result = await provider.testConnection();
-      setTestStatus(prev => ({ ...prev, [providerId]: result.ok ? 'ok' : 'error' }));
-    } catch {
-      setTestStatus(prev => ({ ...prev, [providerId]: 'error' }));
+      setTestResults(prev => ({
+        ...prev,
+        [providerId]: result.ok
+          ? { status: 'ok', latencyMs: result.latencyMs }
+          : { status: 'error', error: result.error || 'Connection failed' },
+      }));
+    } catch (err) {
+      setTestResults(prev => ({
+        ...prev,
+        [providerId]: { status: 'error', error: err instanceof Error ? err.message : 'Unknown error' },
+      }));
     }
   };
 
@@ -137,19 +157,43 @@ export default function SettingsModal() {
                                 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
                               {editingProvider === p.id ? 'Cancel' : 'Edit Key'}
                             </button>
-                            {hasKey && (
-                              <button
-                                onClick={() => handleTestConnection(p.id)}
-                                disabled={testStatus[p.id] === 'testing'}
-                                className="text-xs px-2 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800
-                                  text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200">
-                                {testStatus[p.id] === 'testing' ? '...' :
-                                 testStatus[p.id] === 'ok' ? '✓' :
-                                 testStatus[p.id] === 'error' ? '✗ Retry' : 'Test'}
-                              </button>
-                            )}
+                            {hasKey && (() => {
+                              const tr = testResults[p.id];
+                              const st = tr?.status || 'idle';
+                              return (
+                                <button
+                                  onClick={() => handleTestConnection(p.id)}
+                                  disabled={st === 'testing'}
+                                  title={st === 'error' ? tr?.error : undefined}
+                                  className={`text-xs px-2 py-1 rounded-lg transition-colors ${
+                                    st === 'ok'
+                                      ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                                      : st === 'error'
+                                      ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 hover:bg-red-200'
+                                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200'
+                                  }`}>
+                                  {st === 'testing' ? (
+                                    <span className="inline-flex items-center gap-1">
+                                      <span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full" />
+                                      Testing
+                                    </span>
+                                  ) : st === 'ok' ? (
+                                    `✅ Connected ${tr?.latencyMs ? tr.latencyMs + 'ms' : ''}`
+                                  ) : st === 'error' ? (
+                                    '✗ Retry'
+                                  ) : 'Test'}
+                                </button>
+                              );
+                            })()}
                           </div>
                         </div>
+
+                        {/* Error message */}
+                        {testResults[p.id]?.status === 'error' && testResults[p.id]?.error && (
+                          <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">
+                            ❌ {testResults[p.id].error}
+                          </p>
+                        )}
 
                         {/* Edit Key Inline */}
                         {editingProvider === p.id && (
@@ -158,7 +202,7 @@ export default function SettingsModal() {
                               type="password"
                               value={editingKey}
                               onChange={(e) => setEditingKey(e.target.value)}
-                              placeholder="sk-..."
+                              placeholder={API_KEY_PLACEHOLDERS[p.id] || '...'}
                               className="flex-1 px-2 py-1.5 text-sm rounded-lg border border-zinc-300 dark:border-zinc-600
                                 bg-white dark:bg-zinc-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                             />
@@ -169,6 +213,9 @@ export default function SettingsModal() {
                                 if (provider) provider.setApiKey(editingKey);
                                 setEditingProvider(null);
                                 setEditingKey('');
+                                if (editingKey.trim()) {
+                                  handleTestConnection(p.id);
+                                }
                               }}
                               className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700">
                               Save
