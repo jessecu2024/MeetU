@@ -99,6 +99,8 @@ export class DeepgramEngine implements STTEngine {
     this.running = true;
   }
 
+  private feedCount = 0;
+
   feedAudio(chunk: ArrayBuffer): void {
     if (!this.running) return;
 
@@ -108,6 +110,11 @@ export class DeepgramEngine implements STTEngine {
     for (let i = 0; i < float32.length; i++) {
       const s = Math.max(-1, Math.min(1, float32[i]));
       int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+
+    this.feedCount++;
+    if (this.feedCount <= 3 || this.feedCount % 100 === 0) {
+      console.log(`[Deepgram] feedAudio #${this.feedCount}: ${int16.byteLength} bytes (int16)`);
     }
 
     // Send to main process WebSocket

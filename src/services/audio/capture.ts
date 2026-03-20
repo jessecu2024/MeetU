@@ -1,11 +1,8 @@
 // ============================================================
 // Audio Capture Manager (Renderer Process)
 //
-// System audio: Electron desktopCapturer (Windows)
-//               ScreenCaptureKit (macOS, future)
-// Microphone:   Standard getUserMedia (cross-platform)
-//
-// If system audio capture fails, falls back to mic-only mode.
+// Captures microphone audio for STT and recording.
+// System audio capture is optional (off by default).
 // ============================================================
 
 export interface CaptureState {
@@ -42,6 +39,7 @@ class AudioCaptureManager {
   /** Set audio capture mode */
   setAudioMode(mode: AudioMode): void {
     this.audioMode = mode;
+    console.log(`[Audio] Audio mode set to: ${mode}`);
   }
 
   /** Register a callback to receive raw audio chunks (for STT) */
@@ -51,6 +49,7 @@ class AudioCaptureManager {
       this.audioChunkCallbacks = this.audioChunkCallbacks.filter(c => c !== cb);
     };
   }
+
   private _state: CaptureState = {
     systemAudio: false,
     microphone: false,
@@ -78,9 +77,11 @@ class AudioCaptureManager {
     }
   }
 
-  /** Start capturing audio (mic + optional system audio) */
+  /** Start capturing audio */
   async start(): Promise<void> {
     if (this._state.recording) return;
+
+    console.log(`[Audio] Starting capture, mode: ${this.audioMode}`);
 
     // Start WAV file recording in main process
     const filePath = await window.electronAPI?.audio.startRecording() as string;
@@ -89,14 +90,16 @@ class AudioCaptureManager {
     // Create audio context
     this.audioContext = new AudioContext({ sampleRate: 16000 });
 
-    // 1. Capture microphone
+    // 1. Capture microphone only — no desktopCapturer, no system audio stealing
+    console.log('[Audio] Requesting microphone via getUserMedia...');
     await this.startMicrophone();
 
-    // 2. Optionally capture system audio (off by default — can steal audio from speakers)
+    // 2. Only capture system audio if explicitly requested
     if (this.audioMode === 'mic_and_system') {
+      console.log('[Audio] Also capturing system audio (user opted in)');
       await this.startSystemAudio();
     } else {
-      console.log('[Capture] Mic-only mode — system audio not captured');
+      console.log('[Audio] Mic-only mode — NOT calling desktopCapturer');
       this.emit({ systemAudio: false });
     }
 
@@ -145,92 +148,71 @@ class AudioCaptureManager {
     this.chunkBuffer = [];
     this.audioChunkCallbacks = [];
 
-    // Stop WAV file recording
-    const savedPath = await window.electronAPI?.audio.stopRecording() as string;
+    // Stop WAV file recording — returns temp path
+    const tempPath = await window.electronAPI?.audio.stopRecording() as string;
 
     this.emit({
       recording: false,
       systemAudio: false,
       microphone: false,
       volume: 0,
-      filePath: savedPath || this._state.filePath,
+      filePath: tempPath || this._state.filePath,
     });
 
-    return savedPath || '';
+    return tempPath || '';
   }
 
-  /** Start microphone capture */
+  /** Start microphone capture — standard getUserMedia, no desktopCapturer */
   private async startMicrophone(): Promise<void> {
     try {
       this.micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          sampleRate: 16000,
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
+      console.log('[Audio] Microphone stream obtained successfully');
       this.emit({ microphone: true });
     } catch (err) {
-      console.warn('[Capture] Microphone access denied:', err);
+      console.warn('[Audio] Microphone access denied:', err);
       this.emit({ microphone: false, error: 'Microphone access denied / 麦克风权限被拒绝' });
     }
   }
 
-  /** Start system audio capture via Electron desktopCapturer */
+  /** Start system audio capture via Electron desktopCapturer (opt-in only) */
   private async startSystemAudio(): Promise<void> {
     const platform = (window.electronAPI as Record<string, unknown>)?.platform;
-
-    if (platform === 'win32') {
-      await this.startWindowsSystemAudio();
-    } else if (platform === 'darwin') {
-      // macOS: ScreenCaptureKit native module (Phase 2 future)
-      console.log('[Capture] macOS system audio: ScreenCaptureKit not yet implemented');
+    if (platform !== 'win32') {
       this.emit({ systemAudio: false });
-    } else {
-      this.emit({ systemAudio: false });
+      return;
     }
-  }
 
-  /** Windows: Use desktopCapturer to capture system audio */
-  private async startWindowsSystemAudio(): Promise<void> {
     try {
-      // Get available screen sources from main process
       const sources = await window.electronAPI?.audio.getSources() as Array<{ id: string; name: string }>;
-      if (!sources || sources.length === 0) {
-        throw new Error('No desktop sources available');
-      }
+      if (!sources || sources.length === 0) throw new Error('No desktop sources');
 
-      // Use the first screen source (typically the entire screen)
       const screenSource = sources.find(s => s.id.startsWith('screen:')) || sources[0];
 
-      // Request system audio via desktop capture
-      // Chromium requires both audio and video for desktop capture
       this.systemStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          mandatory: {
-            chromeMediaSource: 'desktop',
-          },
+          mandatory: { chromeMediaSource: 'desktop' },
         } as unknown as MediaTrackConstraints,
         video: {
           mandatory: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: screenSource.id,
-            maxWidth: 1,
-            maxHeight: 1,
-            maxFrameRate: 1,
+            maxWidth: 1, maxHeight: 1, maxFrameRate: 1,
           },
         } as unknown as MediaTrackConstraints,
       });
 
-      // We only need audio, stop video tracks to save resources
       this.systemStream.getVideoTracks().forEach(t => t.stop());
-
       this.emit({ systemAudio: true });
-      console.log('[Capture] Windows system audio captured successfully');
+      console.log('[Audio] System audio captured');
     } catch (err) {
-      console.warn('[Capture] System audio capture failed:', err);
+      console.warn('[Audio] System audio capture failed:', err);
       this.emit({ systemAudio: false });
     }
   }
@@ -241,30 +223,33 @@ class AudioCaptureManager {
 
     const ctx = this.audioContext;
 
-    // Create a merger to combine mic + system audio
-    const merger = ctx.createChannelMerger(2);
+    // Connect mic source directly (no merger needed in mic-only mode)
+    let sourceNode: AudioNode;
 
-    // Connect microphone
-    if (this.micStream) {
+    if (this.micStream && this.systemStream && this.systemStream.getAudioTracks().length > 0) {
+      // Merge mic + system audio
+      const merger = ctx.createChannelMerger(2);
       const micSource = ctx.createMediaStreamSource(this.micStream);
       micSource.connect(merger, 0, 0);
-    }
-
-    // Connect system audio
-    if (this.systemStream && this.systemStream.getAudioTracks().length > 0) {
       const sysSource = ctx.createMediaStreamSource(this.systemStream);
       sysSource.connect(merger, 0, 1);
+      sourceNode = merger;
+    } else if (this.micStream) {
+      sourceNode = ctx.createMediaStreamSource(this.micStream);
+    } else {
+      console.warn('[Audio] No audio source available');
+      return;
     }
 
-    // Mix to mono
-    const mixGain = ctx.createGain();
-    mixGain.gain.value = 1.0;
-    merger.connect(mixGain);
+    // Gain node
+    const gain = ctx.createGain();
+    gain.gain.value = 1.0;
+    sourceNode.connect(gain);
 
     // Analyser for volume metering
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 256;
-    mixGain.connect(this.analyser);
+    gain.connect(this.analyser);
 
     // ScriptProcessor to capture PCM data
     this.scriptProcessor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
@@ -277,11 +262,15 @@ class AudioCaptureManager {
         cb(copy);
       }
     };
-    mixGain.connect(this.scriptProcessor);
+    gain.connect(this.scriptProcessor);
+    // Connect to destination to keep the pipeline alive, but output is silent
+    // since we're only processing input, not playing back
     this.scriptProcessor.connect(ctx.destination);
 
     // Volume monitoring
     this.volumeInterval = setInterval(() => this.updateVolume(), 100);
+
+    console.log('[Audio] Processing pipeline set up');
   }
 
   /** Calculate and emit current volume level */
@@ -291,14 +280,13 @@ class AudioCaptureManager {
     const data = new Uint8Array(this.analyser.frequencyBinCount);
     this.analyser.getByteTimeDomainData(data);
 
-    // Calculate RMS
     let sum = 0;
     for (let i = 0; i < data.length; i++) {
       const normalized = (data[i] - 128) / 128;
       sum += normalized * normalized;
     }
     const rms = Math.sqrt(sum / data.length);
-    const volume = Math.min(1, rms * 3); // Scale up for visibility
+    const volume = Math.min(1, rms * 3);
 
     this.emit({ volume });
   }
@@ -307,7 +295,6 @@ class AudioCaptureManager {
   private flushChunks(): void {
     if (this.chunkBuffer.length === 0) return;
 
-    // Concatenate all chunks
     const totalLength = this.chunkBuffer.reduce((acc, c) => acc + c.length, 0);
     const merged = new Float32Array(totalLength);
     let offset = 0;

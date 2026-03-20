@@ -79,6 +79,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   file: {
     export: (format, content) =>
       ipcRenderer.invoke('file:export', format, content),
+    saveRecording: (tempPath) =>
+      ipcRenderer.invoke('file:save-recording', tempPath),
+    showInFolder: (filePath) =>
+      ipcRenderer.invoke('file:show-in-folder', filePath),
   },
 
   // ── Window ──

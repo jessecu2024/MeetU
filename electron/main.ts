@@ -3,7 +3,7 @@
 // Creates floating window, registers IPC handlers, manages lifecycle
 // ============================================================
 
-import { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer, session } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer, session, dialog, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSetting, setSetting } from './store';
@@ -315,17 +315,23 @@ function registerIPC(): void {
         mainWindow?.webContents.send('stt:error', err.message);
       });
 
-      dgWebSocket.on('close', () => {
-        console.log('[STT] Deepgram WebSocket closed');
+      dgWebSocket.on('close', (code: number, reason: Buffer) => {
+        console.log(`[STT] Deepgram WebSocket closed: code=${code} reason=${reason.toString()}`);
         dgWebSocket = null;
         mainWindow?.webContents.send('stt:closed');
       });
     });
   });
 
+  let feedAudioLogCount = 0;
   ipcMain.handle('stt:feed-audio', async (_event, int16Buffer: ArrayBuffer) => {
     if (dgWebSocket && dgWebSocket.readyState === 1 /* OPEN */) {
-      dgWebSocket.send(Buffer.from(int16Buffer));
+      const buf = Buffer.from(int16Buffer);
+      dgWebSocket.send(buf);
+      feedAudioLogCount++;
+      if (feedAudioLogCount <= 5 || feedAudioLogCount % 50 === 0) {
+        console.log(`[STT] Sending audio chunk #${feedAudioLogCount}, size: ${buf.byteLength} bytes`);
+      }
     }
   });
 
@@ -341,6 +347,63 @@ function registerIPC(): void {
       dgWebSocket = null;
     }
     return { ok: true };
+  });
+
+  // ── File: Save recording dialog ──
+  let lastSaveDir = '';
+
+  ipcMain.handle('file:save-recording', async (_event, tempPath: string) => {
+    const fs = await import('node:fs');
+    if (!tempPath || !fs.existsSync(tempPath)) {
+      return { saved: false, error: 'No recording file found' };
+    }
+
+    // Default directory: project/recordings in dev, or app data in prod
+    if (!lastSaveDir) {
+      const isDev = !!process.env['VITE_DEV_SERVER_URL'];
+      if (isDev) {
+        lastSaveDir = path.join(path.dirname(__dirname), 'recordings');
+      } else {
+        lastSaveDir = path.join(app.getPath('home'), 'MeetU', 'recordings');
+      }
+      fs.mkdirSync(lastSaveDir, { recursive: true });
+    }
+
+    // Generate default filename using current (stop) time
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const defaultName = `MeetU_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.wav`;
+
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: 'Save Recording / 保存录音',
+      defaultPath: path.join(lastSaveDir, defaultName),
+      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
+    });
+
+    if (result.canceled || !result.filePath) {
+      // User cancelled — delete temp file
+      try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
+      console.log('[File] Recording discarded by user');
+      return { saved: false, discarded: true };
+    }
+
+    // Remember the directory for next time
+    lastSaveDir = path.dirname(result.filePath);
+
+    // Move temp file to chosen location
+    try {
+      fs.copyFileSync(tempPath, result.filePath);
+      fs.unlinkSync(tempPath);
+      console.log(`[File] Recording saved: ${result.filePath}`);
+      return { saved: true, filePath: result.filePath };
+    } catch (err) {
+      console.error('[File] Failed to save recording:', err);
+      return { saved: false, error: err instanceof Error ? err.message : 'Save failed' };
+    }
+  });
+
+  ipcMain.handle('file:show-in-folder', async (_event, filePath: string) => {
+    shell.showItemInFolder(filePath);
   });
 
   // ── Window controls ──

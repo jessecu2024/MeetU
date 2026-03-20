@@ -11,7 +11,8 @@ export default function Header() {
   const {
     isRecording, recordingDuration, currentVolume,
     systemAudioActive, microphoneActive, useMock,
-    sttMock, audioError, requestStartRecording, stopRecording,
+    sttMock, audioError, lastSaveResult,
+    requestStartRecording, stopRecording, clearSaveResult,
   } = useMeetingStore();
 
   const formatDuration = (seconds: number) => {
@@ -128,6 +129,44 @@ export default function Header() {
                 {audioError}
               </p>
             )}
+          </div>
+        )}
+
+        {/* Save result notification */}
+        {!isRecording && lastSaveResult && (
+          <div className={`mt-2 px-3 py-2 rounded-lg text-xs ${
+            lastSaveResult.saved
+              ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800'
+              : lastSaveResult.discarded
+              ? 'bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700'
+              : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
+          }`}>
+            {lastSaveResult.saved && lastSaveResult.filePath ? (
+              <div>
+                <p className="text-green-700 dark:text-green-400 font-medium">
+                  Recording saved / 录音已保存
+                </p>
+                <p className="text-green-600 dark:text-green-500 mt-0.5 break-all">
+                  {lastSaveResult.filePath}
+                </p>
+                <button
+                  onClick={() => (window.electronAPI as unknown as { file?: { showInFolder?: (p: string) => void } })?.file?.showInFolder?.(lastSaveResult.filePath!)}
+                  className="mt-1 px-2 py-0.5 rounded bg-green-600 text-white hover:bg-green-700 transition-colors">
+                  Open Folder / 打开文件夹
+                </button>
+              </div>
+            ) : lastSaveResult.discarded ? (
+              <p className="text-zinc-500">Recording discarded / 录音已丢弃</p>
+            ) : (
+              <p className="text-red-600 dark:text-red-400">Save failed: {lastSaveResult.error}</p>
+            )}
+            <button
+              onClick={clearSaveResult}
+              className="absolute top-1 right-2 text-zinc-400 hover:text-zinc-600 text-sm"
+              style={{ position: 'relative', float: 'right', marginTop: '-0.5rem' }}
+            >
+              ✕
+            </button>
           </div>
         )}
       </div>

@@ -40,6 +40,9 @@ interface MeetingState {
   sttMock: boolean;
   sttEngineId: string | null;
 
+  // ── Save result ──
+  lastSaveResult: { saved: boolean; filePath?: string; discarded?: boolean; error?: string } | null;
+
   // ── Consent ──
   showRecordingConsent: boolean;
   consentDismissedThisSession: boolean;
@@ -55,6 +58,7 @@ interface MeetingState {
   cancelRecording: () => void;
   stopRecording: () => Promise<void>;
   dismissConsent: () => void;
+  clearSaveResult: () => void;
 }
 
 function canUseRealCapture(): boolean {
@@ -78,6 +82,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   sttActive: false,
   sttMock: false,
   sttEngineId: null,
+
+  lastSaveResult: null,
 
   showRecordingConsent: false,
   consentDismissedThisSession: false,
@@ -280,16 +286,35 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       await _sttEngine.stopSession().catch(() => {});
     }
 
-    // Stop audio
+    // Stop audio — get temp file path
     const audioManager = useMock ? mockCaptureManager : captureManager;
-    const savedPath = await audioManager.stop();
+    const tempPath = await audioManager.stop();
+
+    // Show save dialog to let user choose where to save
+    let finalPath = tempPath;
+    try {
+      const api = window.electronAPI as unknown as { file?: { saveRecording?: (p: string) => Promise<{ saved: boolean; filePath?: string; discarded?: boolean; error?: string }> } } | undefined;
+      const saveResult = await api?.file?.saveRecording?.(tempPath);
+
+      if (saveResult?.saved && saveResult.filePath) {
+        finalPath = saveResult.filePath;
+        set({ lastSaveResult: { saved: true, filePath: saveResult.filePath } });
+      } else if (saveResult?.discarded) {
+        finalPath = '';
+        set({ lastSaveResult: { saved: false, discarded: true } });
+      } else {
+        set({ lastSaveResult: { saved: false, error: saveResult?.error || 'Save failed' } });
+      }
+    } catch {
+      // No save dialog available (e.g. mock mode)
+    }
 
     // Update meeting in database
-    if (meetingId && meetingId > 0) {
+    if (meetingId && meetingId > 0 && finalPath) {
       try {
         await window.electronAPI?.db.query(
           "UPDATE meetings SET end_time = datetime('now'), duration_sec = ?, audio_path = ?, status = 'ended' WHERE id = ?",
-          [recordingDuration, savedPath, meetingId]
+          [recordingDuration, finalPath, meetingId]
         );
       } catch { /* DB not available */ }
     }
@@ -331,7 +356,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       currentVolume: 0,
       systemAudioActive: false,
       microphoneActive: false,
-      recordingFilePath: savedPath || get().recordingFilePath,
+      recordingFilePath: finalPath || get().recordingFilePath,
       sttActive: false,
       _durationInterval: null,
       _sttEngine: null,
@@ -340,5 +365,9 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
   dismissConsent: () => {
     set({ consentDismissedThisSession: true });
+  },
+
+  clearSaveResult: () => {
+    set({ lastSaveResult: null });
   },
 }));
