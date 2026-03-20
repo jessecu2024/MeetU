@@ -62,8 +62,10 @@ interface AppSettings {
   autoStartRecording: boolean;
   summaryIntervalMinutes: number;
   audioRetentionDays: number;
-  audioDeviceId: string;
-  audioDeviceLabel: string;
+  micDeviceId: string;
+  micDeviceLabel: string;
+  sysAudioDeviceId: string;
+  sysAudioDeviceLabel: string;
 }
 
 /** Connection status for each AI provider */
@@ -168,8 +170,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     autoStartRecording: false,
     summaryIntervalMinutes: 5,
     audioRetentionDays: 30,
-    audioDeviceId: 'default',
-    audioDeviceLabel: 'Default Microphone',
+    micDeviceId: 'default',
+    micDeviceLabel: 'Default Microphone',
+    sysAudioDeviceId: '',
+    sysAudioDeviceLabel: '',
   },
 
   // ── Glossary ──

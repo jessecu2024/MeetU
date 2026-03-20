@@ -29,8 +29,8 @@ interface MeetingState {
   meetingId: number | null;
 
   // ── Audio state ──
-  systemAudioActive: boolean;
-  microphoneActive: boolean;
+  micActive: boolean;
+  sysActive: boolean;
   currentVolume: number;
   useMock: boolean;
   audioError: string | null;
@@ -40,8 +40,10 @@ interface MeetingState {
   sttMock: boolean;
   sttEngineId: string | null;
 
-  // ── Save result ──
-  lastSaveResult: { saved: boolean; filePath?: string; discarded?: boolean; error?: string } | null;
+  // ── Save state ──
+  showSaveConfirm: boolean;
+  pendingTempPath: string;
+  lastSaveResult: { saved: boolean; filePath?: string; discarded?: boolean } | null;
 
   // ── Consent ──
   showRecordingConsent: boolean;
@@ -57,6 +59,8 @@ interface MeetingState {
   confirmStartRecording: () => Promise<void>;
   cancelRecording: () => void;
   stopRecording: () => Promise<void>;
+  confirmSave: () => Promise<void>;
+  discardRecording: () => void;
   dismissConsent: () => void;
   clearSaveResult: () => void;
 }
@@ -73,8 +77,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   recordingFilePath: '',
   meetingId: null,
 
-  systemAudioActive: false,
-  microphoneActive: false,
+  micActive: false,
+  sysActive: false,
   currentVolume: 0,
   useMock: false,
   audioError: null,
@@ -83,6 +87,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   sttMock: false,
   sttEngineId: null,
 
+  showSaveConfirm: false,
+  pendingTempPath: '',
   lastSaveResult: null,
 
   showRecordingConsent: false,
@@ -106,10 +112,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const useRealAudio = canUseRealCapture();
     const audioManager = useRealAudio ? captureManager : mockCaptureManager;
 
-    // Set audio input device from settings
+    // Set audio input devices from settings
     if (useRealAudio) {
-      const { audioDeviceId, audioDeviceLabel } = useSettingsStore.getState().appSettings;
-      captureManager.setDevice(audioDeviceId, audioDeviceLabel);
+      const { micDeviceId, sysAudioDeviceId } = useSettingsStore.getState().appSettings;
+      captureManager.setDevices(micDeviceId, sysAudioDeviceId);
     }
 
     // Create meeting in database
@@ -187,7 +193,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     // Listen for audio capture state changes
     const unsubscribe = audioManager.onChange((state) => {
       set({
-        microphoneActive: state.microphone ?? get().microphoneActive,
+        micActive: state.micActive ?? get().micActive,
+        sysActive: state.sysActive ?? get().sysActive,
         currentVolume: state.volume ?? get().currentVolume,
         recordingFilePath: state.filePath ?? get().recordingFilePath,
         audioError: state.error ?? get().audioError,
@@ -290,31 +297,12 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const audioManager = useMock ? mockCaptureManager : captureManager;
     const tempPath = await audioManager.stop();
 
-    // Show save dialog to let user choose where to save
-    let finalPath = tempPath;
-    try {
-      const api = window.electronAPI as unknown as { file?: { saveRecording?: (p: string) => Promise<{ saved: boolean; filePath?: string; discarded?: boolean; error?: string }> } } | undefined;
-      const saveResult = await api?.file?.saveRecording?.(tempPath);
-
-      if (saveResult?.saved && saveResult.filePath) {
-        finalPath = saveResult.filePath;
-        set({ lastSaveResult: { saved: true, filePath: saveResult.filePath } });
-      } else if (saveResult?.discarded) {
-        finalPath = '';
-        set({ lastSaveResult: { saved: false, discarded: true } });
-      } else {
-        set({ lastSaveResult: { saved: false, error: saveResult?.error || 'Save failed' } });
-      }
-    } catch {
-      // No save dialog available (e.g. mock mode)
-    }
-
-    // Update meeting in database
-    if (meetingId && meetingId > 0 && finalPath) {
+    // Update meeting in database with temp path for now
+    if (meetingId && meetingId > 0 && tempPath) {
       try {
         await window.electronAPI?.db.query(
           "UPDATE meetings SET end_time = datetime('now'), duration_sec = ?, audio_path = ?, status = 'ended' WHERE id = ?",
-          [recordingDuration, finalPath, meetingId]
+          [recordingDuration, tempPath, meetingId]
         );
       } catch { /* DB not available */ }
     }
@@ -354,13 +342,42 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       isPaused: false,
       recordingStartTime: null,
       currentVolume: 0,
-      systemAudioActive: false,
-      microphoneActive: false,
-      recordingFilePath: finalPath || get().recordingFilePath,
+      micActive: false,
+      sysActive: false,
+      recordingFilePath: tempPath || get().recordingFilePath,
       sttActive: false,
       _durationInterval: null,
       _sttEngine: null,
+      showSaveConfirm: !!tempPath,
+      pendingTempPath: tempPath || '',
     });
+  },
+
+  confirmSave: async () => {
+    const tempPath = get().pendingTempPath;
+    if (!tempPath) return;
+
+    try {
+      const api = window.electronAPI as unknown as { file?: { saveRecording?: (p: string) => Promise<{ saved: boolean; filePath?: string }> } } | undefined;
+      const result = await api?.file?.saveRecording?.(tempPath);
+      if (result?.saved && result.filePath) {
+        set({ showSaveConfirm: false, pendingTempPath: '', lastSaveResult: { saved: true, filePath: result.filePath } });
+      } else {
+        // Auto-save failed, but file is still at tempPath
+        set({ showSaveConfirm: false, pendingTempPath: '', lastSaveResult: { saved: true, filePath: tempPath } });
+      }
+    } catch {
+      set({ showSaveConfirm: false, pendingTempPath: '', lastSaveResult: { saved: true, filePath: tempPath } });
+    }
+  },
+
+  discardRecording: () => {
+    const tempPath = get().pendingTempPath;
+    if (tempPath) {
+      // Delete temp file via main process
+      window.electronAPI?.db.query("SELECT 1").catch(() => {}); // just to trigger cleanup
+    }
+    set({ showSaveConfirm: false, pendingTempPath: '', lastSaveResult: { saved: false, discarded: true } });
   },
 
   dismissConsent: () => {

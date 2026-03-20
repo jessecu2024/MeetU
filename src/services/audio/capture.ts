@@ -1,18 +1,20 @@
 // ============================================================
 // Audio Capture Manager (Renderer Process)
 //
-// Captures audio via getUserMedia with user-selected device.
-// Users can select "Stereo Mix" to capture system audio without
-// affecting playback. No desktopCapturer — no audio stealing.
+// Dual-stream capture via getUserMedia:
+//  1. Microphone — user's voice
+//  2. System audio — via Stereo Mix (if configured)
+// NO desktopCapturer. getUserMedia only reads input devices,
+// never touches audio output — headphones work normally.
 // ============================================================
 
 export interface CaptureState {
-  microphone: boolean;
+  micActive: boolean;
+  sysActive: boolean;
   recording: boolean;
   volume: number;
   filePath: string;
   error: string | null;
-  deviceName: string;
 }
 
 export type CaptureListener = (state: Partial<CaptureState>) => void;
@@ -23,7 +25,8 @@ const SEND_INTERVAL_MS = 500;
 export type AudioChunkCallback = (data: Float32Array) => void;
 
 class AudioCaptureManager {
-  private stream: MediaStream | null = null;
+  private micStream: MediaStream | null = null;
+  private sysStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private scriptProcessor: ScriptProcessorNode | null = null;
@@ -32,152 +35,140 @@ class AudioCaptureManager {
   private sendInterval: ReturnType<typeof setInterval> | null = null;
   private listeners: CaptureListener[] = [];
   private audioChunkCallbacks: AudioChunkCallback[] = [];
-  private deviceId = 'default';
-  private deviceName = 'Default';
 
-  /** Set which audio input device to use */
-  setDevice(deviceId: string, deviceName: string): void {
-    this.deviceId = deviceId;
-    this.deviceName = deviceName;
-    console.log(`[Audio] Device set: "${deviceName}" (${deviceId})`);
+  private micDeviceId = 'default';
+  private sysDeviceId = '';  // empty = not configured
+
+  /** Set device IDs before starting */
+  setDevices(micId: string, sysId: string): void {
+    this.micDeviceId = micId || 'default';
+    this.sysDeviceId = sysId || '';
+    console.log(`[Audio] Devices — mic: "${micId}", system: "${sysId || 'none'}"`);
   }
 
-  /** Register a callback to receive raw audio chunks (for STT) */
   onAudioChunk(cb: AudioChunkCallback): () => void {
     this.audioChunkCallbacks.push(cb);
-    return () => {
-      this.audioChunkCallbacks = this.audioChunkCallbacks.filter(c => c !== cb);
-    };
+    return () => { this.audioChunkCallbacks = this.audioChunkCallbacks.filter(c => c !== cb); };
   }
 
   private _state: CaptureState = {
-    microphone: false,
-    recording: false,
-    volume: 0,
-    filePath: '',
-    error: null,
-    deviceName: 'Default',
+    micActive: false, sysActive: false, recording: false,
+    volume: 0, filePath: '', error: null,
   };
 
-  get state(): CaptureState {
-    return { ...this._state };
-  }
+  get state() { return { ...this._state }; }
 
   onChange(listener: CaptureListener): () => void {
     this.listeners.push(listener);
-    return () => {
-      this.listeners = this.listeners.filter(l => l !== listener);
-    };
+    return () => { this.listeners = this.listeners.filter(l => l !== listener); };
   }
 
   private emit(partial: Partial<CaptureState>) {
     Object.assign(this._state, partial);
-    for (const listener of this.listeners) {
-      listener(partial);
-    }
+    for (const l of this.listeners) l(partial);
   }
 
-  /** Start capturing audio from the selected device */
   async start(): Promise<void> {
     if (this._state.recording) return;
+    console.log('[Audio] Starting dual-stream capture...');
 
-    console.log(`[Audio] Starting capture, device: "${this.deviceName}" (${this.deviceId})`);
-
-    // Start WAV file recording in main process
     const filePath = await window.electronAPI?.audio.startRecording() as string;
-    this.emit({ recording: true, filePath, error: null, deviceName: this.deviceName });
+    this.emit({ recording: true, filePath, error: null });
 
-    // Create audio context
     this.audioContext = new AudioContext({ sampleRate: 16000 });
 
-    // Get audio from user-selected device — NO desktopCapturer
+    // Stream 1: Microphone
     try {
-      const constraints: MediaStreamConstraints = {
-        audio: this.deviceId === 'default'
-          ? { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-          : { deviceId: { exact: this.deviceId }, channelCount: 1 },
-        video: false,
-      };
-      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log(`[Audio] Stream obtained from "${this.deviceName}"`);
-      this.emit({ microphone: true });
+      const micConstraints: MediaTrackConstraints = this.micDeviceId === 'default'
+        ? { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        : { deviceId: { exact: this.micDeviceId }, channelCount: 1 };
+      this.micStream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints });
+      console.log('[Audio] Mic stream OK');
+      this.emit({ micActive: true });
     } catch (err) {
-      console.error('[Audio] getUserMedia failed:', err);
-      this.emit({ microphone: false, error: `Mic access denied: ${err instanceof Error ? err.message : 'Unknown'} / 麦克风权限被拒绝` });
+      console.warn('[Audio] Mic failed:', err);
+      this.emit({ micActive: false, error: 'Mic access denied / 麦克风权限被拒绝' });
+    }
+
+    // Stream 2: System audio (Stereo Mix) — only if configured
+    if (this.sysDeviceId) {
+      try {
+        this.sysStream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: { exact: this.sysDeviceId }, channelCount: 1 },
+        });
+        console.log('[Audio] System audio stream OK (Stereo Mix)');
+        this.emit({ sysActive: true });
+      } catch (err) {
+        console.warn('[Audio] System audio failed:', err);
+        this.emit({ sysActive: false });
+      }
     }
 
     this.setupProcessing();
     this.sendInterval = setInterval(() => this.flushChunks(), SEND_INTERVAL_MS);
   }
 
-  /** Stop capture */
   async stop(): Promise<string> {
     this.flushChunks();
-
     if (this.sendInterval) clearInterval(this.sendInterval);
     if (this.volumeInterval) clearInterval(this.volumeInterval);
     this.sendInterval = null;
     this.volumeInterval = null;
 
-    if (this.scriptProcessor) {
-      this.scriptProcessor.disconnect();
-      this.scriptProcessor = null;
-    }
-
-    if (this.stream) {
-      this.stream.getTracks().forEach(t => t.stop());
-      this.stream = null;
-    }
-
-    if (this.audioContext) {
-      await this.audioContext.close().catch(() => {});
-      this.audioContext = null;
-    }
+    if (this.scriptProcessor) { this.scriptProcessor.disconnect(); this.scriptProcessor = null; }
+    if (this.micStream) { this.micStream.getTracks().forEach(t => t.stop()); this.micStream = null; }
+    if (this.sysStream) { this.sysStream.getTracks().forEach(t => t.stop()); this.sysStream = null; }
+    if (this.audioContext) { await this.audioContext.close().catch(() => {}); this.audioContext = null; }
 
     this.analyser = null;
     this.chunkBuffer = [];
     this.audioChunkCallbacks = [];
 
     const tempPath = await window.electronAPI?.audio.stopRecording() as string;
-
-    this.emit({
-      recording: false,
-      microphone: false,
-      volume: 0,
-      filePath: tempPath || this._state.filePath,
-    });
-
+    this.emit({ recording: false, micActive: false, sysActive: false, volume: 0, filePath: tempPath || this._state.filePath });
     return tempPath || '';
   }
 
-  /** Set up Web Audio processing pipeline */
   private setupProcessing(): void {
-    if (!this.audioContext || !this.stream) return;
-
+    if (!this.audioContext) return;
     const ctx = this.audioContext;
-    const source = ctx.createMediaStreamSource(this.stream);
 
-    // Analyser for volume metering
+    const hasMic = !!this.micStream;
+    const hasSys = !!this.sysStream;
+
+    let sourceNode: AudioNode;
+
+    if (hasMic && hasSys) {
+      // Merge both streams
+      const merger = ctx.createChannelMerger(2);
+      ctx.createMediaStreamSource(this.micStream!).connect(merger, 0, 0);
+      ctx.createMediaStreamSource(this.sysStream!).connect(merger, 0, 1);
+      sourceNode = merger;
+    } else if (hasMic) {
+      sourceNode = ctx.createMediaStreamSource(this.micStream!);
+    } else if (hasSys) {
+      sourceNode = ctx.createMediaStreamSource(this.sysStream!);
+    } else {
+      console.warn('[Audio] No audio sources!');
+      return;
+    }
+
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 256;
-    source.connect(this.analyser);
+    sourceNode.connect(this.analyser);
 
-    // ScriptProcessor to capture PCM data
     this.scriptProcessor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
     this.scriptProcessor.onaudioprocess = (e) => {
       const data = e.inputBuffer.getChannelData(0);
       const copy = new Float32Array(data);
       this.chunkBuffer.push(copy);
-      for (const cb of this.audioChunkCallbacks) {
-        cb(copy);
-      }
+      for (const cb of this.audioChunkCallbacks) cb(copy);
     };
     this.analyser.connect(this.scriptProcessor);
-    // Must connect to destination to keep ScriptProcessor alive
     this.scriptProcessor.connect(ctx.destination);
 
     this.volumeInterval = setInterval(() => this.updateVolume(), 100);
-    console.log('[Audio] Processing pipeline ready');
+    console.log(`[Audio] Pipeline ready — mic:${hasMic} sys:${hasSys}`);
   }
 
   private updateVolume(): void {
@@ -186,22 +177,18 @@ class AudioCaptureManager {
     this.analyser.getByteTimeDomainData(data);
     let sum = 0;
     for (let i = 0; i < data.length; i++) {
-      const normalized = (data[i] - 128) / 128;
-      sum += normalized * normalized;
+      const n = (data[i] - 128) / 128;
+      sum += n * n;
     }
-    const rms = Math.sqrt(sum / data.length);
-    this.emit({ volume: Math.min(1, rms * 3) });
+    this.emit({ volume: Math.min(1, Math.sqrt(sum / data.length) * 3) });
   }
 
   private flushChunks(): void {
     if (this.chunkBuffer.length === 0) return;
-    const totalLength = this.chunkBuffer.reduce((acc, c) => acc + c.length, 0);
-    const merged = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of this.chunkBuffer) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
+    const total = this.chunkBuffer.reduce((a, c) => a + c.length, 0);
+    const merged = new Float32Array(total);
+    let off = 0;
+    for (const c of this.chunkBuffer) { merged.set(c, off); off += c.length; }
     this.chunkBuffer = [];
     window.electronAPI?.audio.appendChunk(merged.buffer);
   }
@@ -210,10 +197,8 @@ class AudioCaptureManager {
 /** List available audio input devices */
 export async function listAudioDevices(): Promise<Array<{ deviceId: string; label: string; isStereoMix: boolean }>> {
   try {
-    // Request permission first so labels are available
-    const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    tempStream.getTracks().forEach(t => t.stop());
-
+    const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+    tmp.getTracks().forEach(t => t.stop());
     const devices = await navigator.mediaDevices.enumerateDevices();
     return devices
       .filter(d => d.kind === 'audioinput')
@@ -227,5 +212,4 @@ export async function listAudioDevices(): Promise<Array<{ deviceId: string; labe
   }
 }
 
-/** Singleton instance */
 export const captureManager = new AudioCaptureManager();

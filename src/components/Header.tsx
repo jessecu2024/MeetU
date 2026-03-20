@@ -8,12 +8,15 @@ import { useMeetingStore } from '../stores/meeting-store';
 
 export default function Header() {
   const openSettings = useSettingsStore((s) => s.openSettingsModal);
-  const audioDeviceLabel = useSettingsStore((s) => s.appSettings.audioDeviceLabel);
+  const micLabel = useSettingsStore((s) => s.appSettings.micDeviceLabel);
+  const sysLabel = useSettingsStore((s) => s.appSettings.sysAudioDeviceLabel);
   const {
     isRecording, recordingDuration, currentVolume,
-    microphoneActive, useMock,
-    sttMock, audioError, lastSaveResult,
-    requestStartRecording, stopRecording, clearSaveResult,
+    micActive, sysActive, useMock,
+    sttMock, audioError,
+    showSaveConfirm, lastSaveResult,
+    requestStartRecording, stopRecording,
+    confirmSave, discardRecording, clearSaveResult,
   } = useMeetingStore();
 
   const formatDuration = (seconds: number) => {
@@ -44,14 +47,14 @@ export default function Header() {
       {/* Recording controls */}
       <div className="px-4 pb-3">
         <div className="flex items-center gap-3">
-          {/* Record / Stop button */}
           <button
             onClick={isRecording ? stopRecording : requestStartRecording}
+            disabled={showSaveConfirm}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium text-sm transition-all ${
               isRecording
                 ? 'bg-red-500 hover:bg-red-600 text-white'
                 : 'bg-blue-600 hover:bg-blue-700 text-white'
-            }`}
+            } ${showSaveConfirm ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             {isRecording ? (
               <>
@@ -66,14 +69,12 @@ export default function Header() {
             )}
           </button>
 
-          {/* Duration */}
           {isRecording && (
             <span className="text-sm font-mono text-zinc-600 dark:text-zinc-400">
               {formatDuration(recordingDuration)}
             </span>
           )}
 
-          {/* Recording indicator */}
           {isRecording && (
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
@@ -92,8 +93,7 @@ export default function Header() {
                 <div
                   className={`h-full rounded-full transition-all duration-100 ${
                     currentVolume > 0.7 ? 'bg-red-500' :
-                    currentVolume > 0.3 ? 'bg-green-500' :
-                    'bg-green-400'
+                    currentVolume > 0.3 ? 'bg-green-500' : 'bg-green-400'
                   }`}
                   style={{ width: `${Math.min(100, currentVolume * 100)}%` }}
                 />
@@ -102,12 +102,15 @@ export default function Header() {
 
             {/* Source status */}
             <div className="flex items-center gap-3 text-xs flex-wrap">
-              <span className={microphoneActive ? 'text-green-600' : 'text-zinc-400'}>
-                {microphoneActive ? '🎤 ' : '🎤 ✗ '}
-                <span className="max-w-[120px] inline-block truncate align-bottom"
-                  title={audioDeviceLabel}>
-                  {audioDeviceLabel || 'Default'}
-                </span>
+              <span className={micActive ? 'text-green-600' : 'text-zinc-400'}>
+                {micActive ? '🎤 Mic ✓' : '🎤 Mic ✗'}
+              </span>
+              <span className={sysActive ? 'text-green-600' : 'text-zinc-400'}>
+                {sysActive
+                  ? `🔊 ${sysLabel || 'System'} ✓`
+                  : sysLabel
+                    ? '🔊 System ✗'
+                    : '🔊 Not configured'}
               </span>
               {sttMock && (
                 <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30
@@ -116,37 +119,52 @@ export default function Header() {
                 </span>
               )}
               {useMock && !sttMock && (
-                <span className="text-amber-500">
-                  Mock Audio / 模拟音频
-                </span>
+                <span className="text-amber-500">Mock Audio</span>
               )}
             </div>
 
-            {/* Error or info */}
             {audioError && (
-              <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20
-                rounded-lg px-2 py-1">
+              <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1">
                 {audioError}
               </p>
             )}
           </div>
         )}
 
+        {/* In-app save confirm */}
+        {showSaveConfirm && (
+          <div className="mt-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
+              Save Recording? / 是否保存录音？
+            </p>
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={confirmSave}
+                className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+                Save / 保存
+              </button>
+              <button
+                onClick={discardRecording}
+                className="px-4 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                Discard / 不保存
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Save result notification */}
-        {!isRecording && lastSaveResult && (
+        {!isRecording && !showSaveConfirm && lastSaveResult && (
           <div className={`mt-2 px-3 py-2 rounded-lg text-xs ${
             lastSaveResult.saved
               ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800'
-              : lastSaveResult.discarded
-              ? 'bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700'
-              : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
+              : 'bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700'
           }`}>
             {lastSaveResult.saved && lastSaveResult.filePath ? (
               <div>
                 <p className="text-green-700 dark:text-green-400 font-medium">
                   Recording saved / 录音已保存
                 </p>
-                <p className="text-green-600 dark:text-green-500 mt-0.5 break-all">
+                <p className="text-green-600 dark:text-green-500 mt-0.5 break-all text-[10px]">
                   {lastSaveResult.filePath}
                 </p>
                 <button
@@ -155,16 +173,11 @@ export default function Header() {
                   Open Folder / 打开文件夹
                 </button>
               </div>
-            ) : lastSaveResult.discarded ? (
-              <p className="text-zinc-500">Recording discarded / 录音已丢弃</p>
             ) : (
-              <p className="text-red-600 dark:text-red-400">Save failed: {lastSaveResult.error}</p>
+              <p className="text-zinc-500">Recording discarded / 录音已丢弃</p>
             )}
-            <button
-              onClick={clearSaveResult}
-              className="absolute top-1 right-2 text-zinc-400 hover:text-zinc-600 text-sm"
-              style={{ position: 'relative', float: 'right', marginTop: '-0.5rem' }}
-            >
+            <button onClick={clearSaveResult}
+              className="float-right text-zinc-400 hover:text-zinc-600 text-sm -mt-4">
               ✕
             </button>
           </div>

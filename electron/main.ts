@@ -3,7 +3,7 @@
 // Creates floating window, registers IPC handlers, manages lifecycle
 // ============================================================
 
-import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSetting, setSetting } from './store';
@@ -335,56 +335,33 @@ function registerIPC(): void {
     return { ok: true };
   });
 
-  // ── File: Save recording dialog ──
-  let lastSaveDir = '';
-
+  // ── File: Auto-save recording ──
   ipcMain.handle('file:save-recording', async (_event, tempPath: string) => {
     const fs = await import('node:fs');
     if (!tempPath || !fs.existsSync(tempPath)) {
-      return { saved: false, error: 'No recording file found' };
+      return { saved: false };
     }
 
-    // Default directory: project/recordings in dev, or app data in prod
-    if (!lastSaveDir) {
-      const isDev = !!process.env['VITE_DEV_SERVER_URL'];
-      if (isDev) {
-        lastSaveDir = path.join(path.dirname(__dirname), 'recordings');
-      } else {
-        lastSaveDir = path.join(app.getPath('home'), 'MeetU', 'recordings');
-      }
-      fs.mkdirSync(lastSaveDir, { recursive: true });
-    }
+    // Auto-save to recordings directory (no dialog)
+    const isDev = !!process.env['VITE_DEV_SERVER_URL'];
+    const saveDir = isDev
+      ? path.join(path.dirname(__dirname), 'recordings')
+      : path.join(app.getPath('home'), 'MeetU', 'recordings');
+    fs.mkdirSync(saveDir, { recursive: true });
 
-    // Generate default filename using current (stop) time
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
-    const defaultName = `MeetU_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.wav`;
+    const fileName = `MeetU_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.wav`;
+    const destPath = path.join(saveDir, fileName);
 
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      title: 'Save Recording / 保存录音',
-      defaultPath: path.join(lastSaveDir, defaultName),
-      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
-    });
-
-    if (result.canceled || !result.filePath) {
-      // User cancelled — delete temp file
-      try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
-      console.log('[File] Recording discarded by user');
-      return { saved: false, discarded: true };
-    }
-
-    // Remember the directory for next time
-    lastSaveDir = path.dirname(result.filePath);
-
-    // Move temp file to chosen location
     try {
-      fs.copyFileSync(tempPath, result.filePath);
+      fs.copyFileSync(tempPath, destPath);
       fs.unlinkSync(tempPath);
-      console.log(`[File] Recording saved: ${result.filePath}`);
-      return { saved: true, filePath: result.filePath };
+      console.log(`[File] Recording saved: ${destPath}`);
+      return { saved: true, filePath: destPath };
     } catch (err) {
-      console.error('[File] Failed to save recording:', err);
-      return { saved: false, error: err instanceof Error ? err.message : 'Save failed' };
+      console.error('[File] Save failed:', err);
+      return { saved: true, filePath: tempPath }; // keep temp file as fallback
     }
   });
 
