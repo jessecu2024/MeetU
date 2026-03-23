@@ -449,6 +449,14 @@ function registerIPC(): void {
 
 // ── App lifecycle ──
 app.whenReady().then(async () => {
+  // ── Audio diagnostics ──
+  const { systemPreferences } = await import('electron');
+  console.log('[Audio] ====== AUDIO DIAGNOSTICS ======');
+  console.log('[Audio] Platform:', process.platform);
+  console.log('[Audio] Media access status (microphone):', systemPreferences.getMediaAccessStatus('microphone'));
+  console.log('[Audio] Media access status (camera):', systemPreferences.getMediaAccessStatus('camera'));
+  console.log('[Audio] ================================');
+
   await initDatabase();
   registerIPC();
   registerShortcuts();

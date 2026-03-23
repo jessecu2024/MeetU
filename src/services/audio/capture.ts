@@ -49,9 +49,10 @@ class AudioCaptureManager {
   private sysDeviceId = '';
 
   setDevices(micId: string, sysId: string): void {
-    this.micDeviceId = micId || 'default';
+    // Keep empty/default as-is — start() handles the fallback logic
+    this.micDeviceId = micId || '';
     this.sysDeviceId = sysId || '';
-    console.log(`[Audio] Devices — mic: "${micId}", system: "${sysId || 'none'}"`);
+    console.log(`[Audio] Devices — mic: "${this.micDeviceId || '(default)'}", system: "${this.sysDeviceId || '(none)'}"`);
   }
 
   onAudioChunk(cb: AudioChunkCallback): () => void {
@@ -80,6 +81,22 @@ class AudioCaptureManager {
     if (this._state.recording) return;
     console.log('[Audio] Starting capture (MediaRecorder, no AudioContext)');
 
+    // ── Diagnostics: enumerate devices before anything ──
+    try {
+      const allDevices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = allDevices.filter(d => d.kind === 'audioinput');
+      console.log(`[Audio] ====== DEVICE DIAGNOSTICS ======`);
+      console.log(`[Audio] Total devices: ${allDevices.length}, Audio inputs: ${audioInputs.length}`);
+      for (const d of audioInputs) {
+        console.log(`[Audio]   deviceId="${d.deviceId.substring(0,12)}..." label="${d.label}" groupId="${d.groupId.substring(0,8)}..."`);
+      }
+      console.log(`[Audio] Selected micDeviceId: "${this.micDeviceId}"`);
+      console.log(`[Audio] Selected sysDeviceId: "${this.sysDeviceId}"`);
+      console.log(`[Audio] ================================`);
+    } catch (enumErr) {
+      console.error('[Audio] enumerateDevices failed:', enumErr);
+    }
+
     // Start file recording in main process
     let filePath = '';
     try {
@@ -91,36 +108,43 @@ class AudioCaptureManager {
 
     // Step 1: Request generic mic permission first (triggers OS permission dialog)
     try {
+      console.log('[Audio] Step 1: Requesting generic mic permission...');
       const permStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const permTrack = permStream.getAudioTracks()[0];
+      console.log(`[Audio] Mic permission granted — track: label="${permTrack?.label}" readyState="${permTrack?.readyState}" muted=${permTrack?.muted}`);
       permStream.getTracks().forEach(t => t.stop());
-      console.log('[Audio] Mic permission granted');
     } catch (permErr) {
-      console.error('[Audio] Mic permission request failed:', (permErr as DOMException)?.name, permErr);
+      console.error('[Audio] Mic permission request FAILED:', (permErr as DOMException)?.name, (permErr as DOMException)?.message, permErr);
       this.emit({ micActive: false, error: mapMicError(permErr) });
       // Don't return — still try system audio below
     }
 
     // Step 2: Get mic stream with selected device (fallback to default)
+    // IMPORTANT: "default" and empty string are NOT valid deviceId values for { exact: ... }
+    // They cause NotFoundError. Use unconstrained { audio: true } instead.
+    const isDefaultMic = !this.micDeviceId || this.micDeviceId === 'default';
     if (!this.micStream) {
       try {
-        const micConstraints: MediaTrackConstraints = this.micDeviceId === 'default'
+        const micConstraints: MediaTrackConstraints = isDefaultMic
           ? { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-          : { deviceId: { exact: this.micDeviceId }, channelCount: 1 };
+          : { deviceId: { exact: this.micDeviceId }, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+        console.log(`[Audio] Step 2: getUserMedia mic — isDefault=${isDefaultMic}, deviceId="${this.micDeviceId}"`);
         this.micStream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints });
         console.log('[Audio] Mic stream OK —', this.micStream.getAudioTracks()[0]?.label);
         this.emit({ micActive: true, error: null });
       } catch (err) {
-        console.warn('[Audio] Mic failed with selected device:', (err as DOMException)?.name);
-        // Fallback to default if specific device failed
-        if (this.micDeviceId !== 'default') {
+        console.warn('[Audio] Mic failed with selected device:', (err as DOMException)?.name, (err as DOMException)?.message);
+        // Fallback to unconstrained default if specific device failed
+        if (!isDefaultMic) {
           try {
+            console.log('[Audio] Falling back to default mic (no deviceId constraint)...');
             this.micStream = await navigator.mediaDevices.getUserMedia({
               audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
             });
             console.log('[Audio] Mic stream OK (fallback to default) —', this.micStream.getAudioTracks()[0]?.label);
             this.emit({ micActive: true, error: null });
           } catch (fallbackErr) {
-            console.error('[Audio] Default mic also failed:', (fallbackErr as DOMException)?.name);
+            console.error('[Audio] Default mic also failed:', (fallbackErr as DOMException)?.name, (fallbackErr as DOMException)?.message);
             this.emit({ micActive: false, error: mapMicError(fallbackErr) });
           }
         } else {
@@ -130,15 +154,17 @@ class AudioCaptureManager {
     }
 
     // Step 3: System audio (Stereo Mix) — only if configured
-    if (this.sysDeviceId) {
+    // Same fix: skip empty/default deviceId values
+    if (this.sysDeviceId && this.sysDeviceId !== 'default') {
       try {
+        console.log(`[Audio] Step 3: getUserMedia system audio — deviceId="${this.sysDeviceId}"`);
         this.sysStream = await navigator.mediaDevices.getUserMedia({
           audio: { deviceId: { exact: this.sysDeviceId }, channelCount: 1 },
         });
         console.log('[Audio] System audio stream OK —', this.sysStream.getAudioTracks()[0]?.label);
         this.emit({ sysActive: true });
       } catch (err) {
-        console.warn('[Audio] System audio device not available:', (err as DOMException)?.name);
+        console.warn('[Audio] System audio device not available:', (err as DOMException)?.name, (err as DOMException)?.message);
         this.emit({ sysActive: false, error: `System audio device not found — check Settings / 系统音频设备未找到，请检查设置` });
       }
     }
