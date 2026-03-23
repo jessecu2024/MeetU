@@ -208,8 +208,9 @@ export default function Header() {
               <p className="text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-2 py-1.5 leading-relaxed">
                 Bluetooth headset detected. Audio quality may change when microphone is active.
                 For best experience, use a wired headset or USB microphone.
+                You can switch audio output to speakers while using Bluetooth mic.
                 <span className="block text-blue-500 dark:text-blue-500 mt-0.5">
-                  检测到蓝牙耳机。开启麦克风后音质可能变化。建议使用有线耳机或 USB 麦克风获得最佳体验。
+                  检测到蓝牙耳机。开启麦克风后音质可能变化。建议使用有线耳机或 USB 麦克风获得最佳体验。可以将音频输出切换到扬声器，同时使用蓝牙麦克风。
                 </span>
               </p>
             )}

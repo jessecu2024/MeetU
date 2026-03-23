@@ -206,6 +206,10 @@ class AudioCaptureManager {
       this.recorder.ondataavailable = async (event) => {
         if (event.data.size > 0) {
           const buffer = await event.data.arrayBuffer();
+          // Mark mic as active once we receive real audio data
+          if (!this._state.micActive && this.micStream) {
+            this.emit({ micActive: true, error: null });
+          }
           // Feed to STT engine
           for (const cb of this.audioChunkCallbacks) cb(buffer);
           // Feed to file recording in main process

@@ -127,13 +127,30 @@ class SummarizerService {
         { temperature: 0.3, maxTokens: 800 }
       );
 
-      const parsed = JSON.parse(response.content);
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(response.content);
+      } catch {
+        // AI may return markdown-wrapped JSON or incomplete output — try to extract {...}
+        const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[0]);
+          } catch {
+            console.warn('[Summarizer] Could not parse extracted JSON, skipping this summary');
+            return summary;
+          }
+        } else {
+          console.warn('[Summarizer] No JSON found in AI response, skipping this summary');
+          return summary;
+        }
+      }
       const result: RealtimeSummary = {
         ...summary,
-        keyPoints: parsed.keyPoints || [],
-        decisions: parsed.decisions || [],
-        actionItems: parsed.actionItems || [],
-        openQuestions: parsed.openQuestions || [],
+        keyPoints: parsed.keyPoints as string[] || [],
+        decisions: parsed.decisions as string[] || [],
+        actionItems: parsed.actionItems as string[] || [],
+        openQuestions: parsed.openQuestions as string[] || [],
         isLoading: false,
       };
       this.callback?.(result);
