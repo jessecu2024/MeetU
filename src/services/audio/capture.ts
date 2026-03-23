@@ -212,21 +212,32 @@ class AudioCaptureManager {
 
     if (hasMic && hasSys) {
       // Mix both streams via AudioContext
-      console.log('[Audio] Mixing mic + system audio via AudioContext');
+      console.log('[Audio] Mixing mic + system audio via AudioContext (with loopback)');
       this.audioContext = new AudioContext();
-      const destination = this.audioContext.createMediaStreamDestination();
+      const recordingDest = this.audioContext.createMediaStreamDestination();
 
       const micSource = this.audioContext.createMediaStreamSource(this.micStream!);
-      micSource.connect(destination);
+      micSource.connect(recordingDest); // mic → recording only (no loopback to avoid echo)
 
       const sysSource = this.audioContext.createMediaStreamSource(this.sysStream!);
-      sysSource.connect(destination);
+      sysSource.connect(recordingDest);           // system → recording
+      sysSource.connect(this.audioContext.destination); // system → user's speakers/headphones (loopback)
 
-      recordingStream = destination.stream;
-    } else if (hasMic) {
-      recordingStream = this.micStream!;
+      recordingStream = recordingDest.stream;
+      console.log('[Audio] System audio loopback enabled — user can hear meeting audio');
+    } else if (hasSys) {
+      // System only — need loopback too
+      console.log('[Audio] System audio only with loopback');
+      this.audioContext = new AudioContext();
+      const recordingDest = this.audioContext.createMediaStreamDestination();
+
+      const sysSource = this.audioContext.createMediaStreamSource(this.sysStream!);
+      sysSource.connect(recordingDest);           // system → recording
+      sysSource.connect(this.audioContext.destination); // system → user's speakers/headphones
+
+      recordingStream = recordingDest.stream;
     } else {
-      recordingStream = this.sysStream!;
+      recordingStream = this.micStream!;
     }
 
     // ── Step 4: MediaRecorder on the mixed/single stream ──
