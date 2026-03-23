@@ -10,7 +10,7 @@ import { STT_ENGINE_INFO } from '../services/stt-engine/types';
 export default function Header() {
   const openSettings = useSettingsStore((s) => s.openSettingsModal);
   const micLabel = useSettingsStore((s) => s.appSettings.micDeviceLabel);
-  const sysLabel = useSettingsStore((s) => s.appSettings.sysAudioDeviceLabel);
+  const captureMode = useSettingsStore((s) => s.appSettings.captureMode);
   const defaultProvider = useSettingsStore((s) => s.aiConfig.defaultProvider);
   const hasAiKey = useSettingsStore((s) => !!s.aiConfig.apiKeys[s.aiConfig.defaultProvider]);
   const aiTestResult = useSettingsStore((s) => s.aiTestResults[s.aiConfig.defaultProvider]);
@@ -181,18 +181,18 @@ export default function Header() {
 
             {/* Source status */}
             <div className="flex items-center gap-3 text-xs flex-wrap">
-              <span className={micActive ? 'text-green-600' : 'text-red-500'}>
-                {micActive
-                  ? `🎤 ${micLabel && micLabel !== 'Default Microphone' ? micLabel.substring(0, 20) : 'Mic'} ✓`
-                  : '🎤 Mic ✗'}
-              </span>
-              <span className={sysActive ? 'text-green-600' : 'text-zinc-400'}>
-                {sysActive
-                  ? `🔊 ${sysLabel || 'System'} ✓`
-                  : sysLabel
-                    ? '🔊 System ✗'
-                    : '🔊 Not configured'}
-              </span>
+              {captureMode !== 'system_only' && (
+                <span className={micActive ? 'text-green-600' : 'text-red-500'}>
+                  {micActive
+                    ? `🎤 ${micLabel && micLabel !== 'Default Microphone' ? micLabel.substring(0, 20) : 'Mic'} ✓`
+                    : '🎤 Mic ✗'}
+                </span>
+              )}
+              {captureMode !== 'mic_only' && (
+                <span className={sysActive ? 'text-green-600' : 'text-amber-500'}>
+                  {sysActive ? '🔊 System ✓' : '🔊 System ...'}
+                </span>
+              )}
               {sttMock && (
                 <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30
                   text-amber-700 dark:text-amber-400 font-medium">

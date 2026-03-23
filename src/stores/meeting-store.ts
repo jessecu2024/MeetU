@@ -122,10 +122,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const useRealAudio = canUseRealCapture();
     const audioManager = useRealAudio ? captureManager : mockCaptureManager;
 
-    // Set audio input devices from settings
+    // Set audio input devices and capture mode from settings
     if (useRealAudio) {
-      const { micDeviceId, sysAudioDeviceId } = useSettingsStore.getState().appSettings;
+      const { micDeviceId, sysAudioDeviceId, captureMode } = useSettingsStore.getState().appSettings;
       captureManager.setDevices(micDeviceId, sysAudioDeviceId);
+      captureManager.setCaptureMode(captureMode);
     }
 
     // Create meeting in database

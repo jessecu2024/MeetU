@@ -1,10 +1,16 @@
 // ============================================================
 // Audio Capture Manager (Renderer Process)
 //
-// Uses getUserMedia + MediaRecorder only.
-// NO AudioContext, NO ScriptProcessorNode, NO connect().
-// This ensures zero interference with system audio output.
+// Dual-stream architecture:
+//   Stream 1: Microphone (getUserMedia)
+//   Stream 2: System audio (desktopCapturer → getUserMedia)
+//
+// Both streams are mixed via AudioContext and fed to:
+//   - MediaRecorder (for file recording)
+//   - STT engine (for transcription)
 // ============================================================
+
+export type AudioCaptureMode = 'mic_and_system' | 'mic_only' | 'system_only';
 
 export interface CaptureState {
   micActive: boolean;
@@ -42,18 +48,22 @@ class AudioCaptureManager {
   private micStream: MediaStream | null = null;
   private sysStream: MediaStream | null = null;
   private recorder: MediaRecorder | null = null;
+  private audioContext: AudioContext | null = null;
   private listeners: CaptureListener[] = [];
   private audioChunkCallbacks: AudioChunkCallback[] = [];
   private volumeInterval: ReturnType<typeof setInterval> | null = null;
 
-  private micDeviceId = 'default';
-  private sysDeviceId = '';
+  private micDeviceId = '';
+  private captureMode: AudioCaptureMode = 'mic_and_system';
 
-  setDevices(micId: string, sysId: string): void {
-    // Keep empty/default as-is — start() handles the fallback logic
+  setDevices(micId: string, _sysId: string): void {
     this.micDeviceId = micId || '';
-    this.sysDeviceId = sysId || '';
-    console.log(`[Audio] Devices — mic: "${this.micDeviceId || '(default)'}", system: "${this.sysDeviceId || '(none)'}"`);
+    console.log(`[Audio] Devices — mic: "${this.micDeviceId || '(default)'}"`);
+  }
+
+  setCaptureMode(mode: AudioCaptureMode): void {
+    this.captureMode = mode;
+    console.log(`[Audio] Capture mode: ${mode}`);
   }
 
   onAudioChunk(cb: AudioChunkCallback): () => void {
@@ -80,23 +90,20 @@ class AudioCaptureManager {
 
   async start(): Promise<void> {
     if (this._state.recording) return;
-    console.log('[Audio] Starting capture (MediaRecorder, no AudioContext)');
+    const wantMic = this.captureMode !== 'system_only';
+    const wantSystem = this.captureMode !== 'mic_only';
+    console.log(`[Audio] Starting capture — mode: ${this.captureMode}, wantMic: ${wantMic}, wantSystem: ${wantSystem}`);
 
-    // ── Diagnostics: enumerate devices before anything ──
+    // ── Diagnostics: enumerate devices ──
     try {
       const allDevices = await navigator.mediaDevices.enumerateDevices();
       const audioInputs = allDevices.filter(d => d.kind === 'audioinput');
       console.log(`[Audio] ====== DEVICE DIAGNOSTICS ======`);
       console.log(`[Audio] Total devices: ${allDevices.length}, Audio inputs: ${audioInputs.length}`);
       for (const d of audioInputs) {
-        console.log(`[Audio]   deviceId="${d.deviceId.substring(0,12)}..." label="${d.label}" groupId="${d.groupId.substring(0,8)}..."`);
+        console.log(`[Audio]   deviceId="${d.deviceId.substring(0,12)}..." label="${d.label}"`);
       }
-      console.log(`[Audio] Selected micDeviceId: "${this.micDeviceId}"`);
-      console.log(`[Audio] Selected sysDeviceId: "${this.sysDeviceId}"`);
-      // Detect bluetooth devices
-      const hasBluetooth = audioInputs.some(d =>
-        /bluetooth|hands-free|蓝牙/i.test(d.label)
-      );
+      const hasBluetooth = audioInputs.some(d => /bluetooth|hands-free|蓝牙/i.test(d.label));
       if (hasBluetooth) {
         console.log('[Audio] ⚠ Bluetooth audio device detected');
         this.emit({ bluetoothDetected: true });
@@ -115,100 +122,131 @@ class AudioCaptureManager {
     }
     this.emit({ recording: true, filePath, error: null });
 
-    // Step 1: Request generic mic permission first (triggers OS permission dialog)
-    try {
-      console.log('[Audio] Step 1: Requesting generic mic permission...');
-      const permStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const permTrack = permStream.getAudioTracks()[0];
-      console.log(`[Audio] Mic permission granted — track: label="${permTrack?.label}" readyState="${permTrack?.readyState}" muted=${permTrack?.muted}`);
-      permStream.getTracks().forEach(t => t.stop());
-    } catch (permErr) {
-      console.error('[Audio] Mic permission request FAILED:', (permErr as DOMException)?.name, (permErr as DOMException)?.message, permErr);
-      this.emit({ micActive: false, error: mapMicError(permErr) });
-      // Don't return — still try system audio below
-    }
-
-    // Step 2: Get mic stream with selected device (fallback to default)
-    // IMPORTANT: "default" and empty string are NOT valid deviceId values for { exact: ... }
-    // They cause NotFoundError. Use unconstrained { audio: true } instead.
-    const isDefaultMic = !this.micDeviceId || this.micDeviceId === 'default';
-    if (!this.micStream) {
+    // ── Step 1: Microphone stream ──
+    if (wantMic) {
       try {
+        // Request permission first
+        const permStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        permStream.getTracks().forEach(t => t.stop());
+
+        const isDefaultMic = !this.micDeviceId || this.micDeviceId === 'default';
         const micConstraints: MediaTrackConstraints = isDefaultMic
           ? { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
           : { deviceId: { exact: this.micDeviceId }, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-        console.log(`[Audio] Step 2: getUserMedia mic — isDefault=${isDefaultMic}, deviceId="${this.micDeviceId}"`);
+
+        console.log(`[Audio] Step 1: getUserMedia mic — isDefault=${isDefaultMic}`);
         this.micStream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints });
         console.log('[Audio] Mic stream OK —', this.micStream.getAudioTracks()[0]?.label);
-        this.emit({ micActive: true, error: null });
+        this.emit({ micActive: true });
       } catch (err) {
-        console.warn('[Audio] Mic failed with selected device:', (err as DOMException)?.name, (err as DOMException)?.message);
-        // Fallback to unconstrained default if specific device failed
-        if (!isDefaultMic) {
-          try {
-            console.log('[Audio] Falling back to default mic (no deviceId constraint)...');
-            this.micStream = await navigator.mediaDevices.getUserMedia({
-              audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-            });
-            console.log('[Audio] Mic stream OK (fallback to default) —', this.micStream.getAudioTracks()[0]?.label);
-            this.emit({ micActive: true, error: null });
-          } catch (fallbackErr) {
-            console.error('[Audio] Default mic also failed:', (fallbackErr as DOMException)?.name, (fallbackErr as DOMException)?.message);
-            this.emit({ micActive: false, error: mapMicError(fallbackErr) });
-          }
-        } else {
-          this.emit({ micActive: false, error: mapMicError(err) });
+        console.warn('[Audio] Mic failed:', (err as DOMException)?.name);
+        // Try default fallback
+        try {
+          this.micStream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          console.log('[Audio] Mic stream OK (fallback) —', this.micStream.getAudioTracks()[0]?.label);
+          this.emit({ micActive: true });
+        } catch (fallbackErr) {
+          console.error('[Audio] Mic completely failed:', (fallbackErr as DOMException)?.name);
+          this.emit({ micActive: false, error: mapMicError(fallbackErr) });
         }
       }
     }
 
-    // Step 3: System audio (Stereo Mix) — only if configured
-    // Same fix: skip empty/default deviceId values
-    if (this.sysDeviceId && this.sysDeviceId !== 'default') {
+    // ── Step 2: System audio via desktopCapturer ──
+    if (wantSystem) {
       try {
-        console.log(`[Audio] Step 3: getUserMedia system audio — deviceId="${this.sysDeviceId}"`);
-        this.sysStream = await navigator.mediaDevices.getUserMedia({
-          audio: { deviceId: { exact: this.sysDeviceId }, channelCount: 1 },
-        });
-        console.log('[Audio] System audio stream OK —', this.sysStream.getAudioTracks()[0]?.label);
-        this.emit({ sysActive: true });
+        console.log('[Audio] Step 2: Requesting system audio via desktopCapturer...');
+        // In Electron, desktopCapturer is accessed via getUserMedia with chromeMediaSource
+        // We need to get a source ID first via the main process
+        const sourceId = await window.electronAPI?.audio.getDesktopSourceId() as string;
+        if (sourceId) {
+          console.log(`[Audio] Got desktop source ID: ${sourceId.substring(0, 20)}...`);
+          this.sysStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: sourceId,
+              },
+            } as unknown as MediaTrackConstraints,
+            video: {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: sourceId,
+              },
+            } as unknown as MediaTrackConstraints,
+          });
+          // Stop video tracks — we only need audio
+          this.sysStream.getVideoTracks().forEach(t => t.stop());
+          const audioTrack = this.sysStream.getAudioTracks()[0];
+          if (audioTrack) {
+            console.log(`[Audio] System audio stream OK — track: ${audioTrack.label}, readyState: ${audioTrack.readyState}`);
+            this.emit({ sysActive: true });
+          } else {
+            console.warn('[Audio] desktopCapturer returned no audio tracks');
+            this.emit({ sysActive: false });
+          }
+        } else {
+          console.warn('[Audio] No desktop source available');
+          this.emit({ sysActive: false });
+        }
       } catch (err) {
-        console.warn('[Audio] System audio device not available:', (err as DOMException)?.name, (err as DOMException)?.message);
-        this.emit({ sysActive: false, error: `System audio device not found — check Settings / 系统音频设备未找到，请检查设置` });
+        console.warn('[Audio] System audio capture failed:', (err as Error)?.message);
+        this.emit({ sysActive: false });
+        // Not fatal — continue with mic only
       }
     }
 
-    // Combine tracks into one stream for MediaRecorder
-    const combinedStream = new MediaStream();
-    if (this.micStream) {
-      for (const track of this.micStream.getAudioTracks()) combinedStream.addTrack(track);
-    }
-    if (this.sysStream) {
-      for (const track of this.sysStream.getAudioTracks()) combinedStream.addTrack(track);
-    }
+    // ── Step 3: Mix streams via AudioContext ──
+    const hasMic = !!this.micStream?.getAudioTracks().length;
+    const hasSys = !!this.sysStream?.getAudioTracks().length;
 
-    if (combinedStream.getAudioTracks().length === 0) {
-      console.error('[Audio] No audio tracks available');
+    if (!hasMic && !hasSys) {
+      console.error('[Audio] No audio streams available');
       this.emit({ error: 'No audio input available / 无可用音频输入' });
       return;
     }
 
-    // Use MediaRecorder — NO AudioContext needed
+    let recordingStream: MediaStream;
+
+    if (hasMic && hasSys) {
+      // Mix both streams via AudioContext
+      console.log('[Audio] Mixing mic + system audio via AudioContext');
+      this.audioContext = new AudioContext();
+      const destination = this.audioContext.createMediaStreamDestination();
+
+      const micSource = this.audioContext.createMediaStreamSource(this.micStream!);
+      micSource.connect(destination);
+
+      const sysSource = this.audioContext.createMediaStreamSource(this.sysStream!);
+      sysSource.connect(destination);
+
+      recordingStream = destination.stream;
+    } else if (hasMic) {
+      recordingStream = this.micStream!;
+    } else {
+      recordingStream = this.sysStream!;
+    }
+
+    // ── Step 4: MediaRecorder on the mixed/single stream ──
     try {
-      // Try webm/opus first, fall back to any supported type
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : MediaRecorder.isTypeSupported('audio/webm')
           ? 'audio/webm'
           : undefined;
-      this.recorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : {});
+      this.recorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : {});
 
       this.recorder.ondataavailable = async (event) => {
         if (event.data.size > 0) {
           const buffer = await event.data.arrayBuffer();
-          // Mark mic as active once we receive real audio data
-          if (!this._state.micActive && this.micStream) {
+          // Mark mic/sys active on first real data
+          if (!this._state.micActive && hasMic) {
             this.emit({ micActive: true, error: null });
+          }
+          if (!this._state.sysActive && hasSys) {
+            this.emit({ sysActive: true });
           }
           // Feed to STT engine
           for (const cb of this.audioChunkCallbacks) cb(buffer);
@@ -217,20 +255,18 @@ class AudioCaptureManager {
         }
       };
 
-      this.recorder.start(250); // produce a chunk every 250ms
-      console.log(`[Audio] MediaRecorder started (${mimeType || 'default'}, 250ms chunks)`);
+      this.recorder.start(250);
+      console.log(`[Audio] MediaRecorder started (${mimeType || 'default'}, 250ms chunks, sources: ${hasMic ? 'mic' : ''}${hasMic && hasSys ? '+' : ''}${hasSys ? 'system' : ''})`);
     } catch (err) {
       console.error('[Audio] MediaRecorder creation failed:', err);
       this.emit({ error: `MediaRecorder failed: ${err instanceof Error ? err.message : 'Unknown'} / 录音器创建失败` });
       return;
     }
 
-    // Simple volume estimation based on data size (no AudioContext needed)
+    // Volume indicator
     this.volumeInterval = setInterval(() => {
-      // Rough volume indicator: if recorder is active, show a pulsing indicator
       if (this.recorder?.state === 'recording') {
-        const fakeVolume = 0.2 + Math.random() * 0.3;
-        this.emit({ volume: fakeVolume });
+        this.emit({ volume: 0.2 + Math.random() * 0.3 });
       }
     }, 200);
   }
@@ -238,19 +274,22 @@ class AudioCaptureManager {
   async stop(): Promise<string> {
     if (this.volumeInterval) { clearInterval(this.volumeInterval); this.volumeInterval = null; }
 
-    // Stop MediaRecorder
     if (this.recorder && this.recorder.state !== 'inactive') {
       this.recorder.stop();
     }
     this.recorder = null;
 
-    // Stop streams
+    // Close AudioContext if used for mixing
+    if (this.audioContext) {
+      try { await this.audioContext.close(); } catch { /* ignore */ }
+      this.audioContext = null;
+    }
+
     if (this.micStream) { this.micStream.getTracks().forEach(t => t.stop()); this.micStream = null; }
     if (this.sysStream) { this.sysStream.getTracks().forEach(t => t.stop()); this.sysStream = null; }
 
     this.audioChunkCallbacks = [];
 
-    // Stop file recording in main process
     const tempPath = await window.electronAPI?.audio.stopRecording() as string;
 
     this.emit({ recording: false, micActive: false, sysActive: false, volume: 0, filePath: tempPath || this._state.filePath });
@@ -293,7 +332,6 @@ export async function listAudioDevices(): Promise<AudioInputDevice[]> {
 /** List available audio output devices */
 export async function listAudioOutputDevices(): Promise<AudioOutputDevice[]> {
   try {
-    // Need permission first to get device labels
     const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
     tmp.getTracks().forEach(t => t.stop());
     const devices = await navigator.mediaDevices.enumerateDevices();
@@ -306,25 +344,6 @@ export async function listAudioOutputDevices(): Promise<AudioOutputDevice[]> {
       }));
   } catch {
     return [{ deviceId: 'default', label: 'Default Speaker', isBluetooth: false }];
-  }
-}
-
-/** Set audio output device on an HTML media element or the default audio context */
-export async function setAudioOutputDevice(deviceId: string): Promise<boolean> {
-  try {
-    // setSinkId is available on HTMLMediaElement in Chromium/Electron
-    // We create a temporary audio element to switch the default output
-    const audio = document.createElement('audio');
-    if ('setSinkId' in audio) {
-      await (audio as HTMLMediaElement & { setSinkId: (id: string) => Promise<void> }).setSinkId(deviceId);
-      console.log(`[Audio] Output device set to: ${deviceId}`);
-      return true;
-    }
-    console.warn('[Audio] setSinkId not supported');
-    return false;
-  } catch (err) {
-    console.error('[Audio] Failed to set output device:', err);
-    return false;
   }
 }
 

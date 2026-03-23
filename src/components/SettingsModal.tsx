@@ -532,52 +532,71 @@ export default function SettingsModal() {
                 </select>
               </div>
 
-              {/* Bluetooth recommendation banner */}
-              {audioDevices.some(d => d.isBluetooth) && (
-                <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs space-y-1">
-                  <p className="font-medium text-blue-800 dark:text-blue-300">
-                    Bluetooth headset detected / 检测到蓝牙耳机
-                  </p>
-                  <p className="text-blue-700 dark:text-blue-400">
-                    Recommended: Use Bluetooth mic for input, switch output to speakers to avoid audio cutoff.
-                  </p>
-                  <p className="text-blue-600 dark:text-blue-500">
-                    建议：使用蓝牙麦克风录音，将音频输出切换到扬声器以避免蓝牙音频中断。
-                  </p>
-                </div>
-              )}
-
-              {/* Microphone device (Input) */}
+              {/* Audio Capture Mode */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                  Audio Input Device <span className="text-zinc-400 font-normal">/ 音频输入设备（麦克风）</span>
+                  Audio Capture Mode <span className="text-zinc-400 font-normal">/ 录音模式</span>
                 </label>
-                <select
-                  value={store.appSettings.micDeviceId}
-                  onChange={(e) => {
-                    const d = audioDevices.find(x => x.deviceId === e.target.value);
-                    store.updateAppSettings({ micDeviceId: e.target.value, micDeviceLabel: d?.label || 'Default' });
-                  }}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
-                    bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
-                  {audioDevices.filter(d => !d.isStereoMix).map(d => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label}{d.isBluetooth ? ' 🔵' : ''}
-                    </option>
+                <div className="space-y-1.5">
+                  {([
+                    { id: 'mic_and_system', en: 'Mic + System Audio', zh: '麦克风+系统音频', desc: 'Record your voice and meeting audio / 同时录制你的声音和会议声音' },
+                    { id: 'mic_only', en: 'Mic Only', zh: '仅麦克风', desc: 'Only your microphone / 只录麦克风' },
+                    { id: 'system_only', en: 'System Audio Only', zh: '仅系统音频', desc: 'Only computer audio (no mic) / 只录电脑声音（不开麦）' },
+                  ] as const).map(mode => (
+                    <button key={mode.id}
+                      onClick={() => store.updateAppSettings({ captureMode: mode.id })}
+                      className={`w-full p-2.5 rounded-lg border text-left text-sm transition-all ${
+                        store.appSettings.captureMode === mode.id
+                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                          : 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300'}`}>
+                      <span className="font-medium text-zinc-900 dark:text-white">{mode.en}</span>
+                      <span className="text-zinc-400 ml-1">/ {mode.zh}</span>
+                      <p className="text-xs text-zinc-400 mt-0.5">{mode.desc}</p>
+                    </button>
                   ))}
-                </select>
-                {audioDevices.filter(d => !d.isStereoMix).length === 0 && (
-                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                    No microphone detected. Please connect a headset with microphone or a USB microphone.
-                    <span className="block text-red-500">未检测到麦克风，请连接带麦耳机或 USB 麦克风。</span>
+                </div>
+                {/* Bluetooth recommendation */}
+                {audioDevices.some(d => d.isBluetooth) && (
+                  <p className="mt-2 text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-2 py-1.5">
+                    For Bluetooth headsets, &quot;System Audio Only&quot; mode is recommended to avoid audio cutoff.
+                    <span className="block text-blue-500 mt-0.5">蓝牙耳机建议使用"仅系统音频"模式以避免声音中断。</span>
                   </p>
                 )}
               </div>
 
+              {/* Microphone device (Input) — shown unless system_only */}
+              {store.appSettings.captureMode !== 'system_only' && (
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                    Microphone <span className="text-zinc-400 font-normal">/ 麦克风</span>
+                  </label>
+                  <select
+                    value={store.appSettings.micDeviceId}
+                    onChange={(e) => {
+                      const d = audioDevices.find(x => x.deviceId === e.target.value);
+                      store.updateAppSettings({ micDeviceId: e.target.value, micDeviceLabel: d?.label || 'Default' });
+                    }}
+                    className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
+                      bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                    {audioDevices.filter(d => !d.isStereoMix).map(d => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.label}{d.isBluetooth ? ' 🔵' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {audioDevices.filter(d => !d.isStereoMix).length === 0 && (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                      No microphone detected. Please connect a headset with microphone or a USB microphone.
+                      <span className="block text-red-500">未检测到麦克风，请连接带麦耳机或 USB 麦克风。</span>
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Audio Output Device */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                  Audio Output Device <span className="text-zinc-400 font-normal">/ 音频输出设备（听声音）</span>
+                  Audio Output <span className="text-zinc-400 font-normal">/ 音频输出（听声音）</span>
                 </label>
                 <select
                   value={store.appSettings.outputDeviceId}
@@ -593,77 +612,16 @@ export default function SettingsModal() {
                     </option>
                   ))}
                 </select>
-                {/* Bluetooth mic + BT output warning */}
-                {audioDevices.some(d => d.isBluetooth) &&
-                  outputDevices.find(d => d.deviceId === store.appSettings.outputDeviceId)?.isBluetooth && (
-                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                    Using Bluetooth for both input and output may cause audio quality issues (HFP mode).
-                    Consider switching output to speakers.
-                    <span className="block text-amber-500">同时使用蓝牙输入和输出可能导致音质下降。建议将输出切换到扬声器。</span>
-                  </p>
-                )}
               </div>
 
-              {/* System audio device (Stereo Mix) */}
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                  System Audio Capture <span className="text-zinc-400 font-normal">/ 系统音频捕获（录制会议声音）</span>
-                </label>
-                <select
-                  value={store.appSettings.sysAudioDeviceId}
-                  onChange={(e) => {
-                    const d = audioDevices.find(x => x.deviceId === e.target.value);
-                    store.updateAppSettings({ sysAudioDeviceId: e.target.value, sysAudioDeviceLabel: d?.label || '' });
-                  }}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
-                    bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
-                  <option value="">None — mic only / 无（仅麦克风）</option>
-                  {audioDevices.map(d => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label}{d.isStereoMix ? ' ⭐ Recommended' : ''}
-                    </option>
-                  ))}
-                </select>
-
-                <div className="flex items-center gap-2 mt-1.5">
-                  <button
-                    onClick={() => { listAudioDevices().then(setAudioDevices); listAudioOutputDevices().then(setOutputDevices); }}
-                    className="text-xs px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-600
-                      text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
-                    Refresh / 刷新
-                  </button>
-                  <button
-                    onClick={() => setShowAudioGuide(!showAudioGuide)}
-                    className="text-xs text-blue-600 hover:underline">
-                    {showAudioGuide ? 'Hide guide ▲' : 'Setup guide / 设置指南 ▼'}
-                  </button>
-                </div>
-
-                {showAudioGuide && (
-                  <div className="mt-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs space-y-2">
-                    <p className="font-medium text-blue-800 dark:text-blue-300">
-                      To capture what others say in a meeting, enable "Stereo Mix":
-                    </p>
-                    <ol className="list-decimal list-inside space-y-0.5 text-blue-700 dark:text-blue-400">
-                      <li>Right-click volume icon → Sound settings → More sound settings</li>
-                      <li>Go to "Recording" tab</li>
-                      <li>Right-click empty area → "Show Disabled Devices"</li>
-                      <li>Right-click "Stereo Mix" → Enable</li>
-                      <li>Click "Refresh" above and select Stereo Mix</li>
-                    </ol>
-                    <hr className="border-blue-200 dark:border-blue-700" />
-                    <p className="font-medium text-blue-800 dark:text-blue-300">
-                      如需录制会议中别人说的话，请启用"立体声混音"：
-                    </p>
-                    <ol className="list-decimal list-inside space-y-0.5 text-blue-700 dark:text-blue-400">
-                      <li>右键音量图标 → 声音设置 → 更多声音设置</li>
-                      <li>进入"录制"选项卡</li>
-                      <li>右键空白区域 → "显示已禁用的设备"</li>
-                      <li>右键"立体声混音" → 启用</li>
-                      <li>点击上方"刷新"按钮，选择立体声混音</li>
-                    </ol>
-                  </div>
-                )}
+              {/* Refresh + guide */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { listAudioDevices().then(setAudioDevices); listAudioOutputDevices().then(setOutputDevices); }}
+                  className="text-xs px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-600
+                    text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
+                  Refresh Devices / 刷新设备
+                </button>
               </div>
 
               {/* Region */}

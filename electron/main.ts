@@ -54,6 +54,13 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  // Forward renderer console logs to main process terminal for debugging
+  mainWindow.webContents.on('console-message', (_event, _level, message) => {
+    if (message.startsWith('[Audio]') || message.startsWith('[STT]') || message.includes('FAIL') || message.includes('getUserMedia')) {
+      console.log(`[Renderer] ${message}`);
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -156,7 +163,24 @@ function registerIPC(): void {
     return getRecordingsPath();
   });
 
-  // ── Audio: Legacy (will be used by future phases) ──
+  // ── Audio: desktopCapturer for system audio ──
+  ipcMain.handle('audio:get-desktop-source-id', async () => {
+    const { desktopCapturer } = await import('electron');
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      if (sources.length > 0) {
+        console.log(`[Audio] Desktop sources: ${sources.map(s => s.name).join(', ')}`);
+        return sources[0].id; // Return first screen source
+      }
+      console.warn('[Audio] No desktop sources found');
+      return null;
+    } catch (err) {
+      console.error('[Audio] desktopCapturer.getSources failed:', err);
+      return null;
+    }
+  });
+
+  // ── Audio: Legacy ──
   ipcMain.handle('audio:get-devices', async () => {
     return [];
   });
