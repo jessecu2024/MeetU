@@ -34,6 +34,7 @@ interface MeetingState {
   currentVolume: number;
   useMock: boolean;
   audioError: string | null;
+  bluetoothDetected: boolean;
 
   // ── STT state ──
   sttActive: boolean;
@@ -82,6 +83,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   currentVolume: 0,
   useMock: false,
   audioError: null,
+  bluetoothDetected: false,
 
   sttActive: false,
   sttMock: false,
@@ -206,6 +208,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         currentVolume: state.volume ?? get().currentVolume,
         recordingFilePath: state.filePath ?? get().recordingFilePath,
         audioError: state.error ?? get().audioError,
+        bluetoothDetected: state.bluetoothDetected ?? get().bluetoothDetected,
       });
     });
 
@@ -363,6 +366,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       sttActive: false,
       _durationInterval: null,
       _sttEngine: null,
+      bluetoothDetected: false,
       showSaveConfirm: !!tempPath,
       pendingTempPath: tempPath || '',
     });

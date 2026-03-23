@@ -20,7 +20,7 @@ export default function Header() {
   const {
     isRecording, recordingDuration, currentVolume,
     micActive, sysActive, useMock,
-    sttMock, audioError,
+    sttMock, audioError, bluetoothDetected,
     showSaveConfirm, lastSaveResult,
     requestStartRecording, stopRecording,
     confirmSave, discardRecording, clearSaveResult,
@@ -181,8 +181,10 @@ export default function Header() {
 
             {/* Source status */}
             <div className="flex items-center gap-3 text-xs flex-wrap">
-              <span className={micActive ? 'text-green-600' : 'text-zinc-400'}>
-                {micActive ? '🎤 Mic ✓' : '🎤 Mic ✗'}
+              <span className={micActive ? 'text-green-600' : 'text-red-500'}>
+                {micActive
+                  ? `🎤 ${micLabel && micLabel !== 'Default Microphone' ? micLabel.substring(0, 20) : 'Mic'} ✓`
+                  : '🎤 Mic ✗'}
               </span>
               <span className={sysActive ? 'text-green-600' : 'text-zinc-400'}>
                 {sysActive
@@ -201,6 +203,16 @@ export default function Header() {
                 <span className="text-amber-500">Mock Audio</span>
               )}
             </div>
+
+            {bluetoothDetected && (
+              <p className="text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-2 py-1.5 leading-relaxed">
+                Bluetooth headset detected. Audio quality may change when microphone is active.
+                For best experience, use a wired headset or USB microphone.
+                <span className="block text-blue-500 dark:text-blue-500 mt-0.5">
+                  检测到蓝牙耳机。开启麦克风后音质可能变化。建议使用有线耳机或 USB 麦克风获得最佳体验。
+                </span>
+              </p>
+            )}
 
             {audioError && (
               <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1">

@@ -13,6 +13,7 @@ export interface CaptureState {
   volume: number;
   filePath: string;
   error: string | null;
+  bluetoothDetected: boolean;
 }
 
 export type CaptureListener = (state: Partial<CaptureState>) => void;
@@ -62,7 +63,7 @@ class AudioCaptureManager {
 
   private _state: CaptureState = {
     micActive: false, sysActive: false, recording: false,
-    volume: 0, filePath: '', error: null,
+    volume: 0, filePath: '', error: null, bluetoothDetected: false,
   };
 
   get state() { return { ...this._state }; }
@@ -92,6 +93,14 @@ class AudioCaptureManager {
       }
       console.log(`[Audio] Selected micDeviceId: "${this.micDeviceId}"`);
       console.log(`[Audio] Selected sysDeviceId: "${this.sysDeviceId}"`);
+      // Detect bluetooth devices
+      const hasBluetooth = audioInputs.some(d =>
+        /bluetooth|hands-free|蓝牙/i.test(d.label)
+      );
+      if (hasBluetooth) {
+        console.log('[Audio] ⚠ Bluetooth audio device detected');
+        this.emit({ bluetoothDetected: true });
+      }
       console.log(`[Audio] ================================`);
     } catch (enumErr) {
       console.error('[Audio] enumerateDevices failed:', enumErr);
