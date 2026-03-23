@@ -10,7 +10,8 @@ import { useSettingsStore } from '../stores/settings-store';
 import type { TestResult } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import { sttRegistry } from '../services/stt-engine/engine-registry';
-import { listAudioDevices } from '../services/audio/capture';
+import { listAudioDevices, listAudioOutputDevices } from '../services/audio/capture';
+import type { AudioOutputDevice } from '../services/audio/capture';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
 import { STT_ENGINE_INFO } from '../services/stt-engine/types';
@@ -40,7 +41,8 @@ export default function SettingsModal() {
   const [editingKey, setEditingKey] = useState('');
   const [editingProvider, setEditingProvider] = useState<AIProviderId | null>(null);
   const [sttKeyDraft, setSttKeyDraft] = useState('');
-  const [audioDevices, setAudioDevices] = useState<Array<{ deviceId: string; label: string; isStereoMix: boolean }>>([]);
+  const [audioDevices, setAudioDevices] = useState<Array<{ deviceId: string; label: string; isStereoMix: boolean; isBluetooth: boolean }>>([]);
+  const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([]);
   const [showAudioGuide, setShowAudioGuide] = useState(false);
 
   // Read test results from store (persists across modal open/close)
@@ -50,6 +52,7 @@ export default function SettingsModal() {
   useEffect(() => {
     if (activeTab === 'app') {
       listAudioDevices().then(setAudioDevices);
+      listAudioOutputDevices().then(setOutputDevices);
     }
   }, [activeTab]);
 
@@ -529,10 +532,25 @@ export default function SettingsModal() {
                 </select>
               </div>
 
-              {/* Microphone device */}
+              {/* Bluetooth recommendation banner */}
+              {audioDevices.some(d => d.isBluetooth) && (
+                <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs space-y-1">
+                  <p className="font-medium text-blue-800 dark:text-blue-300">
+                    Bluetooth headset detected / 检测到蓝牙耳机
+                  </p>
+                  <p className="text-blue-700 dark:text-blue-400">
+                    Recommended: Use Bluetooth mic for input, switch output to speakers to avoid audio cutoff.
+                  </p>
+                  <p className="text-blue-600 dark:text-blue-500">
+                    建议：使用蓝牙麦克风录音，将音频输出切换到扬声器以避免蓝牙音频中断。
+                  </p>
+                </div>
+              )}
+
+              {/* Microphone device (Input) */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                  Microphone <span className="text-zinc-400 font-normal">/ 麦克风</span>
+                  Audio Input Device <span className="text-zinc-400 font-normal">/ 音频输入设备（麦克风）</span>
                 </label>
                 <select
                   value={store.appSettings.micDeviceId}
@@ -543,15 +561,53 @@ export default function SettingsModal() {
                   className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
                     bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
                   {audioDevices.filter(d => !d.isStereoMix).map(d => (
-                    <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label}{d.isBluetooth ? ' 🔵' : ''}
+                    </option>
                   ))}
                 </select>
+                {audioDevices.filter(d => !d.isStereoMix).length === 0 && (
+                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                    No microphone detected. Please connect a headset with microphone or a USB microphone.
+                    <span className="block text-red-500">未检测到麦克风，请连接带麦耳机或 USB 麦克风。</span>
+                  </p>
+                )}
+              </div>
+
+              {/* Audio Output Device */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                  Audio Output Device <span className="text-zinc-400 font-normal">/ 音频输出设备（听声音）</span>
+                </label>
+                <select
+                  value={store.appSettings.outputDeviceId}
+                  onChange={(e) => {
+                    const d = outputDevices.find(x => x.deviceId === e.target.value);
+                    store.updateAppSettings({ outputDeviceId: e.target.value, outputDeviceLabel: d?.label || 'Default' });
+                  }}
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
+                    bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  {outputDevices.map(d => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label}{d.isBluetooth ? ' 🔵' : ''}
+                    </option>
+                  ))}
+                </select>
+                {/* Bluetooth mic + BT output warning */}
+                {audioDevices.some(d => d.isBluetooth) &&
+                  outputDevices.find(d => d.deviceId === store.appSettings.outputDeviceId)?.isBluetooth && (
+                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                    Using Bluetooth for both input and output may cause audio quality issues (HFP mode).
+                    Consider switching output to speakers.
+                    <span className="block text-amber-500">同时使用蓝牙输入和输出可能导致音质下降。建议将输出切换到扬声器。</span>
+                  </p>
+                )}
               </div>
 
               {/* System audio device (Stereo Mix) */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                  System Audio <span className="text-zinc-400 font-normal">/ 系统音频（会议声音）</span>
+                  System Audio Capture <span className="text-zinc-400 font-normal">/ 系统音频捕获（录制会议声音）</span>
                 </label>
                 <select
                   value={store.appSettings.sysAudioDeviceId}
@@ -571,7 +627,7 @@ export default function SettingsModal() {
 
                 <div className="flex items-center gap-2 mt-1.5">
                   <button
-                    onClick={() => listAudioDevices().then(setAudioDevices)}
+                    onClick={() => { listAudioDevices().then(setAudioDevices); listAudioOutputDevices().then(setOutputDevices); }}
                     className="text-xs px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-600
                       text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
                     Refresh / 刷新

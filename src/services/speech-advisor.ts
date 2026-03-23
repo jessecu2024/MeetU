@@ -7,6 +7,7 @@ import { providerRegistry } from './ai-provider';
 import { PROMPTS, renderPrompt } from '../config/prompts';
 import { useSettingsStore } from '../stores/settings-store';
 import { useTranscriptStore } from '../stores/transcript-store';
+import { parseAIJson } from './parse-ai-json';
 import type { MentionResult } from './mention-detector';
 
 export interface SpeechSuggestion {
@@ -94,7 +95,7 @@ class SpeechAdvisorService {
         { temperature: 0.7, maxTokens: 1000 }
       );
 
-      const suggestions = JSON.parse(response.content) as SpeechSuggestion[];
+      const suggestions = parseAIJson<SpeechSuggestion[]>(response.content);
       this.callback?.({
         ...advice,
         suggestions,

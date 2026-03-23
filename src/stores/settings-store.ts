@@ -66,6 +66,8 @@ interface AppSettings {
   micDeviceLabel: string;
   sysAudioDeviceId: string;
   sysAudioDeviceLabel: string;
+  outputDeviceId: string;
+  outputDeviceLabel: string;
 }
 
 /** Connection status for each AI provider */
@@ -187,6 +189,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     micDeviceLabel: 'Default Microphone',
     sysAudioDeviceId: '',
     sysAudioDeviceLabel: '',
+    outputDeviceId: 'default',
+    outputDeviceLabel: 'Default Speaker',
   },
 
   // ── Glossary ──

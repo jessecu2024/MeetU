@@ -8,6 +8,7 @@
 import { providerRegistry } from './ai-provider';
 import { PROMPTS, renderPrompt } from '../config/prompts';
 import { useSettingsStore } from '../stores/settings-store';
+import { parseAIJson } from './parse-ai-json';
 import type { TranscriptEntry } from '../stores/transcript-store';
 
 export interface MentionResult {
@@ -113,7 +114,7 @@ class MentionDetectorService {
         { temperature: 0.1, maxTokens: 200 }
       );
 
-      const parsed = JSON.parse(response.content);
+      const parsed = parseAIJson<Record<string, unknown>>(response.content);
       if (parsed.isMentioned) {
         const result: MentionResult = {
           id: `mention-${++this.counter}`,

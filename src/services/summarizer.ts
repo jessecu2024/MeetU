@@ -7,6 +7,7 @@ import { providerRegistry } from './ai-provider';
 import { PROMPTS, renderPrompt } from '../config/prompts';
 import { useTranscriptStore } from '../stores/transcript-store';
 import { useSettingsStore } from '../stores/settings-store';
+import { parseAIJson } from './parse-ai-json';
 
 export interface RealtimeSummary {
   id: string;
@@ -129,21 +130,10 @@ class SummarizerService {
 
       let parsed: Record<string, unknown>;
       try {
-        parsed = JSON.parse(response.content);
+        parsed = parseAIJson<Record<string, unknown>>(response.content);
       } catch {
-        // AI may return markdown-wrapped JSON or incomplete output — try to extract {...}
-        const jsonMatch = response.content.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsed = JSON.parse(jsonMatch[0]);
-          } catch {
-            console.warn('[Summarizer] Could not parse extracted JSON, skipping this summary');
-            return summary;
-          }
-        } else {
-          console.warn('[Summarizer] No JSON found in AI response, skipping this summary');
-          return summary;
-        }
+        console.warn('[Summarizer] Could not parse AI JSON, skipping this summary');
+        return summary;
       }
       const result: RealtimeSummary = {
         ...summary,

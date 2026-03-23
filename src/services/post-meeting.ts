@@ -7,6 +7,7 @@ import { providerRegistry } from './ai-provider';
 import { PROMPTS, renderPrompt } from '../config/prompts';
 import { useTranscriptStore } from '../stores/transcript-store';
 import { useSettingsStore } from '../stores/settings-store';
+import { parseAIJson } from './parse-ai-json';
 import type { RealtimeSummary } from './summarizer';
 
 export interface MeetingMinutes {
@@ -93,7 +94,7 @@ export async function generateMeetingMinutes(
       { temperature: 0.3, maxTokens: 2000 }
     );
 
-    const minutes = JSON.parse(response.content) as MeetingMinutes;
+    const minutes = parseAIJson<MeetingMinutes>(response.content);
 
     // Persist to SQLite
     if (meetingId > 0) {

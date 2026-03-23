@@ -258,8 +258,21 @@ class AudioCaptureManager {
   }
 }
 
+export interface AudioInputDevice {
+  deviceId: string;
+  label: string;
+  isStereoMix: boolean;
+  isBluetooth: boolean;
+}
+
+export interface AudioOutputDevice {
+  deviceId: string;
+  label: string;
+  isBluetooth: boolean;
+}
+
 /** List available audio input devices */
-export async function listAudioDevices(): Promise<Array<{ deviceId: string; label: string; isStereoMix: boolean }>> {
+export async function listAudioDevices(): Promise<AudioInputDevice[]> {
   try {
     const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
     tmp.getTracks().forEach(t => t.stop());
@@ -270,9 +283,48 @@ export async function listAudioDevices(): Promise<Array<{ deviceId: string; labe
         deviceId: d.deviceId,
         label: d.label || `Microphone (${d.deviceId.substring(0, 8)})`,
         isStereoMix: /stereo mix|立体声混音|what u hear|loopback/i.test(d.label),
+        isBluetooth: /bluetooth|hands-free|蓝牙/i.test(d.label),
       }));
   } catch {
-    return [{ deviceId: 'default', label: 'Default Microphone', isStereoMix: false }];
+    return [{ deviceId: 'default', label: 'Default Microphone', isStereoMix: false, isBluetooth: false }];
+  }
+}
+
+/** List available audio output devices */
+export async function listAudioOutputDevices(): Promise<AudioOutputDevice[]> {
+  try {
+    // Need permission first to get device labels
+    const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+    tmp.getTracks().forEach(t => t.stop());
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices
+      .filter(d => d.kind === 'audiooutput')
+      .map(d => ({
+        deviceId: d.deviceId,
+        label: d.label || `Speaker (${d.deviceId.substring(0, 8)})`,
+        isBluetooth: /bluetooth|hands-free|蓝牙/i.test(d.label),
+      }));
+  } catch {
+    return [{ deviceId: 'default', label: 'Default Speaker', isBluetooth: false }];
+  }
+}
+
+/** Set audio output device on an HTML media element or the default audio context */
+export async function setAudioOutputDevice(deviceId: string): Promise<boolean> {
+  try {
+    // setSinkId is available on HTMLMediaElement in Chromium/Electron
+    // We create a temporary audio element to switch the default output
+    const audio = document.createElement('audio');
+    if ('setSinkId' in audio) {
+      await (audio as HTMLMediaElement & { setSinkId: (id: string) => Promise<void> }).setSinkId(deviceId);
+      console.log(`[Audio] Output device set to: ${deviceId}`);
+      return true;
+    }
+    console.warn('[Audio] setSinkId not supported');
+    return false;
+  } catch (err) {
+    console.error('[Audio] Failed to set output device:', err);
+    return false;
   }
 }
 

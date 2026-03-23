@@ -205,14 +205,19 @@ export default function Header() {
             </div>
 
             {bluetoothDetected && (
-              <p className="text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-2 py-1.5 leading-relaxed">
-                Bluetooth headset detected. Audio quality may change when microphone is active.
-                For best experience, use a wired headset or USB microphone.
-                You can switch audio output to speakers while using Bluetooth mic.
-                <span className="block text-blue-500 dark:text-blue-500 mt-0.5">
-                  检测到蓝牙耳机。开启麦克风后音质可能变化。建议使用有线耳机或 USB 麦克风获得最佳体验。可以将音频输出切换到扬声器，同时使用蓝牙麦克风。
-                </span>
-              </p>
+              <div className="text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-2 py-1.5 leading-relaxed">
+                <p>
+                  Bluetooth mic active. Switch audio output to speakers to avoid cutoff.
+                  <span className="block text-blue-500 dark:text-blue-500 mt-0.5">
+                    蓝牙麦克风已启用。建议将音频输出切换到扬声器以避免中断。
+                  </span>
+                </p>
+                <button
+                  onClick={() => openSettings('app')}
+                  className="mt-1 text-[10px] px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700">
+                  Switch Output / 切换输出
+                </button>
+              </div>
             )}
 
             {audioError && (
