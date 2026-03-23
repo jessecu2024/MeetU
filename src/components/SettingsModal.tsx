@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../stores/settings-store';
+import type { TestResult } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import { sttRegistry } from '../services/stt-engine/engine-registry';
 import { listAudioDevices } from '../services/audio/capture';
@@ -33,18 +34,18 @@ const API_KEY_PLACEHOLDERS: Record<AIProviderId, string> = {
   glm: '...',
 };
 
-type TestResult = { status: 'idle' | 'testing' | 'ok' | 'error'; latencyMs?: number; error?: string };
-
 export default function SettingsModal() {
   const store = useSettingsStore();
   const [activeTab, setActiveTab] = useState<Tab>(store.settingsModalTab || 'ai');
   const [editingKey, setEditingKey] = useState('');
   const [editingProvider, setEditingProvider] = useState<AIProviderId | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [sttKeyDraft, setSttKeyDraft] = useState('');
-  const [sttTestResult, setSttTestResult] = useState<TestResult>({ status: 'idle' });
   const [audioDevices, setAudioDevices] = useState<Array<{ deviceId: string; label: string; isStereoMix: boolean }>>([]);
   const [showAudioGuide, setShowAudioGuide] = useState(false);
+
+  // Read test results from store (persists across modal open/close)
+  const aiTestResults = useSettingsStore((s) => s.aiTestResults);
+  const sttTestResult = useSettingsStore((s) => s.sttTestResult);
 
   useEffect(() => {
     if (activeTab === 'app') {
@@ -53,28 +54,26 @@ export default function SettingsModal() {
   }, [activeTab]);
 
   const handleTestConnection = async (providerId: AIProviderId) => {
-    setTestResults(prev => ({ ...prev, [providerId]: { status: 'testing' } }));
+    store.setAiTestResult(providerId, { status: 'testing' });
+    const start = Date.now();
     try {
       const provider = providerRegistry.get(providerId);
       if (!provider) throw new Error('Provider not found');
       const result = await provider.testConnection();
-      setTestResults(prev => ({
-        ...prev,
-        [providerId]: result.ok
-          ? { status: 'ok', latencyMs: result.latencyMs }
-          : { status: 'error', error: result.error || 'Connection failed' },
-      }));
+      const latencyMs = Date.now() - start;
+      store.setAiTestResult(providerId, result.ok
+        ? { status: 'ok', latencyMs }
+        : { status: 'error', error: result.error || 'Connection failed' });
     } catch (err) {
-      setTestResults(prev => ({
-        ...prev,
-        [providerId]: { status: 'error', error: err instanceof Error ? err.message : 'Unknown error' },
-      }));
+      store.setAiTestResult(providerId, {
+        status: 'error', error: err instanceof Error ? err.message : 'Unknown error',
+      });
     }
   };
 
   const handleTestSTT = async (engineId: STTEngineId, apiKey: string) => {
     if (!apiKey.trim()) return;
-    setSttTestResult({ status: 'testing' });
+    store.setSttTestResult({ status: 'testing' });
     const start = Date.now();
     try {
       const engine = sttRegistry.get(engineId);
@@ -82,11 +81,13 @@ export default function SettingsModal() {
       engine.setApiKey(apiKey);
       const result = await engine.testConnection();
       const latencyMs = Date.now() - start;
-      setSttTestResult(result.ok
+      store.setSttTestResult(result.ok
         ? { status: 'ok', latencyMs }
         : { status: 'error', error: result.error || 'Connection failed' });
     } catch (err) {
-      setSttTestResult({ status: 'error', error: err instanceof Error ? err.message : 'Unknown error' });
+      store.setSttTestResult({
+        status: 'error', error: err instanceof Error ? err.message : 'Unknown error',
+      });
     }
   };
 
@@ -188,7 +189,7 @@ export default function SettingsModal() {
                               {editingProvider === p.id ? 'Cancel' : 'Edit Key'}
                             </button>
                             {hasKey && (() => {
-                              const tr = testResults[p.id];
+                              const tr = aiTestResults[p.id] as TestResult | undefined;
                               const st = tr?.status || 'idle';
                               return (
                                 <button
@@ -205,12 +206,12 @@ export default function SettingsModal() {
                                   {st === 'testing' ? (
                                     <span className="inline-flex items-center gap-1">
                                       <span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full" />
-                                      Testing
+                                      Testing...
                                     </span>
                                   ) : st === 'ok' ? (
-                                    `✅ Connected ${tr?.latencyMs ? tr.latencyMs + 'ms' : ''}`
+                                    `✅ ${tr?.latencyMs ? tr.latencyMs + 'ms' : 'OK'}`
                                   ) : st === 'error' ? (
-                                    '✗ Retry'
+                                    '❌ Retry'
                                   ) : 'Test'}
                                 </button>
                               );
@@ -218,10 +219,15 @@ export default function SettingsModal() {
                           </div>
                         </div>
 
-                        {/* Error message */}
-                        {testResults[p.id]?.status === 'error' && testResults[p.id]?.error && (
+                        {/* Test result message — persists across modal open/close */}
+                        {aiTestResults[p.id]?.status === 'ok' && (
+                          <p className="mt-1.5 text-xs text-green-600 dark:text-green-400">
+                            ✅ Connected {aiTestResults[p.id]?.latencyMs ? `(${aiTestResults[p.id]!.latencyMs}ms)` : ''}
+                          </p>
+                        )}
+                        {aiTestResults[p.id]?.status === 'error' && aiTestResults[p.id]?.error && (
                           <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">
-                            ❌ {testResults[p.id].error}
+                            ❌ {aiTestResults[p.id]!.error}
                           </p>
                         )}
 
@@ -376,29 +382,29 @@ export default function SettingsModal() {
                       </button>
                     </div>
 
-                    {/* STT test result */}
+                    {/* STT test result — persists across modal open/close */}
                     {sttTestResult.status !== 'idle' && (
                       <div className="mt-2">
                         {sttTestResult.status === 'testing' && (
                           <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
                             <span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full" />
-                            Testing connection...
+                            Testing connection... / 测试中...
                           </span>
                         )}
                         {sttTestResult.status === 'ok' && (
-                          <span className="text-xs text-green-700 dark:text-green-400">
+                          <p className="text-xs text-green-700 dark:text-green-400">
                             ✅ Connected {sttTestResult.latencyMs ? `(${sttTestResult.latencyMs}ms)` : ''}
-                          </span>
+                          </p>
                         )}
                         {sttTestResult.status === 'error' && (
                           <div>
-                            <span className="text-xs text-red-600 dark:text-red-400">
+                            <p className="text-xs text-red-600 dark:text-red-400">
                               ❌ {sttTestResult.error}
-                            </span>
+                            </p>
                             <button
                               onClick={() => handleTestSTT(store.sttEngine, savedKey)}
-                              className="ml-2 text-xs text-blue-600 hover:underline">
-                              Retry
+                              className="mt-1 text-xs text-blue-600 hover:underline">
+                              Retry / 重试
                             </button>
                           </div>
                         )}

@@ -48,7 +48,10 @@ export default function Header() {
       <div className="px-4 pb-3">
         <div className="flex items-center gap-3">
           <button
-            onClick={isRecording ? stopRecording : requestStartRecording}
+            onClick={() => {
+              console.log('[UI] Record button clicked, isRecording:', isRecording, 'showSaveConfirm:', showSaveConfirm);
+              if (isRecording) { stopRecording(); } else { requestStartRecording(); }
+            }}
             disabled={showSaveConfirm}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium text-sm transition-all ${
               isRecording

@@ -99,6 +99,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   _audioChunkCallback: null,
 
   requestStartRecording: () => {
+    console.log('[MeetingStore] requestStartRecording called, consentDismissed:', get().consentDismissedThisSession);
     if (get().consentDismissedThisSession) {
       get().confirmStartRecording().catch((err) => {
         console.error('[MeetingStore] Recording start failed:', err);
@@ -107,11 +108,13 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         });
       });
     } else {
+      console.log('[MeetingStore] Setting showRecordingConsent: true');
       set({ showRecordingConsent: true });
     }
   },
 
   confirmStartRecording: async () => {
+    console.log('[MeetingStore] confirmStartRecording called');
     set({ showRecordingConsent: false, audioError: null });
 
     const useRealAudio = canUseRealCapture();

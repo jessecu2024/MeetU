@@ -71,6 +71,13 @@ interface AppSettings {
 /** Connection status for each AI provider */
 export type ConnectionStatus = 'connected' | 'untested' | 'failed' | 'unconfigured';
 
+/** Test result that persists across modal open/close (in-memory only) */
+export interface TestResult {
+  status: 'idle' | 'testing' | 'ok' | 'error';
+  latencyMs?: number;
+  error?: string;
+}
+
 interface SettingsState {
   // ── Legal consent ──
   legalAccepted: boolean;
@@ -100,6 +107,10 @@ interface SettingsState {
   // ── Glossary ──
   customTerms: Array<{ source: string; target: string }>;
 
+  // ── Test results (in-memory only, persist across modal open/close) ──
+  aiTestResults: Partial<Record<AIProviderId, TestResult>>;
+  sttTestResult: TestResult;
+
   // ── Actions ──
   loadFromStore: () => Promise<void>;
   acceptLegal: () => void;
@@ -118,6 +129,8 @@ interface SettingsState {
   updateAppSettings: (settings: Partial<AppSettings>) => void;
   addCustomTerm: (source: string, target: string) => void;
   removeCustomTerm: (index: number) => void;
+  setAiTestResult: (provider: AIProviderId, result: TestResult) => void;
+  setSttTestResult: (result: TestResult) => void;
   openSettingsModal: (tab?: 'ai' | 'stt' | 'profile' | 'app' | unknown) => void;
   closeSettingsModal: () => void;
 }
@@ -178,6 +191,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   // ── Glossary ──
   customTerms: [],
+
+  // ── Test results (in-memory only) ──
+  aiTestResults: {},
+  sttTestResult: { status: 'idle' },
 
   // ── Actions ──
 
@@ -358,6 +375,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       customTerms: state.customTerms.filter((_, i) => i !== index),
     }));
     persist('customTerms', get().customTerms);
+  },
+
+  setAiTestResult: (provider, result) => {
+    set((state) => ({
+      aiTestResults: { ...state.aiTestResults, [provider]: result },
+    }));
+  },
+  setSttTestResult: (result) => {
+    set({ sttTestResult: result });
   },
 
   openSettingsModal: (tab?: unknown) => {
