@@ -19,7 +19,6 @@ declare global {
         isRecording: () => Promise<boolean>;
         getRecordingsPath: () => Promise<string>;
         getDevices: () => Promise<unknown[]>;
-        getDesktopSourceId: () => Promise<string | null>;
         onChunk: (cb: (chunk: ArrayBuffer) => void) => void;
         onLevel: (cb: (level: number) => void) => void;
       };
@@ -69,7 +68,6 @@ interface AppSettings {
   sysAudioDeviceLabel: string;
   outputDeviceId: string;
   outputDeviceLabel: string;
-  captureMode: 'mic_and_system' | 'mic_only' | 'system_only';
 }
 
 /** Connection status for each AI provider */
@@ -193,7 +191,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     sysAudioDeviceLabel: '',
     outputDeviceId: 'default',
     outputDeviceLabel: 'Default Speaker',
-    captureMode: 'mic_and_system',
   },
 
   // ── Glossary ──

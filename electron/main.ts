@@ -163,23 +163,6 @@ function registerIPC(): void {
     return getRecordingsPath();
   });
 
-  // ── Audio: desktopCapturer for system audio ──
-  ipcMain.handle('audio:get-desktop-source-id', async () => {
-    const { desktopCapturer } = await import('electron');
-    try {
-      const sources = await desktopCapturer.getSources({ types: ['screen'] });
-      if (sources.length > 0) {
-        console.log(`[Audio] Desktop sources: ${sources.map(s => s.name).join(', ')}`);
-        return sources[0].id; // Return first screen source
-      }
-      console.warn('[Audio] No desktop sources found');
-      return null;
-    } catch (err) {
-      console.error('[Audio] desktopCapturer.getSources failed:', err);
-      return null;
-    }
-  });
-
   // ── Audio: Legacy ──
   ipcMain.handle('audio:get-devices', async () => {
     return [];

@@ -11,7 +11,7 @@ import type { TestResult } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import { sttRegistry } from '../services/stt-engine/engine-registry';
 import { listAudioDevices, listAudioOutputDevices } from '../services/audio/capture';
-import type { AudioOutputDevice } from '../services/audio/capture';
+import type { AudioInputDevice, AudioOutputDevice } from '../services/audio/capture';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
 import { STT_ENGINE_INFO } from '../services/stt-engine/types';
@@ -41,9 +41,9 @@ export default function SettingsModal() {
   const [editingKey, setEditingKey] = useState('');
   const [editingProvider, setEditingProvider] = useState<AIProviderId | null>(null);
   const [sttKeyDraft, setSttKeyDraft] = useState('');
-  const [audioDevices, setAudioDevices] = useState<Array<{ deviceId: string; label: string; isStereoMix: boolean; isBluetooth: boolean }>>([]);
+  const [audioDevices, setAudioDevices] = useState<AudioInputDevice[]>([]);
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([]);
-  const [showAudioGuide, setShowAudioGuide] = useState(false);
+  const [showStereoMixGuide, setShowStereoMixGuide] = useState(false);
 
   // Read test results from store (persists across modal open/close)
   const aiTestResults = useSettingsStore((s) => s.aiTestResults);
@@ -532,64 +532,121 @@ export default function SettingsModal() {
                 </select>
               </div>
 
-              {/* Audio Capture Mode */}
+              {/* Quick Setup Presets */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                  Audio Capture Mode <span className="text-zinc-400 font-normal">/ 录音模式</span>
+                  Quick Setup <span className="text-zinc-400 font-normal">/ 快捷配置</span>
                 </label>
                 <div className="space-y-1.5">
-                  {([
-                    { id: 'mic_and_system', en: 'Mic + System Audio', zh: '麦克风+系统音频', desc: 'Record your voice and meeting audio / 同时录制你的声音和会议声音' },
-                    { id: 'mic_only', en: 'Mic Only', zh: '仅麦克风', desc: 'Only your microphone / 只录麦克风' },
-                    { id: 'system_only', en: 'System Audio Only', zh: '仅系统音频', desc: 'Only computer audio (no mic) / 只录电脑声音（不开麦）' },
-                  ] as const).map(mode => (
-                    <button key={mode.id}
-                      onClick={() => store.updateAppSettings({ captureMode: mode.id })}
-                      className={`w-full p-2.5 rounded-lg border text-left text-sm transition-all ${
-                        store.appSettings.captureMode === mode.id
-                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                          : 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300'}`}>
-                      <span className="font-medium text-zinc-900 dark:text-white">{mode.en}</span>
-                      <span className="text-zinc-400 ml-1">/ {mode.zh}</span>
-                      <p className="text-xs text-zinc-400 mt-0.5">{mode.desc}</p>
+                  {/* Preset A: Wired headset */}
+                  <button
+                    onClick={() => {
+                      const wired = audioDevices.find(d => d.type === 'mic');
+                      if (wired) store.updateAppSettings({ micDeviceId: wired.deviceId, micDeviceLabel: wired.label });
+                    }}
+                    className="w-full p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 text-left text-xs hover:border-blue-400 transition-colors">
+                    <span className="font-medium text-zinc-900 dark:text-white">🎧 Wired Headset / 有线耳机</span>
+                    <p className="text-zinc-400 mt-0.5">Your voice captured, meeting audio plays normally / 录制你的声音，正常听会议</p>
+                  </button>
+
+                  {/* Preset B: Stereo Mix */}
+                  <button
+                    onClick={() => {
+                      const sm = audioDevices.find(d => d.type === 'stereo_mix');
+                      if (sm) {
+                        store.updateAppSettings({ micDeviceId: sm.deviceId, micDeviceLabel: sm.label });
+                      } else {
+                        setShowStereoMixGuide(true);
+                      }
+                    }}
+                    className="w-full p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 text-left text-xs hover:border-blue-400 transition-colors">
+                    <span className="font-medium text-zinc-900 dark:text-white">🔊 Record Meeting Audio / 录制会议声音</span>
+                    <p className="text-zinc-400 mt-0.5">
+                      {audioDevices.some(d => d.type === 'stereo_mix')
+                        ? 'Stereo Mix available — captures all system audio / 立体声混音可用'
+                        : 'Requires enabling Stereo Mix — click for guide / 需要启用立体声混音'}
+                    </p>
+                  </button>
+
+                  {/* Preset C: Bluetooth */}
+                  {audioDevices.some(d => d.type === 'bluetooth') && (
+                    <button
+                      onClick={() => {
+                        const bt = audioDevices.find(d => d.type === 'bluetooth');
+                        if (bt) store.updateAppSettings({ micDeviceId: bt.deviceId, micDeviceLabel: bt.label });
+                      }}
+                      className="w-full p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 text-left text-xs hover:border-blue-400 transition-colors">
+                      <span className="font-medium text-zinc-900 dark:text-white">🔵 Bluetooth Headset / 蓝牙耳机</span>
+                      <p className="text-zinc-400 mt-0.5">Your voice only. For meeting audio, also enable Stereo Mix / 仅录你的声音。如需会议声音请启用立体声混音</p>
                     </button>
-                  ))}
+                  )}
                 </div>
-                {/* Bluetooth recommendation */}
-                {audioDevices.some(d => d.isBluetooth) && (
-                  <p className="mt-2 text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-2 py-1.5">
-                    For Bluetooth headsets, &quot;System Audio Only&quot; mode is recommended to avoid audio cutoff.
-                    <span className="block text-blue-500 mt-0.5">蓝牙耳机建议使用"仅系统音频"模式以避免声音中断。</span>
-                  </p>
-                )}
               </div>
 
-              {/* Microphone device (Input) — shown unless system_only */}
-              {store.appSettings.captureMode !== 'system_only' && (
-                <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                    Microphone <span className="text-zinc-400 font-normal">/ 麦克风</span>
-                  </label>
-                  <select
-                    value={store.appSettings.micDeviceId}
-                    onChange={(e) => {
-                      const d = audioDevices.find(x => x.deviceId === e.target.value);
-                      store.updateAppSettings({ micDeviceId: e.target.value, micDeviceLabel: d?.label || 'Default' });
-                    }}
-                    className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
-                      bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
-                    {audioDevices.filter(d => !d.isStereoMix).map(d => (
-                      <option key={d.deviceId} value={d.deviceId}>
-                        {d.label}{d.isBluetooth ? ' 🔵' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {audioDevices.filter(d => !d.isStereoMix).length === 0 && (
-                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                      No microphone detected. Please connect a headset with microphone or a USB microphone.
-                      <span className="block text-red-500">未检测到麦克风，请连接带麦耳机或 USB 麦克风。</span>
-                    </p>
-                  )}
+              {/* Audio Input Device selector */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                  Audio Input Device <span className="text-zinc-400 font-normal">/ 音频输入设备</span>
+                </label>
+                <select
+                  value={store.appSettings.micDeviceId}
+                  onChange={(e) => {
+                    const d = audioDevices.find(x => x.deviceId === e.target.value);
+                    store.updateAppSettings({ micDeviceId: e.target.value, micDeviceLabel: d?.label || 'Default' });
+                  }}
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
+                    bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  {audioDevices.map(d => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.badge} {d.label}
+                    </option>
+                  ))}
+                </select>
+                {audioDevices.length === 0 && (
+                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                    No audio input detected. Please connect a microphone.
+                    <span className="block text-red-500">未检测到音频输入设备，请连接麦克风。</span>
+                  </p>
+                )}
+
+                <div className="flex items-center gap-2 mt-1.5">
+                  <button
+                    onClick={() => { listAudioDevices().then(setAudioDevices); listAudioOutputDevices().then(setOutputDevices); }}
+                    className="text-xs px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-600
+                      text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
+                    Refresh Devices / 刷新设备
+                  </button>
+                  <button
+                    onClick={() => setShowStereoMixGuide(!showStereoMixGuide)}
+                    className="text-xs text-blue-600 hover:underline">
+                    {showStereoMixGuide ? 'Hide guide ▲' : 'Stereo Mix guide / 立体声混音指南 ▼'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Stereo Mix setup guide */}
+              {showStereoMixGuide && (
+                <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs space-y-2">
+                  <p className="font-medium text-blue-800 dark:text-blue-300">
+                    How to enable Stereo Mix / 如何启用立体声混音
+                  </p>
+                  <p className="text-blue-700 dark:text-blue-400">
+                    Stereo Mix captures everything playing through your speakers/headphones — perfect for recording meeting audio.
+                  </p>
+                  <p className="text-blue-600 dark:text-blue-500">
+                    立体声混音可以录制扬声器/耳机播放的所有声音——非常适合录制会议声音。
+                  </p>
+                  <ol className="list-decimal list-inside space-y-0.5 text-blue-700 dark:text-blue-400 mt-1">
+                    <li>Right-click volume icon in taskbar → Sounds / 右键任务栏音量图标 → 声音</li>
+                    <li>Click &quot;Recording&quot; tab / 点击&quot;录制&quot;标签</li>
+                    <li>Right-click empty area → &quot;Show Disabled Devices&quot; / 右键空白处 → &quot;显示已禁用的设备&quot;</li>
+                    <li>Right-click &quot;Stereo Mix&quot; → &quot;Enable&quot; / 右键&quot;立体声混音&quot; → &quot;启用&quot;</li>
+                    <li>Click &quot;Apply&quot; → Refresh device list above / 点击&quot;应用&quot; → 刷新上方设备列表</li>
+                  </ol>
+                  <p className="text-blue-600 dark:text-blue-500 mt-1 border-t border-blue-200 dark:border-blue-700 pt-1">
+                    Note: Some audio drivers don&apos;t support Stereo Mix. Use a virtual audio cable like VB-Cable (free) instead.
+                    <span className="block">注意：部分声卡不支持立体声混音。可使用虚拟音频线缆如 VB-Cable（免费）。</span>
+                  </p>
                 </div>
               )}
 
@@ -612,16 +669,6 @@ export default function SettingsModal() {
                     </option>
                   ))}
                 </select>
-              </div>
-
-              {/* Refresh + guide */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => { listAudioDevices().then(setAudioDevices); listAudioOutputDevices().then(setOutputDevices); }}
-                  className="text-xs px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-600
-                    text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
-                  Refresh Devices / 刷新设备
-                </button>
               </div>
 
               {/* Region */}

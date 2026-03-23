@@ -14,7 +14,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isRecording: () => ipcRenderer.invoke('audio:is-recording'),
     getRecordingsPath: () => ipcRenderer.invoke('audio:get-recordings-path'),
     getDevices: () => ipcRenderer.invoke('audio:get-devices'),
-    getDesktopSourceId: () => ipcRenderer.invoke('audio:get-desktop-source-id'),
     onChunk: (cb) =>
       ipcRenderer.on('audio:chunk', (_e, chunk) => cb(chunk)),
     onLevel: (cb) =>

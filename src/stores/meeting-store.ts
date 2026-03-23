@@ -30,11 +30,11 @@ interface MeetingState {
 
   // ── Audio state ──
   micActive: boolean;
-  sysActive: boolean;
   currentVolume: number;
   useMock: boolean;
   audioError: string | null;
   bluetoothDetected: boolean;
+  deviceLabel: string;
 
   // ── STT state ──
   sttActive: boolean;
@@ -79,11 +79,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   meetingId: null,
 
   micActive: false,
-  sysActive: false,
   currentVolume: 0,
   useMock: false,
   audioError: null,
   bluetoothDetected: false,
+  deviceLabel: '',
 
   sttActive: false,
   sttMock: false,
@@ -122,11 +122,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const useRealAudio = canUseRealCapture();
     const audioManager = useRealAudio ? captureManager : mockCaptureManager;
 
-    // Set audio input devices and capture mode from settings
+    // Set audio input device from settings
     if (useRealAudio) {
-      const { micDeviceId, sysAudioDeviceId, captureMode } = useSettingsStore.getState().appSettings;
-      captureManager.setDevices(micDeviceId, sysAudioDeviceId);
-      captureManager.setCaptureMode(captureMode);
+      const { micDeviceId } = useSettingsStore.getState().appSettings;
+      captureManager.setDevice(micDeviceId);
     }
 
     // Create meeting in database
@@ -205,11 +204,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const unsubscribe = audioManager.onChange((state) => {
       set({
         micActive: state.micActive ?? get().micActive,
-        sysActive: state.sysActive ?? get().sysActive,
         currentVolume: state.volume ?? get().currentVolume,
         recordingFilePath: state.filePath ?? get().recordingFilePath,
         audioError: state.error ?? get().audioError,
         bluetoothDetected: state.bluetoothDetected ?? get().bluetoothDetected,
+        deviceLabel: state.deviceLabel ?? get().deviceLabel,
       });
     });
 
@@ -362,7 +361,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       recordingStartTime: null,
       currentVolume: 0,
       micActive: false,
-      sysActive: false,
+      deviceLabel: '',
       recordingFilePath: tempPath || get().recordingFilePath,
       sttActive: false,
       _durationInterval: null,
