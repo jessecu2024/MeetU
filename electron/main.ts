@@ -58,6 +58,23 @@ function createWindow(): void {
     mainWindow = null;
   });
 
+  // ── Grant media permissions (microphone access for getUserMedia) ──
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    const allowed = ['media', 'audioCapture', 'microphone'];
+    if (allowed.includes(permission)) {
+      console.log(`[Main] Permission granted: ${permission}`);
+      callback(true);
+    } else {
+      console.log(`[Main] Permission denied: ${permission}`);
+      callback(false);
+    }
+  });
+
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    const allowed = ['media', 'audioCapture', 'microphone'];
+    return allowed.includes(permission);
+  });
+
   // ── Bypass CORS for AI API endpoints ──
   // Desktop apps don't need CORS restrictions; AI providers don't set CORS headers for browser origins
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {

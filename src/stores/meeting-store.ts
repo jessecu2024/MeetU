@@ -100,14 +100,19 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
   requestStartRecording: () => {
     if (get().consentDismissedThisSession) {
-      get().confirmStartRecording();
+      get().confirmStartRecording().catch((err) => {
+        console.error('[MeetingStore] Recording start failed:', err);
+        set({
+          audioError: err instanceof Error ? err.message : 'Failed to start recording / 录音启动失败',
+        });
+      });
     } else {
       set({ showRecordingConsent: true });
     }
   },
 
   confirmStartRecording: async () => {
-    set({ showRecordingConsent: false });
+    set({ showRecordingConsent: false, audioError: null });
 
     const useRealAudio = canUseRealCapture();
     const audioManager = useRealAudio ? captureManager : mockCaptureManager;
@@ -272,6 +277,13 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       });
     } catch (err) {
       console.error('[MeetingStore] Start failed:', err);
+      // Clean up services that were already started
+      try {
+        activeSttEngine.stopSession().catch(() => {});
+        translationService.stop();
+        mentionDetector.stop();
+        summarizer.stop();
+      } catch { /* cleanup best-effort */ }
       set({
         audioError: err instanceof Error ? err.message : 'Failed to start / 启动失败',
       });

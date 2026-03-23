@@ -131,6 +131,13 @@ export default function Header() {
           </div>
         )}
 
+        {/* Audio error when NOT recording (e.g. start failure) */}
+        {!isRecording && audioError && (
+          <p className="mt-2 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">
+            {audioError}
+          </p>
+        )}
+
         {/* In-app save confirm */}
         {showSaveConfirm && (
           <div className="mt-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">

@@ -74,7 +74,12 @@ export default function App() {
       {settingsModalOpen && <SettingsModal />}
       {showRecordingConsent && (
         <RecordingConsent
-          onConfirm={() => { dismissConsent(); confirmStartRecording(); }}
+          onConfirm={() => {
+            dismissConsent();
+            confirmStartRecording().catch((err) => {
+              console.error('[App] Recording start failed:', err);
+            });
+          }}
           onCancel={cancelRecording}
         />
       )}

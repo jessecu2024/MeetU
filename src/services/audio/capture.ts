@@ -64,10 +64,15 @@ class AudioCaptureManager {
     console.log('[Audio] Starting capture (MediaRecorder, no AudioContext)');
 
     // Start file recording in main process
-    const filePath = await window.electronAPI?.audio.startRecording() as string;
+    let filePath = '';
+    try {
+      filePath = await window.electronAPI?.audio.startRecording() as string || '';
+    } catch (err) {
+      console.error('[Audio] Failed to start file recording:', err);
+    }
     this.emit({ recording: true, filePath, error: null });
 
-    // Stream 1: Microphone
+    // Stream 1: Microphone (with fallback to default if specific device fails)
     try {
       const micConstraints: MediaTrackConstraints = this.micDeviceId === 'default'
         ? { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -76,8 +81,22 @@ class AudioCaptureManager {
       console.log('[Audio] Mic stream OK');
       this.emit({ micActive: true });
     } catch (err) {
-      console.warn('[Audio] Mic failed:', err);
-      this.emit({ micActive: false, error: 'Mic access denied / 麦克风权限被拒绝' });
+      console.warn('[Audio] Mic failed with selected device, trying default:', err);
+      // Fallback: try default mic if specific device failed
+      if (this.micDeviceId !== 'default') {
+        try {
+          this.micStream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          console.log('[Audio] Mic stream OK (fallback to default)');
+          this.emit({ micActive: true, error: null });
+        } catch (fallbackErr) {
+          console.warn('[Audio] Default mic also failed:', fallbackErr);
+          this.emit({ micActive: false, error: 'Mic access denied / 麦克风权限被拒绝' });
+        }
+      } else {
+        this.emit({ micActive: false, error: 'Mic access denied / 麦克风权限被拒绝' });
+      }
     }
 
     // Stream 2: System audio (Stereo Mix) — only if configured
@@ -89,8 +108,8 @@ class AudioCaptureManager {
         console.log('[Audio] System audio stream OK (Stereo Mix)');
         this.emit({ sysActive: true });
       } catch (err) {
-        console.warn('[Audio] System audio failed:', err);
-        this.emit({ sysActive: false });
+        console.warn('[Audio] System audio device not available:', err);
+        this.emit({ sysActive: false, error: `System audio device not found — check Settings / 系统音频设备未找到，请检查设置` });
       }
     }
 
@@ -110,22 +129,32 @@ class AudioCaptureManager {
     }
 
     // Use MediaRecorder — NO AudioContext needed
-    this.recorder = new MediaRecorder(combinedStream, {
-      mimeType: 'audio/webm;codecs=opus',
-    });
+    try {
+      // Try webm/opus first, fall back to any supported type
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : undefined;
+      this.recorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : {});
 
-    this.recorder.ondataavailable = async (event) => {
-      if (event.data.size > 0) {
-        const buffer = await event.data.arrayBuffer();
-        // Feed to STT engine
-        for (const cb of this.audioChunkCallbacks) cb(buffer);
-        // Feed to file recording in main process
-        window.electronAPI?.audio.appendChunk(buffer);
-      }
-    };
+      this.recorder.ondataavailable = async (event) => {
+        if (event.data.size > 0) {
+          const buffer = await event.data.arrayBuffer();
+          // Feed to STT engine
+          for (const cb of this.audioChunkCallbacks) cb(buffer);
+          // Feed to file recording in main process
+          window.electronAPI?.audio.appendChunk(buffer);
+        }
+      };
 
-    this.recorder.start(250); // produce a chunk every 250ms
-    console.log('[Audio] MediaRecorder started (webm/opus, 250ms chunks)');
+      this.recorder.start(250); // produce a chunk every 250ms
+      console.log(`[Audio] MediaRecorder started (${mimeType || 'default'}, 250ms chunks)`);
+    } catch (err) {
+      console.error('[Audio] MediaRecorder creation failed:', err);
+      this.emit({ error: `MediaRecorder failed: ${err instanceof Error ? err.message : 'Unknown'} / 录音器创建失败` });
+      return;
+    }
 
     // Simple volume estimation based on data size (no AudioContext needed)
     this.volumeInterval = setInterval(() => {
