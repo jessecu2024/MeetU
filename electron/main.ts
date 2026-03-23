@@ -245,17 +245,28 @@ function registerIPC(): void {
     console.log(`[STT] Testing connection: ${engineId}`);
     if (engineId === 'deepgram') {
       try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
         const res = await fetch('https://api.deepgram.com/v1/projects', {
           headers: { 'Authorization': `Token ${apiKey}` },
+          signal: controller.signal,
         });
+        clearTimeout(timer);
         console.log(`[STT] Deepgram test: ${res.status}`);
         if (res.ok) return { ok: true };
         const body = await res.text().catch(() => '');
+        if (res.status === 401 || res.status === 403) {
+          return { ok: false, error: `API Key is invalid (HTTP ${res.status}) / API Key 无效` };
+        }
         return { ok: false, error: `HTTP ${res.status}: ${body.substring(0, 200)}` };
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Network error';
-        console.error(`[STT] Deepgram test error:`, msg);
-        return { ok: false, error: msg };
+        const code = (err as NodeJS.ErrnoException).code;
+        console.error(`[STT] Deepgram test error:`, msg, code || '');
+        if (msg.includes('abort') || code === 'ABORT_ERR') {
+          return { ok: false, error: 'Connection timeout. Please check VPN / 连接超时，请检查 VPN' };
+        }
+        return { ok: false, error: `Network error: ${msg}. Please check VPN / 网络错误，请检查 VPN` };
       }
     }
     return { ok: false, error: `Engine ${engineId} test not implemented` };
@@ -267,24 +278,44 @@ function registerIPC(): void {
     const WebSocket = (await import('ws')).default;
     const qs = new URLSearchParams(params).toString();
     const url = `wss://api.deepgram.com/v1/listen?${qs}`;
-    console.log(`[STT] Deepgram WebSocket connecting: ${url}`);
+    const maskedKey = apiKey.length > 8 ? apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4) : '****';
+    console.log(`[STT] Deepgram WebSocket connecting to: ${url}`);
+    console.log(`[STT] Authorization: Token ${maskedKey}`);
+
+    const TIMEOUT_MS = 30000; // 30s — VPN connections may be slow
+    let resolved = false;
 
     return new Promise<{ ok: boolean; error?: string }>((resolve) => {
-      dgWebSocket = new WebSocket(url, {
-        headers: { 'Authorization': `Token ${apiKey}` },
-      });
+      const safeResolve = (result: { ok: boolean; error?: string }) => {
+        if (!resolved) { resolved = true; resolve(result); }
+      };
+
+      try {
+        dgWebSocket = new WebSocket(url, {
+          headers: { 'Authorization': `Token ${apiKey}` },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        console.error(`[STT] WebSocket constructor failed:`, msg);
+        safeResolve({ ok: false, error: `Cannot create WebSocket: ${msg}` });
+        return;
+      }
 
       const timeout = setTimeout(() => {
-        console.error('[STT] Deepgram WebSocket connection timeout');
+        console.error(`[STT] Deepgram WebSocket connection timeout after ${TIMEOUT_MS / 1000}s`);
+        console.error(`[STT] WebSocket readyState: ${dgWebSocket?.readyState} (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)`);
         dgWebSocket?.close();
         dgWebSocket = null;
-        resolve({ ok: false, error: 'Connection timeout (10s)' });
-      }, 10000);
+        safeResolve({
+          ok: false,
+          error: `Connection timeout (${TIMEOUT_MS / 1000}s). Cannot connect to Deepgram. Please check: 1) VPN is enabled 2) API Key is valid / 无法连接 Deepgram，请检查：1) VPN 是否开启 2) API Key 是否有效`,
+        });
+      }, TIMEOUT_MS);
 
       dgWebSocket.on('open', () => {
         clearTimeout(timeout);
-        console.log('[STT] Deepgram WebSocket connected');
-        resolve({ ok: true });
+        console.log('[STT] Deepgram WebSocket connected successfully');
+        safeResolve({ ok: true });
       });
 
       dgWebSocket.on('message', (data: Buffer) => {
@@ -311,16 +342,41 @@ function registerIPC(): void {
 
       dgWebSocket.on('error', (err: Error) => {
         clearTimeout(timeout);
-        console.error('[STT] Deepgram WebSocket error:', err.message);
-        if (!dgWebSocket || dgWebSocket.readyState !== WebSocket.OPEN) {
-          resolve({ ok: false, error: `WebSocket error: ${err.message}` });
+        // Extract underlying network error details
+        const cause = (err as NodeJS.ErrnoException).code;
+        const detail = cause ? `${err.message} (${cause})` : err.message;
+        console.error(`[STT] Deepgram WebSocket error: ${detail}`);
+
+        if (!resolved) {
+          let userMsg = `Cannot connect to Deepgram: ${detail}. `;
+          if (cause === 'ECONNREFUSED' || cause === 'ETIMEDOUT' || cause === 'ENOTFOUND') {
+            userMsg += 'Please check: 1) VPN is enabled 2) Network is connected / 请检查：1) VPN 是否开启 2) 网络是否正常';
+          } else if (detail.includes('401') || detail.includes('403')) {
+            userMsg += 'API Key may be invalid / API Key 可能无效';
+          } else {
+            userMsg += 'Please check: 1) VPN is enabled 2) API Key is valid / 请检查：1) VPN 是否开启 2) API Key 是否有效';
+          }
+          safeResolve({ ok: false, error: userMsg });
         }
-        mainWindow?.webContents.send('stt:error', err.message);
+        mainWindow?.webContents.send('stt:error', detail);
       });
 
       dgWebSocket.on('close', (code: number, reason: Buffer) => {
-        console.log(`[STT] Deepgram WebSocket closed: code=${code} reason=${reason.toString()}`);
+        clearTimeout(timeout);
+        const reasonStr = reason.toString();
+        console.log(`[STT] Deepgram WebSocket closed: code=${code} reason="${reasonStr}"`);
         dgWebSocket = null;
+
+        // If closed before open resolved, treat as connection failure
+        if (!resolved) {
+          let userMsg = `Deepgram connection closed (code ${code})`;
+          if (code === 1008 || reasonStr.includes('auth')) {
+            userMsg += '. API Key is invalid / API Key 无效';
+          } else {
+            userMsg += '. Please check: 1) VPN is enabled 2) API Key is valid / 请检查：1) VPN 是否开启 2) API Key 是否有效';
+          }
+          safeResolve({ ok: false, error: userMsg });
+        }
         mainWindow?.webContents.send('stt:closed');
       });
     });
