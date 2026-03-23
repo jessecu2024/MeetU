@@ -20,6 +20,23 @@ export type CaptureListener = (state: Partial<CaptureState>) => void;
 /** Callback receives raw webm/opus chunks (ArrayBuffer) */
 export type AudioChunkCallback = (data: ArrayBuffer) => void;
 
+/** Map getUserMedia error names to user-friendly bilingual messages */
+function mapMicError(err: unknown): string {
+  const name = (err as DOMException)?.name;
+  switch (name) {
+    case 'NotAllowedError':
+      return 'Microphone permission denied. Check Windows Settings → Privacy → Microphone. / 麦克风权限被拒绝，请检查 Windows 设置→隐私→麦克风';
+    case 'NotFoundError':
+      return 'No microphone found. Please connect a microphone. / 未找到麦克风，请连接麦克风设备';
+    case 'NotReadableError':
+      return 'Microphone in use by another app. / 麦克风被其他应用占用';
+    case 'OverconstrainedError':
+      return 'Selected microphone not available. / 选中的麦克风不可用';
+    default:
+      return `Microphone error: ${(err as Error)?.message || name || 'Unknown'} / 麦克风错误`;
+  }
+}
+
 class AudioCaptureManager {
   private micStream: MediaStream | null = null;
   private sysStream: MediaStream | null = null;
@@ -72,43 +89,56 @@ class AudioCaptureManager {
     }
     this.emit({ recording: true, filePath, error: null });
 
-    // Stream 1: Microphone (with fallback to default if specific device fails)
+    // Step 1: Request generic mic permission first (triggers OS permission dialog)
     try {
-      const micConstraints: MediaTrackConstraints = this.micDeviceId === 'default'
-        ? { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-        : { deviceId: { exact: this.micDeviceId }, channelCount: 1 };
-      this.micStream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints });
-      console.log('[Audio] Mic stream OK');
-      this.emit({ micActive: true });
-    } catch (err) {
-      console.warn('[Audio] Mic failed with selected device, trying default:', err);
-      // Fallback: try default mic if specific device failed
-      if (this.micDeviceId !== 'default') {
-        try {
-          this.micStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-          });
-          console.log('[Audio] Mic stream OK (fallback to default)');
-          this.emit({ micActive: true, error: null });
-        } catch (fallbackErr) {
-          console.warn('[Audio] Default mic also failed:', fallbackErr);
-          this.emit({ micActive: false, error: 'Mic access denied / 麦克风权限被拒绝' });
+      const permStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      permStream.getTracks().forEach(t => t.stop());
+      console.log('[Audio] Mic permission granted');
+    } catch (permErr) {
+      console.error('[Audio] Mic permission request failed:', (permErr as DOMException)?.name, permErr);
+      this.emit({ micActive: false, error: mapMicError(permErr) });
+      // Don't return — still try system audio below
+    }
+
+    // Step 2: Get mic stream with selected device (fallback to default)
+    if (!this.micStream) {
+      try {
+        const micConstraints: MediaTrackConstraints = this.micDeviceId === 'default'
+          ? { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          : { deviceId: { exact: this.micDeviceId }, channelCount: 1 };
+        this.micStream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints });
+        console.log('[Audio] Mic stream OK —', this.micStream.getAudioTracks()[0]?.label);
+        this.emit({ micActive: true, error: null });
+      } catch (err) {
+        console.warn('[Audio] Mic failed with selected device:', (err as DOMException)?.name);
+        // Fallback to default if specific device failed
+        if (this.micDeviceId !== 'default') {
+          try {
+            this.micStream = await navigator.mediaDevices.getUserMedia({
+              audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            });
+            console.log('[Audio] Mic stream OK (fallback to default) —', this.micStream.getAudioTracks()[0]?.label);
+            this.emit({ micActive: true, error: null });
+          } catch (fallbackErr) {
+            console.error('[Audio] Default mic also failed:', (fallbackErr as DOMException)?.name);
+            this.emit({ micActive: false, error: mapMicError(fallbackErr) });
+          }
+        } else {
+          this.emit({ micActive: false, error: mapMicError(err) });
         }
-      } else {
-        this.emit({ micActive: false, error: 'Mic access denied / 麦克风权限被拒绝' });
       }
     }
 
-    // Stream 2: System audio (Stereo Mix) — only if configured
+    // Step 3: System audio (Stereo Mix) — only if configured
     if (this.sysDeviceId) {
       try {
         this.sysStream = await navigator.mediaDevices.getUserMedia({
           audio: { deviceId: { exact: this.sysDeviceId }, channelCount: 1 },
         });
-        console.log('[Audio] System audio stream OK (Stereo Mix)');
+        console.log('[Audio] System audio stream OK —', this.sysStream.getAudioTracks()[0]?.label);
         this.emit({ sysActive: true });
       } catch (err) {
-        console.warn('[Audio] System audio device not available:', err);
+        console.warn('[Audio] System audio device not available:', (err as DOMException)?.name);
         this.emit({ sysActive: false, error: `System audio device not found — check Settings / 系统音频设备未找到，请检查设置` });
       }
     }

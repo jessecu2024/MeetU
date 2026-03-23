@@ -5,11 +5,18 @@
 
 import { useSettingsStore } from '../stores/settings-store';
 import { useMeetingStore } from '../stores/meeting-store';
+import { STT_ENGINE_INFO } from '../services/stt-engine/types';
 
 export default function Header() {
   const openSettings = useSettingsStore((s) => s.openSettingsModal);
   const micLabel = useSettingsStore((s) => s.appSettings.micDeviceLabel);
   const sysLabel = useSettingsStore((s) => s.appSettings.sysAudioDeviceLabel);
+  const defaultProvider = useSettingsStore((s) => s.aiConfig.defaultProvider);
+  const hasAiKey = useSettingsStore((s) => !!s.aiConfig.apiKeys[s.aiConfig.defaultProvider]);
+  const aiTestResult = useSettingsStore((s) => s.aiTestResults[s.aiConfig.defaultProvider]);
+  const sttEngineId = useSettingsStore((s) => s.sttEngine);
+  const hasSttKey = useSettingsStore((s) => !!s.sttApiKeys[s.sttEngine]);
+  const sttTestResult = useSettingsStore((s) => s.sttTestResult);
   const {
     isRecording, recordingDuration, currentVolume,
     micActive, sysActive, useMock,
@@ -85,6 +92,75 @@ export default function Header() {
             </span>
           )}
         </div>
+
+        {/* Service status indicators — always visible */}
+        {!isRecording && !showSaveConfirm && !lastSaveResult && (
+          <div className="flex items-center gap-2 mt-2">
+            {/* AI Provider status */}
+            <button
+              onClick={() => openSettings('ai')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer ${
+                !hasAiKey
+                  ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                  : aiTestResult?.status === 'ok'
+                    ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 hover:bg-green-100'
+                    : aiTestResult?.status === 'error'
+                      ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100'
+                      : aiTestResult?.status === 'testing'
+                        ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 hover:bg-amber-100'
+              }`}
+              title={aiTestResult?.error || (hasAiKey ? 'Click to open AI settings' : 'No API Key')}
+            >
+              {aiTestResult?.status === 'testing' ? (
+                <span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full" />
+              ) : !hasAiKey ? (
+                <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
+              ) : aiTestResult?.status === 'ok' ? (
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+              ) : aiTestResult?.status === 'error' ? (
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+              ) : (
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              )}
+              AI: {!hasAiKey ? 'Not configured' : defaultProvider.charAt(0).toUpperCase() + defaultProvider.slice(1)}
+              {hasAiKey && aiTestResult?.status === 'ok' && ' ✓'}
+              {hasAiKey && aiTestResult?.status === 'error' && ' ✗'}
+            </button>
+
+            {/* STT Engine status */}
+            <button
+              onClick={() => openSettings('stt')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer ${
+                !hasSttKey && sttEngineId !== 'local_whisper'
+                  ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                  : sttTestResult?.status === 'ok'
+                    ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 hover:bg-green-100'
+                    : sttTestResult?.status === 'error'
+                      ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100'
+                      : sttTestResult?.status === 'testing'
+                        ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 hover:bg-amber-100'
+              }`}
+              title={sttTestResult?.error || 'Click to open STT settings'}
+            >
+              {sttTestResult?.status === 'testing' ? (
+                <span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full" />
+              ) : !hasSttKey && sttEngineId !== 'local_whisper' ? (
+                <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
+              ) : sttTestResult?.status === 'ok' ? (
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+              ) : sttTestResult?.status === 'error' ? (
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+              ) : (
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              )}
+              STT: {STT_ENGINE_INFO.find(e => e.id === sttEngineId)?.nameEn || sttEngineId}
+              {sttTestResult?.status === 'ok' && ' ✓'}
+              {sttTestResult?.status === 'error' && ' ✗'}
+            </button>
+          </div>
+        )}
 
         {/* Audio status bar */}
         {isRecording && (

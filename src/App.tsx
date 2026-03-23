@@ -8,6 +8,7 @@ import { useSettingsStore } from './stores/settings-store';
 import { useMeetingStore } from './stores/meeting-store';
 import { useMentionStore } from './stores/mention-store';
 import { initializeProviders, providerRegistry } from './services/ai-provider';
+import { sttRegistry } from './services/stt-engine/engine-registry';
 import LegalDisclaimer from './components/LegalDisclaimer';
 import OnboardingWizard from './components/OnboardingWizard';
 import SettingsModal from './components/SettingsModal';
@@ -46,6 +47,44 @@ export default function App() {
       const state = useSettingsStore.getState();
       if (state.aiConfig.apiKeys) {
         providerRegistry.loadConfig(state.aiConfig);
+      }
+
+      // Auto-test configured AI provider on startup (silent, background)
+      const defaultPid = state.aiConfig.defaultProvider;
+      const defaultKey = state.aiConfig.apiKeys[defaultPid];
+      if (defaultKey) {
+        const { setAiTestResult } = useSettingsStore.getState();
+        setAiTestResult(defaultPid, { status: 'testing' });
+        const provider = providerRegistry.get(defaultPid);
+        if (provider) {
+          const t0 = Date.now();
+          provider.testConnection()
+            .then(r => setAiTestResult(defaultPid, r.ok
+              ? { status: 'ok', latencyMs: Date.now() - t0 }
+              : { status: 'error', error: r.error || 'Connection failed' }))
+            .catch(e => setAiTestResult(defaultPid, {
+              status: 'error', error: e instanceof Error ? e.message : 'Unknown error',
+            }));
+        }
+      }
+
+      // Auto-test configured STT engine on startup
+      const sttKey = state.sttApiKeys[state.sttEngine];
+      if (sttKey) {
+        const { setSttTestResult } = useSettingsStore.getState();
+        setSttTestResult({ status: 'testing' });
+        const engine = sttRegistry.get(state.sttEngine);
+        if (engine) {
+          engine.setApiKey(sttKey);
+          const t0 = Date.now();
+          engine.testConnection()
+            .then(r => setSttTestResult(r.ok
+              ? { status: 'ok', latencyMs: Date.now() - t0 }
+              : { status: 'error', error: r.error || 'Connection failed' }))
+            .catch(e => setSttTestResult({
+              status: 'error', error: e instanceof Error ? e.message : 'Unknown error',
+            }));
+        }
       }
     });
   }, [loadFromStore]);

@@ -58,21 +58,14 @@ function createWindow(): void {
     mainWindow = null;
   });
 
-  // ── Grant media permissions (microphone access for getUserMedia) ──
+  // ── Grant all permissions (desktop app — no need for browser-style restrictions) ──
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    const allowed = ['media', 'audioCapture', 'microphone'];
-    if (allowed.includes(permission)) {
-      console.log(`[Main] Permission granted: ${permission}`);
-      callback(true);
-    } else {
-      console.log(`[Main] Permission denied: ${permission}`);
-      callback(false);
-    }
+    console.log(`[Main] Permission granted: ${permission}`);
+    callback(true);
   });
 
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    const allowed = ['media', 'audioCapture', 'microphone'];
-    return allowed.includes(permission);
+  session.defaultSession.setPermissionCheckHandler(() => {
+    return true;
   });
 
   // ── Bypass CORS for AI API endpoints ──
