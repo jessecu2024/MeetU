@@ -18,7 +18,7 @@ class STTEngineRegistry {
   constructor() {
     this.engines.set('deepgram', new DeepgramEngine());
     this.engines.set('whisper_api', new WhisperAPIEngine());
-    this.engines.set('xfyun', new XfyunEngine());          // beta — auth signing incomplete
+    this.engines.set('xfyun', new XfyunEngine());          // planned — HMAC-SHA256 signing not yet implemented
     this.engines.set('local_whisper', new LocalWhisperEngine()); // planned — whisper.cpp not yet integrated
   }
 

@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import type { AIProviderId, AIFunction, UserAIConfig } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
-import { migrateSTTConfig } from '../services/stt-engine/types';
+import { migrateSTTConfig, getDefaultSTTEngineForRegion, isSelectableSTTEngine } from '../services/stt-engine/types';
 
 // Type for electron API (injected via preload)
 declare global {
@@ -292,7 +292,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         ...state.aiConfig,
         defaultProvider: region === 'china' ? 'deepseek' : 'claude',
       },
-      sttEngine: region === 'china' ? 'xfyun' : 'deepgram',
+      // Delegate to the helper instead of hard-coding xfyun for China.
+      // The helper walks a fallback list and only returns engines for which
+      // isSelectableSTTEngine is true, so this stays correct even when an
+      // engine's status flips (e.g. xfyun → planned today, future Stable).
+      sttEngine: getDefaultSTTEngineForRegion(region),
     }));
     persist('userRegion', region);
   },
@@ -368,8 +372,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setSTTEngine: (id) => {
-    set({ sttEngine: id });
-    persist('sttEngine', id);
+    // Store-level guard: reject any attempt to set the active engine to a
+    // planned / non-selectable id, even if a UI gating bug or stale code
+    // path lets one through. The previous behavior relied entirely on
+    // SettingsModal / OnboardingWizard never offering planned engines as
+    // clickable — that's too much rope. Now the store itself normalizes:
+    // selectable values are accepted; everything else is replaced with the
+    // region default (which the store has already validated).
+    const safeId = isSelectableSTTEngine(id)
+      ? id
+      : getDefaultSTTEngineForRegion(get().userRegion);
+    set({ sttEngine: safeId });
+    persist('sttEngine', safeId);
   },
 
   setSTTApiKey: (engine, key) => {

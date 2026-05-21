@@ -9,10 +9,15 @@
 export type STTEngineId =
   | 'deepgram'        // Deepgram (global) — stable
   | 'whisper_api'     // OpenAI Whisper API — stable
-  | 'xfyun'           // iFlytek (China) — beta (auth signature incomplete)
+  | 'xfyun'           // iFlytek (China) — planned (HMAC-SHA256 signing not yet implemented)
   | 'local_whisper';  // Local Whisper.cpp (offline) — planned, not yet usable
 
-/** Implementation status — used to gate UI and warn users honestly */
+/**
+ * Implementation status — used to gate UI and warn users honestly.
+ * `beta` is still a legal value (engines that work but have rough edges)
+ * but no engine currently uses it; both incomplete engines are 'planned'
+ * because they cannot complete a real session today.
+ */
 export type STTEngineStatus = 'stable' | 'beta' | 'planned';
 
 /** STT configuration */
