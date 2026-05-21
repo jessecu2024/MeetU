@@ -7,13 +7,17 @@ export const LEGAL_SECTIONS = [
   {
     titleEn: '1. Recording Compliance',
     titleZh: '1. 录音合规责任',
-    bodyEn: `This application can capture system audio from your device and record it. Before using this feature, you are responsible for ensuring:
+    bodyEn: `This application records audio from the input device you select via your operating system — by default, your microphone. If you want to capture other meeting participants' voices (not only your own), you can route the meeting application's output through a loopback device (Windows: Stereo Mix; macOS: a non-GPL virtual audio cable) and select that device as the input. Native single-application system-audio capture (macOS ScreenCaptureKit / Windows WASAPI Loopback) is on the roadmap but not yet implemented.
+
+Before using this feature, you are responsible for ensuring:
 • You comply with all applicable laws and regulations regarding audio recording in your jurisdiction
 • You have obtained informed consent from all meeting participants (where required by applicable law)
 • You will not use recordings in any way that violates others' privacy rights
 
 Recording laws vary significantly across jurisdictions. In some regions, all participants must consent to be legally recorded; in others, only one party's consent is required. Violating recording laws may constitute a criminal or civil offense. Please familiarize yourself with the specific regulations in your jurisdiction.`,
-    bodyZh: `本应用可以捕获您设备上的系统音频并进行录制。在使用本功能前，您有责任确保：
+    bodyZh: `本应用通过您在操作系统中选择的音频输入设备进行录制 — 默认为麦克风。如需同时录制其他会议参与者的声音（而不仅是您自己的），可在系统层启用 loopback（Windows：立体声混音；macOS：非 GPL 的虚拟音频线缆），并在应用内选择该 loopback 设备作为输入。原生的"按应用捕获系统音频"功能（macOS ScreenCaptureKit / Windows WASAPI Loopback）在路线图中尚未发布。
+
+使用本功能前，您有责任确保：
 • 已遵守您所在地区关于录音的法律法规
 • 已获得所有会议参与者的知情同意（如适用法律要求）
 • 不会将录音用于违反他人隐私权的目的
@@ -52,14 +56,16 @@ MeetU 本身不会做的事：
   {
     titleEn: '3. API Key Security',
     titleZh: '3. API Key 安全',
-    bodyEn: `• Your API Keys are stored encrypted on your local device only
-• This application will NEVER send your API Keys to our servers
-• AI requests are sent directly from your device to the AI service provider you selected
-• API usage fees are settled directly between you and the respective AI service provider`,
-    bodyZh: `• 您的 API Key 通过加密方式存储在您的本地设备上
-• 本应用不会将您的 API Key 发送至我们的服务器
-• AI 请求直接从您的设备发往您选择的 AI 服务商
-• API 使用费用由您与对应 AI 服务商之间直接结算`,
+    bodyEn: `• Your API Keys are stored encrypted on your local device using your OS's secure storage (Electron safeStorage)
+• MeetU operates no servers, so your API Keys are never sent to MeetU
+• Your API Keys ARE sent — by your device — directly to the STT provider and AI provider you configured, attached as authentication credentials on each request (e.g. as the Authorization / api-key header that those providers' APIs require)
+• Each request goes only between your device and the corresponding provider; nothing transits any MeetU infrastructure
+• API usage fees are settled directly between you and the respective STT / AI service providers`,
+    bodyZh: `• 您的 API Key 通过加密方式存储在您本地设备的操作系统安全存储中（Electron safeStorage）
+• MeetU 不运行任何服务器，因此您的 API Key 永远不会发送到 MeetU
+• API Key 会由您的设备直接发送至您配置的 STT 服务商和 AI 服务商，作为每次请求的认证凭据（如 Authorization / api-key 请求头，由对应服务商的 API 要求）
+• 每次请求只发生在您的设备和对应服务商之间，不经过任何 MeetU 设施
+• API 使用费用由您与对应 STT / AI 服务商之间直接结算`,
   },
   {
     titleEn: '4. Disclaimer',
