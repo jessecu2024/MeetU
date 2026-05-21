@@ -301,7 +301,7 @@ npm run build        # 构建发布版
 
 ### Word 格式（🔜 计划中，暂不可用）
 
-应用界面上的 **"导出 Word / Export Word"** 按钮目前是禁用状态，悬停会显示 "Word (.docx) export is not yet implemented." 的提示。`docx` 依赖已加入但生成器尚未实现，将在后续版本提供。**请先使用上方的 Markdown 导出**，需要 Word 格式时可在 Word/Pages/Google Docs 中打开 `.md` 文件转换。
+应用界面上的 **"导出 Word / Export Word"** 按钮目前是禁用状态，悬停会显示 "Word (.docx) export is not yet implemented." 的提示。曾装的 `docx` 依赖因生成器未实现已删除（避免形成幽灵 dep），真实现时会重新加回并启用按钮。**请先使用上方的 Markdown 导出**，需要 Word 格式时可在 Word/Pages/Google Docs 中打开 `.md` 文件转换。
 
 **默认保存位置**：`~/MeetingAI/minutes/`
 

@@ -13,9 +13,8 @@ The following packages are licensed under the MIT License:
 - **Vite** — Copyright (c) Evan You
 - **better-sqlite3** — Copyright (c) Joshua Wise
 - **electron-store** — Copyright (c) Sindre Sorhus
-- **docx** — Copyright (c) Dolan Miu
 - **ws** — Copyright (c) Einar Otto Stangvik
-- **whisper.cpp** — Copyright (c) Georgi Gerganov
+- **whisper.cpp** — Copyright (c) Georgi Gerganov (will become a runtime dependency when Local Whisper integration ships; tracked here so the eventual integration does not forget the attribution)
 
 MIT License Text:
 Permission is hereby granted, free of charge, to any person obtaining a copy

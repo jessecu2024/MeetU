@@ -151,8 +151,9 @@ WASAPI Loopback 在路线图中尚未发布。
 | whisper.cpp | MIT | ✅ 安全 |
 | libopus | BSD-3-Clause | ✅ 安全 |
 | ws (WebSocket) | MIT | ✅ 安全 |
-| docx (docx-js) | MIT | ✅ 安全 |
 | lucide-react | ISC | ✅ 安全 |
+
+> `docx` (docx-js, MIT) 和 `pdfkit` (MIT) 之前列在此表中。两者都被记入"暂时移除"清单：在生成器代码真正落地前不保留依赖，避免幽灵 dep。Word/PDF 导出真正实现时再加回依赖与许可证条目。
 
 > **禁止清单：** BlackHole(GPL-3.0)、Soundflower(GPL)、ffmpeg CLI(GPL)、任何 GPL/AGPL 库。引入新依赖前必须运行 `npm run check-licenses`。
 
