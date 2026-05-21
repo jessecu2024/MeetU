@@ -129,12 +129,21 @@ class TranslationService {
     }
   }
 
-  /** Simple language detection based on character analysis */
+  /** Detect source language (delegates to pure helper for testability) */
   private detectLanguage(text: string): string {
-    const chineseChars = text.match(/[\u4e00-\u9fff]/g)?.length || 0;
-    const totalChars = text.replace(/\s/g, '').length;
-    return totalChars > 0 && chineseChars / totalChars > 0.3 ? 'zh' : 'en';
+    return detectLanguage(text);
   }
+}
+
+/**
+ * Heuristic language detection: returns 'zh' if Han characters exceed 30% of
+ * non-whitespace characters, otherwise 'en'. Pure function \u2014 exported so it
+ * can be unit-tested without instantiating the translation service.
+ */
+export function detectLanguage(text: string): 'zh' | 'en' {
+  const chineseChars = text.match(/[\u4e00-\u9fff]/g)?.length || 0;
+  const totalChars = text.replace(/\s/g, '').length;
+  return totalChars > 0 && chineseChars / totalChars > 0.3 ? 'zh' : 'en';
 }
 
 export const translationService = new TranslationService();

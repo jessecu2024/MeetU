@@ -110,6 +110,10 @@ export async function exportWord(_minutes: MeetingMinutes): Promise<string> {
   );
 }
 
-function sanitizeFilename(name: string): string {
+/**
+ * Replace any character that is not ASCII alphanumeric, Han, underscore, or
+ * hyphen with an underscore, and cap to 50 characters. Exported for testing.
+ */
+export function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').slice(0, 50);
 }

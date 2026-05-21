@@ -86,11 +86,9 @@ class MentionDetectorService {
     }
   }
 
-  /** Layer 1: Fast keyword matching */
+  /** Layer 1: Fast keyword matching (delegates to pure helper for testability) */
   private keywordMatch(text: string, name: string, nameEn: string, aliases: string[]): boolean {
-    const lower = text.toLowerCase();
-    const candidates = [name, nameEn, ...aliases].filter(Boolean);
-    return candidates.some(n => lower.includes(n.toLowerCase()));
+    return keywordMatch(text, name, nameEn, aliases);
   }
 
   /** Layer 2: AI semantic detection */
@@ -147,3 +145,21 @@ class MentionDetectorService {
 }
 
 export const mentionDetector = new MentionDetectorService();
+
+/**
+ * Case-insensitive keyword matching against any of the user's identifiers
+ * (Chinese name, English name, aliases). Empty / whitespace-only candidates
+ * are ignored so an unconfigured profile cannot accidentally match every line.
+ * Pure function — exported for unit testing.
+ */
+export function keywordMatch(
+  text: string,
+  name: string,
+  nameEn: string,
+  aliases: string[],
+): boolean {
+  const lower = text.toLowerCase();
+  const candidates = [name, nameEn, ...aliases]
+    .filter((n): n is string => typeof n === 'string' && n.trim().length > 0);
+  return candidates.some(n => lower.includes(n.toLowerCase()));
+}

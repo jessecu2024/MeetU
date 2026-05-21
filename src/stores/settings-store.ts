@@ -214,6 +214,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       if (!all) { set({ settingsLoaded: true }); return; }
 
       const aiConfigRaw = all.aiConfig as Record<string, unknown> | undefined;
+
+      // Migrate settings written by earlier versions: aliyun_speech was listed
+      // but never implemented. If a stored engine ID is no longer in
+      // STTEngineId, fall back to the regional default so the UI doesn't get
+      // stuck on a non-existent engine.
+      const VALID_STT_IDS: STTEngineId[] = ['deepgram', 'whisper_api', 'xfyun', 'local_whisper'];
+      const storedSttEngine = all.sttEngine as string | undefined;
+      const sttEngine: STTEngineId = (storedSttEngine && VALID_STT_IDS.includes(storedSttEngine as STTEngineId))
+        ? (storedSttEngine as STTEngineId)
+        : 'deepgram';
+
       set({
         settingsLoaded: true,
         legalAccepted: (all.legalAccepted as boolean) || false,
@@ -225,7 +236,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           apiKeys: (aiConfigRaw?.apiKeys as Record<string, string>) || {},
           selectedModels: (aiConfigRaw?.selectedModels as Record<string, string>) || {},
         },
-        sttEngine: (all.sttEngine as STTEngineId) || 'deepgram',
+        sttEngine,
         sttApiKeys: (all.sttApiKeys as Record<string, string>) || {},
         userProfile: (all.userProfile as UserProfile) || get().userProfile,
         appSettings: { ...get().appSettings, ...(all.appSettings as Partial<AppSettings>) },
