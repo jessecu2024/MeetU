@@ -11,7 +11,7 @@
 | Windows WASAPI Loopback 原生捕获 | 🔜 Planned | `native/windows/` 尚未创建 |
 | Deepgram STT | ✅ Stable | WebSocket 经主进程 IPC，已可用 |
 | OpenAI Whisper API STT | ✅ Stable | REST，分段 5s |
-| 讯飞 STT | 🟡 Beta | WebSocket auth 签名为 placeholder，运行时鉴权会失败；需要 WebCrypto 补全 HMAC-SHA256 |
+| 讯飞 STT | 🔜 Planned | WebSocket auth 签名为 placeholder，运行时鉴权一定失败；engine 已降为 `status: 'planned'`，UI 与 fallback 全部跳过，待 WebCrypto 补全 HMAC-SHA256 后再升级为 Stable |
 | 阿里语音 STT | ❌ Removed | 之前列在文档/类型中，但代码从未实现，已从 `STTEngineId` 移除 |
 | Local Whisper (whisper.cpp) | 🔜 Planned | `local-whisper.ts` 为 stub，`feedAudio`/`stopSession` 是 TODO |
 | 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
@@ -27,7 +27,7 @@
 本产品的法律定位是：**个人会议笔记辅助工具**。
 
 核心原则：
-1. **我们是录音笔记工具，不是会议平台插件** — 不调用任何会议平台（Zoom/Teams/腾讯会议）的 API，不以机器人身份加入会议，只捕获用户电脑的系统音频，等同于用户自己按下录音键
+1. **我们是录音笔记工具，不是会议平台插件** — 不调用任何会议平台（Zoom/Teams/腾讯会议）的 API，不以机器人身份加入会议；当前版本通过 `getUserMedia` 捕获用户在系统中选择的音频输入设备（默认麦克风；用户可手动启用 Stereo Mix / 虚拟音频线缆以捕获系统输出），等同于用户自己按下录音键
 2. **用户自带一切（纯 BYOK）** — 用户必须使用自己的 AI API Key 和 STT API Key，我们不代理、不转售任何 AI 服务。应用本身是纯工具软件
 3. **用户承担录音合规责任** — 首次使用前必须展示法律声明，用户确认知晓并遵守当地录音法规后才能使用
 4. **零 GPL 依赖** — 不使用 BlackHole 或任何 GPL 许可的组件，确保闭源商业发布合规
@@ -36,7 +36,7 @@
 
 跨平台（macOS + Windows）桌面应用，用户的「AI 会议笔记助手」。用户参加线上会议时启动本应用：
 
-1. **实时语音转文字** — 捕获系统音频 + 麦克风，实时转写为字幕
+1. **实时语音转文字** — 捕获用户选择的音频输入（默认麦克风；可手动启用 loopback 捕获系统输出），实时转写为字幕
 2. **实时翻译** — 中英双向翻译（可扩展更多语言）
 3. **@检测与发言准备** — 检测用户被点名/提问，自动生成回复建议
 4. **实时摘要** — 每5分钟提取会议要点
@@ -78,7 +78,7 @@ macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；�
 |------|--------|---------|---------|
 | Deepgram | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable |
 | OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable |
-| 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | 🟡 Beta — `xfyun-engine.ts` 的 HMAC 签名仍为 placeholder，需用 WebCrypto 补全后才可真正连接 |
+| 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | 🔜 Planned — `xfyun-engine.ts` 的 HMAC 签名仍为 placeholder；`status: 'planned'`，UI / fallback / 迁移全部跳过；补全 WebCrypto HMAC-SHA256 后升级为 Stable |
 | 阿里语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ❌ 尚未实现，已暂时从 `STTEngineId` 类型中移除 |
 | whisper.cpp (本地) | **MIT 许可** | ✅ 可安全嵌入分发 | 🔜 Planned — `local-whisper.ts` 是 stub，`feedAudio` / `stopSession` 仍是 TODO |
 

@@ -60,6 +60,23 @@ export class XfyunEngine implements STTEngine {
       throw new Error('iFlytek credentials not configured (appId:apiKey:apiSecret)');
     }
 
+    // Defense in depth: even if some caller bypasses isSelectableSTTEngine
+    // and reaches this engine directly, refuse to "start" a session whose
+    // WebSocket would only get auth-rejected after `open`. Without this,
+    // the WS would resolve on open() and the caller would think the session
+    // is live for ~100ms before the server closes the connection with an
+    // auth error, leaving a window where the mock fallback wouldn't trigger.
+    throw new Error(
+      'iFlytek live transcription is not yet supported in this build: ' +
+      'WebSocket HMAC-SHA256 signing is still a placeholder so the server ' +
+      'will reject the session at the auth step. ' +
+      '/ 讯飞实时转写在当前版本暂不支持：WebSocket HMAC-SHA256 鉴权签名尚未实现。'
+    );
+
+    // The original session-start logic is intentionally unreachable below
+    // until generateAuthUrl emits a real HMAC signature. It is preserved
+    // so the eventual fix is a removal of the throw above, not a rewrite.
+    /* istanbul ignore next */
     this.sessionStartTime = Date.now();
     this.resultCounter = 0;
 

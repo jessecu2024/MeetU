@@ -8,7 +8,7 @@ import { useSettingsStore } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
-import { STT_ENGINE_INFO, isSelectableSTTEngine } from '../services/stt-engine/types';
+import { STT_ENGINE_INFO, isSelectableSTTEngine, isSTTEngineVisibleForRegion } from '../services/stt-engine/types';
 
 /** API Key format patterns for pre-validation (no network request) */
 const API_KEY_PATTERNS: Record<AIProviderId, { pattern: RegExp; hint: string; hintZh: string; placeholder: string }> = {
@@ -373,10 +373,7 @@ export default function OnboardingWizard() {
         {step === 4 && (
           <div className="space-y-2.5">
             {STT_ENGINE_INFO
-              .filter(e =>
-                store.userRegion === 'china'
-                  ? e.region === 'china' || e.region === 'local'
-                  : e.region === 'global' || e.region === 'local')
+              .filter(e => isSTTEngineVisibleForRegion(e, store.userRegion))
               .map((engine) => {
                 const selectable = isSelectableSTTEngine(engine.id);
                 const isPlanned = !selectable;

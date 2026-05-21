@@ -109,8 +109,14 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     apiKeyGuideUrl: 'https://console.xfyun.cn/services/iat',
     pricing: 'Free 500h/year',
     strengths: ['Best Chinese accuracy', 'Dialect support', 'Large free tier', 'Real-time streaming'],
-    status: 'beta',
-    statusNote: 'WebSocket auth signing incomplete — connection may fail / WebSocket 鉴权签名未完整实现，可能连接失败',
+    // Promoted from 'beta' to 'planned' after a deeper review confirmed the
+    // WebSocket auth signer in xfyun-engine.ts emits `signature="placeholder"`,
+    // so live sessions are guaranteed to fail at iFlytek's auth step. Marking
+    // it 'planned' makes isSelectableSTTEngine return false everywhere — UI
+    // gating, the engine-registry fallback, and the settings-store migration
+    // — so users cannot land on it until real HMAC-SHA256 signing ships.
+    status: 'planned',
+    statusNote: 'WebSocket HMAC-SHA256 signing is still a placeholder — sessions cannot authenticate yet / WebSocket HMAC-SHA256 鉴权签名尚未实现，目前无法建立会话',
   },
   {
     id: 'local_whisper',
@@ -138,9 +144,54 @@ export function isSelectableSTTEngine(id: string | undefined | null): id is STTE
   return !!info && info.status !== 'planned';
 }
 
-/** Region-appropriate default fallback when a stored engine is invalid. */
+/**
+ * Region-appropriate default fallback when a stored engine is invalid.
+ *
+ * Returns the most region-native engine that is currently selectable
+ * (`status !== 'planned'`). If that engine is planned today (e.g. iFlytek
+ * before its auth signing is implemented), falls back through a stable
+ * candidate list rather than handing the caller an unusable default.
+ * Guaranteed to return an id for which isSelectableSTTEngine is true so
+ * long as the codebase contains at least one stable engine.
+ */
 export function getDefaultSTTEngineForRegion(region: 'global' | 'china' | null | undefined): STTEngineId {
-  return region === 'china' ? 'xfyun' : 'deepgram';
+  const preference: STTEngineId[] = region === 'china'
+    ? ['xfyun', 'deepgram', 'whisper_api']
+    : ['deepgram', 'whisper_api'];
+  for (const candidate of preference) {
+    if (isSelectableSTTEngine(candidate)) return candidate;
+  }
+  // Last resort: scan the full registry for any stable engine. This branch
+  // should be unreachable in a shipped build (CI invariants require at least
+  // one stable engine to exist), but keeping it makes the function total.
+  const anyStable = STT_ENGINE_INFO.find(e => e.status === 'stable');
+  return anyStable?.id ?? 'deepgram';
+}
+
+/**
+ * Decide whether an engine should appear in the picker for a given region.
+ *
+ * - `local` engines always show.
+ * - `global` engines always show.
+ * - `china` engines show for China users only.
+ *
+ * Note this is a UI filter, not a selectability filter — planned engines
+ * still appear (badged) so users see the roadmap, but they cannot be
+ * activated; that gate is `isSelectableSTTEngine`. The reason we don't
+ * hide China-region engines for Global users is the inverse case: if
+ * China's only native engine becomes planned (today: xfyun), Global users
+ * are unaffected, but China users would have *zero* visible engines if we
+ * applied a symmetric filter — so China users see Global engines too as
+ * fallback. This asymmetry is intentional.
+ */
+export function isSTTEngineVisibleForRegion(
+  engine: { region: 'global' | 'china' | 'local' },
+  region: 'global' | 'china' | null | undefined,
+): boolean {
+  if (engine.region === 'local') return true;
+  if (engine.region === 'global') return true;
+  // engine.region === 'china'
+  return region === 'china';
 }
 
 /** Result of migrating a persisted STT configuration. */

@@ -81,7 +81,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 |--------|--------|------|--------|
 | Deepgram | Global | Real-time WebSocket | ✅ Stable |
 | Whisper API (OpenAI) | Global | Segment-based REST | ✅ Stable |
-| iFlytek | China | Real-time WebSocket | 🟡 Beta — WebSocket auth signing incomplete |
+| iFlytek | China | Real-time WebSocket | 🔜 Planned — WebSocket HMAC-SHA256 signing not yet implemented; disabled in UI |
 | Local Whisper | Offline | whisper.cpp (MIT) | 🔜 Planned — not yet shipped |
 
 > Alibaba Speech (Paraformer) was previously listed but has been removed from the codebase until a real implementation lands.
@@ -225,7 +225,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 |------|------|------|------|
 | Deepgram | 海外 | 实时 WebSocket | ✅ 稳定 |
 | Whisper API (OpenAI) | 海外 | 分段 REST | ✅ 稳定 |
-| 讯飞语音 | 国内 | 实时 WebSocket | 🟡 Beta — WebSocket 鉴权签名尚未完整实现 |
+| 讯飞语音 | 国内 | 实时 WebSocket | 🔜 计划中 — WebSocket HMAC-SHA256 签名尚未实现；UI 中已禁用 |
 | 本地 Whisper | 离线 | whisper.cpp (MIT) | 🔜 计划中 — 暂未发布 |
 
 > 阿里语音 (Paraformer) 之前列在此处但尚未实现，已从代码中暂时移除，待真正集成后再加回。

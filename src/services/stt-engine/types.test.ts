@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isSelectableSTTEngine,
   getDefaultSTTEngineForRegion,
+  isSTTEngineVisibleForRegion,
   migrateSTTConfig,
   STT_ENGINE_INFO,
 } from './types';
@@ -15,8 +16,12 @@ describe('isSelectableSTTEngine', () => {
     expect(isSelectableSTTEngine('whisper_api')).toBe(true);
   });
 
-  it('accepts beta engines (xfyun) — they are real but incomplete, user can still try', () => {
-    expect(isSelectableSTTEngine('xfyun')).toBe(true);
+  it('rejects planned engines (xfyun) — its auth signing is still a placeholder so live sessions fail', () => {
+    // Was 'beta' in earlier iterations on the assumption users could at
+    // least attempt a connection. Codex review showed testConnection was
+    // lying (format-only) and startSession would fail at the auth step, so
+    // xfyun is non-selectable until HMAC-SHA256 signing lands.
+    expect(isSelectableSTTEngine('xfyun')).toBe(false);
   });
 
   it('rejects planned engines (local_whisper) — silently falls back to demo otherwise', () => {
@@ -39,12 +44,16 @@ describe('isSelectableSTTEngine', () => {
 });
 
 describe('getDefaultSTTEngineForRegion', () => {
-  it('returns xfyun for China users', () => {
-    expect(getDefaultSTTEngineForRegion('china')).toBe('xfyun');
+  it('returns deepgram for global users (whisper_api is the next stable candidate)', () => {
+    expect(getDefaultSTTEngineForRegion('global')).toBe('deepgram');
   });
 
-  it('returns deepgram for global users', () => {
-    expect(getDefaultSTTEngineForRegion('global')).toBe('deepgram');
+  it('returns deepgram for China users today — xfyun is planned, so the function skips it and falls back to a stable candidate', () => {
+    // Codex review caught the previous behavior: returning 'xfyun' for
+    // China handed users a default that was guaranteed to fail at runtime
+    // because xfyun's auth signer is a placeholder. The function now walks
+    // a candidate list rather than returning the region preference blindly.
+    expect(getDefaultSTTEngineForRegion('china')).toBe('deepgram');
   });
 
   it('returns deepgram when region is null or undefined (safe fallback)', () => {
@@ -52,11 +61,11 @@ describe('getDefaultSTTEngineForRegion', () => {
     expect(getDefaultSTTEngineForRegion(undefined)).toBe('deepgram');
   });
 
-  it('every returned default is itself selectable', () => {
+  it('every returned default is itself selectable — this is the load-bearing invariant', () => {
     // If a default ever drifts to planned status this test will catch it.
     for (const region of ['china', 'global', null] as const) {
       const engine = getDefaultSTTEngineForRegion(region);
-      expect(isSelectableSTTEngine(engine)).toBe(true);
+      expect(isSelectableSTTEngine(engine), `default for region=${region} (${engine}) must be selectable`).toBe(true);
     }
   });
 });
@@ -70,11 +79,19 @@ describe('migrateSTTConfig', () => {
     expect(r.engineChanged).toBe(false);
   });
 
-  it('passes through a beta engine selection (xfyun is still selectable)', () => {
+  it('migrates a stored xfyun selection away — xfyun is currently planned (HMAC signing TODO), not selectable', () => {
+    // China users with a stored xfyun selection now land on deepgram (the
+    // first stable candidate) instead of being stuck on an engine whose
+    // sessions cannot authenticate. They keep the xfyun key in case it
+    // becomes selectable later, but get a working engine today.
     const r = migrateSTTConfig('xfyun', { xfyun: 'app:key:secret' }, 'china');
-    expect(r.engine).toBe('xfyun');
-    expect(r.engineChanged).toBe(false);
-    expect(r.apiKeys).toEqual({ xfyun: 'app:key:secret' });
+    expect(r.engine).toBe('deepgram');
+    expect(r.engineChanged).toBe(true);
+    // The xfyun key is pruned because xfyun is no longer selectable today.
+    // Once xfyun becomes selectable (HMAC signing implemented) the user
+    // can re-enter their credentials.
+    expect(r.apiKeys).toEqual({});
+    expect(r.prunedKeys).toEqual(['xfyun']);
   });
 
   it('rewrites a stored local_whisper selection to the region default and reports the change', () => {
@@ -83,21 +100,21 @@ describe('migrateSTTConfig', () => {
     expect(r.engineChanged).toBe(true);
   });
 
-  it('rewrites local_whisper to xfyun for China users', () => {
+  it('rewrites local_whisper to the China region fallback (deepgram today)', () => {
     const r = migrateSTTConfig('local_whisper', {}, 'china');
-    expect(r.engine).toBe('xfyun');
+    expect(r.engine).toBe('deepgram');
     expect(r.engineChanged).toBe(true);
   });
 
-  it('rewrites a removed engine ID (aliyun_speech) to the region default', () => {
+  it('rewrites a removed engine ID (aliyun_speech) to the region fallback', () => {
     const r = migrateSTTConfig('aliyun_speech', {}, 'china');
-    expect(r.engine).toBe('xfyun');
+    expect(r.engine).toBe('deepgram');
     expect(r.engineChanged).toBe(true);
   });
 
   it('returns the region default for a missing / undefined stored engine', () => {
     expect(migrateSTTConfig(undefined, {}, 'global').engine).toBe('deepgram');
-    expect(migrateSTTConfig(null, {}, 'china').engine).toBe('xfyun');
+    expect(migrateSTTConfig(null, {}, 'china').engine).toBe('deepgram');
     expect(migrateSTTConfig('', {}, null).engine).toBe('deepgram');
   });
 
@@ -138,12 +155,13 @@ describe('migrateSTTConfig', () => {
     const r = migrateSTTConfig('local_whisper', {
       aliyun_speech: 'old1',
       local_whisper: 'old2',
+      xfyun: 'old3',         // xfyun is also planned today
       whisper_api: 'sk-real',
     }, null);
     expect(r.engine).toBe('deepgram');               // region null → global default
     expect(r.engineChanged).toBe(true);
     expect(r.apiKeys).toEqual({ whisper_api: 'sk-real' }); // only selectable engine retained
-    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper']);
+    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper', 'xfyun']);
   });
 });
 
@@ -162,17 +180,40 @@ describe('STT_ENGINE_INFO invariants', () => {
     }
   });
 
-  it('at least one engine is selectable for global users', () => {
+  it('global users always see at least one selectable engine in the picker', () => {
     const globalSelectable = STT_ENGINE_INFO.filter(
-      e => (e.region === 'global' || e.region === 'local') && isSelectableSTTEngine(e.id)
+      e => isSTTEngineVisibleForRegion(e, 'global') && isSelectableSTTEngine(e.id)
     );
     expect(globalSelectable.length).toBeGreaterThan(0);
   });
 
-  it('at least one engine is selectable for China users', () => {
+  it('China users always see at least one selectable engine in the picker (global engines act as fallback when no China-native engine is selectable)', () => {
     const chinaSelectable = STT_ENGINE_INFO.filter(
-      e => (e.region === 'china' || e.region === 'local') && isSelectableSTTEngine(e.id)
+      e => isSTTEngineVisibleForRegion(e, 'china') && isSelectableSTTEngine(e.id)
     );
     expect(chinaSelectable.length).toBeGreaterThan(0);
+  });
+});
+
+describe('isSTTEngineVisibleForRegion', () => {
+  // Compact fixture for picker visibility — the asymmetry (China users see
+  // global engines, global users do NOT see China engines) is intentional;
+  // see the docstring on the function.
+  it('local engines always show', () => {
+    expect(isSTTEngineVisibleForRegion({ region: 'local' }, 'global')).toBe(true);
+    expect(isSTTEngineVisibleForRegion({ region: 'local' }, 'china')).toBe(true);
+    expect(isSTTEngineVisibleForRegion({ region: 'local' }, null)).toBe(true);
+  });
+
+  it('global engines always show', () => {
+    expect(isSTTEngineVisibleForRegion({ region: 'global' }, 'global')).toBe(true);
+    expect(isSTTEngineVisibleForRegion({ region: 'global' }, 'china')).toBe(true);
+    expect(isSTTEngineVisibleForRegion({ region: 'global' }, null)).toBe(true);
+  });
+
+  it('China engines show ONLY for China users', () => {
+    expect(isSTTEngineVisibleForRegion({ region: 'china' }, 'china')).toBe(true);
+    expect(isSTTEngineVisibleForRegion({ region: 'china' }, 'global')).toBe(false);
+    expect(isSTTEngineVisibleForRegion({ region: 'china' }, null)).toBe(false);
   });
 });

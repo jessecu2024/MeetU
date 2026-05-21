@@ -14,7 +14,7 @@ import { listAudioDevices, listAudioOutputDevices } from '../services/audio/capt
 import type { AudioInputDevice, AudioOutputDevice } from '../services/audio/capture';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
-import { STT_ENGINE_INFO, isSelectableSTTEngine } from '../services/stt-engine/types';
+import { STT_ENGINE_INFO, isSelectableSTTEngine, isSTTEngineVisibleForRegion } from '../services/stt-engine/types';
 
 type Tab = 'ai' | 'stt' | 'profile' | 'app';
 
@@ -322,10 +322,7 @@ export default function SettingsModal() {
             <>
               <div className="space-y-2">
                 {STT_ENGINE_INFO
-                  .filter(e =>
-                    store.userRegion === 'china'
-                      ? e.region === 'china' || e.region === 'local'
-                      : e.region === 'global' || e.region === 'local')
+                  .filter(e => isSTTEngineVisibleForRegion(e, store.userRegion))
                   .map(engine => {
                     const selectable = isSelectableSTTEngine(engine.id);
                     const isPlanned = !selectable;
