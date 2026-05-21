@@ -14,7 +14,12 @@ The following packages are licensed under the MIT License:
 - **better-sqlite3** — Copyright (c) Joshua Wise
 - **electron-store** — Copyright (c) Sindre Sorhus
 - **ws** — Copyright (c) Einar Otto Stangvik
-- **whisper.cpp** — Copyright (c) Georgi Gerganov (will become a runtime dependency when Local Whisper integration ships; tracked here so the eventual integration does not forget the attribution)
+
+<!-- whisper.cpp (Copyright (c) Georgi Gerganov, MIT) will need an
+     attribution entry here once the Local Whisper engine actually
+     ships and the library is bundled into the build. It is NOT listed
+     above today because LEGAL_NOTICE.md is a record of third-party
+     code that is genuinely shipped — not a wishlist. -->
 
 MIT License Text:
 Permission is hereby granted, free of charge, to any person obtaining a copy
