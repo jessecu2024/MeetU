@@ -119,10 +119,10 @@ class MentionDetectorService {
           transcriptId: entry.id,
           speaker: entry.speaker,
           triggerText: entry.text,
-          mentionType: parsed.mentionType || 'direct_name',
-          extractedQuestion: parsed.extractedQuestion || '',
-          confidence: parsed.confidence || 0.8,
-          urgency: parsed.urgency || 'medium',
+          mentionType: (parsed.mentionType as MentionResult['mentionType']) || 'direct_name',
+          extractedQuestion: (parsed.extractedQuestion as string) || '',
+          confidence: (parsed.confidence as number) || 0.8,
+          urgency: (parsed.urgency as MentionResult['urgency']) || 'medium',
           timestamp: Date.now(),
         };
         this.callback?.(result);

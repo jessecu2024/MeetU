@@ -137,10 +137,10 @@ class SummarizerService {
       }
       const result: RealtimeSummary = {
         ...summary,
-        keyPoints: parsed.keyPoints as string[] || [],
-        decisions: parsed.decisions as string[] || [],
-        actionItems: parsed.actionItems as string[] || [],
-        openQuestions: parsed.openQuestions as string[] || [],
+        keyPoints: (parsed.keyPoints as string[]) || [],
+        decisions: (parsed.decisions as string[]) || [],
+        actionItems: (parsed.actionItems as RealtimeSummary['actionItems']) || [],
+        openQuestions: (parsed.openQuestions as string[]) || [],
         isLoading: false,
       };
       this.callback?.(result);
