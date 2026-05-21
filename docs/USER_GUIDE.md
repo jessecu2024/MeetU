@@ -181,10 +181,15 @@ npm run build        # 构建发布版
 
 ### 音频捕获方式
 
-| 平台 | 捕获方式 | 说明 |
-|------|---------|------|
-| Windows 10+ | WASAPI Loopback | 系统原生 API，自动捕获系统音频输出 |
-| macOS 13+ | ScreenCaptureKit | Apple 原生框架，可指定捕获特定应用音频 |
+当前版本通过浏览器 `getUserMedia` 捕获选定的音频输入设备。若需要录制会议中**其他**参与者的声音（而不仅是你自己的麦克风），需要在系统层面启用 loopback。
+
+| 平台 | 当前实际方案 | 状态 |
+|------|------------|------|
+| 所有平台 | `getUserMedia` 选择麦克风（默认） | ✅ 可用 |
+| Windows 10+ | 在系统中启用 **Stereo Mix**（设置 → 系统 → 声音 → 录制设备），再在应用内选择此设备 | ✅ 可用，需用户启用 |
+| macOS 13+ | 安装虚拟音频线缆（如非 GPL 替代品），把会议应用输出路由到该设备，再在应用内选择 | ✅ 可用，需用户配置 |
+| Windows 10+ | WASAPI Loopback 原生捕获 | 🔜 计划中（`native/windows/` 尚未创建） |
+| macOS 13+ | ScreenCaptureKit 原生捕获 | 🔜 计划中（`native/macos/` 有 Swift 草稿但 N-API 绑定为 placeholder） |
 
 ### 转写界面
 
@@ -292,11 +297,9 @@ npm run build        # 构建发布版
 - 生成 `.md` 文件，包含完整的结构化会议纪要
 - 文件名格式：`minutes_YYYY-MM-DD_会议标题.md`
 
-### Word 格式
+### Word 格式（🔜 计划中，暂不可用）
 
-点击 **"导出 Word / Export Word"**：
-- 生成 `.docx` 文件，专业排版格式
-- 文件名格式：`minutes_YYYY-MM-DD_会议标题.docx`
+应用界面上的 **"导出 Word / Export Word"** 按钮目前是禁用状态，悬停会显示 "Word (.docx) export is not yet implemented." 的提示。`docx` 依赖已加入但生成器尚未实现，将在后续版本提供。**请先使用上方的 Markdown 导出**，需要 Word 格式时可在 Word/Pages/Google Docs 中打开 `.md` 文件转换。
 
 **默认保存位置**：`~/MeetingAI/minutes/`
 
@@ -335,13 +338,14 @@ npm run build        # 构建发布版
 
 **支持的 STT 引擎：**
 
-| 引擎 | 获取 Key 地址 | 推荐场景 |
-|------|--------------|---------|
-| Deepgram | [console.deepgram.com](https://console.deepgram.com) | 海外首选，实时性好 |
-| Whisper API | [platform.openai.com](https://platform.openai.com) | 海外备选 |
-| 讯飞语音 | [console.xfyun.cn](https://console.xfyun.cn) | 国内首选 |
-| 阿里语音 | [nls-portal.console.aliyun.com](https://nls-portal.console.aliyun.com) | 国内备选 |
-| 本地 Whisper | 无需 Key | 离线使用，隐私最佳 |
+| 引擎 | 状态 | 获取 Key 地址 | 推荐场景 |
+|------|------|--------------|---------|
+| Deepgram | ✅ Stable | [console.deepgram.com](https://console.deepgram.com) | 海外首选，实时性好 |
+| Whisper API | ✅ Stable | [platform.openai.com](https://platform.openai.com) | 海外备选 |
+| 讯飞语音 | 🟡 Beta — WebSocket 鉴权签名尚未完整实现，连接可能失败 | [console.xfyun.cn](https://console.xfyun.cn) | 国内（待补 HMAC-SHA256 签名后转 Stable） |
+| 本地 Whisper | 🔜 Planned — 在设置面板中显示为禁用状态 | — | whisper.cpp 集成尚未发布 |
+
+> 阿里语音 (Paraformer) 曾列在此处，但代码从未实现，已暂时从应用中移除。后续真正集成后会重新出现。
 
 ### 个人信息
 

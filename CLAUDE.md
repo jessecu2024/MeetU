@@ -20,7 +20,7 @@
 | PDF 纪要导出 | ❌ Not planned right now | `pdfkit` 在 `package.json` 但 0 引用，待删除或真实现 |
 | i18n 多语言 | ❌ 未引入框架 | 渲染层用硬编码 `"English / 中文"` 双语字符串，扩展到日韩需要先引入 i18n 框架 |
 | GPL/AGPL 许可证审计 | ✅ Stable | `npm run check-licenses` 已实现 |
-| 单元测试 / CI | ❌ 未搭 | 无 `tests/`、无 `eslint.config.*`、无 `.github/workflows/` |
+| 单元测试 / CI | ✅ Stable | Vitest (`npm test`)、ESLint v9 flat config (`npm run lint`)、`tsc --noEmit` (`npm run typecheck`)、`.github/workflows/ci.yml` 在 push/PR 时跑 typecheck + lint + test + license 审计 |
 
 ## ⚠️ 商业合规定位（最重要，贯穿全项目）
 
@@ -68,7 +68,7 @@ macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；�
 - **通用**：DeepSeek（国内外均可）
 - **国内**：通义千问(Qwen) / MiniMax / 智谱(GLM)
 
-**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。基础功能（录音、本地 STT 转写）可独立工作。
+**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写必须至少配置一个云端 STT Key**（Deepgram / Whisper API / iFlytek 之一）；只有原始音频录制可以完全无 Key 工作。Local Whisper 离线引擎尚未发布。
 
 **收费模式：** 软件本身收费（一次性购买或订阅），AI 和 STT 费用由用户直接向对应服务商支付。
 

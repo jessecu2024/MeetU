@@ -33,7 +33,7 @@ interface TranscriptState {
   loadHistory: (meetingId: number) => Promise<void>;
 }
 
-export const useTranscriptStore = create<TranscriptState>((set, get) => ({
+export const useTranscriptStore = create<TranscriptState>((set, _get) => ({
   entries: [],
   meetingId: null,
   isMockMode: false,

@@ -46,7 +46,7 @@ export class XfyunEngine implements STTEngine {
     return { ok: true };
   }
 
-  async startSession(config: STTConfig): Promise<void> {
+  async startSession(_config: STTConfig): Promise<void> {
     if (!this.apiKey || !this.appId) {
       throw new Error('iFlytek credentials not configured (appId:apiKey:apiSecret)');
     }

@@ -13,7 +13,7 @@
     "preview": "vite preview",
     "electron:build": "vite build && electron-builder --mac --win",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/ electron/",
+    "lint": "eslint --max-warnings=0 src/ electron/",
     "test": "vitest run",
     "test:watch": "vitest",
     "generate-icons": "node scripts/generate-icons.cjs",
