@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/jessecu2024/MeetU/actions/workflows/ci.yml"><img src="https://github.com/jessecu2024/MeetU/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-BSL--1.1-blue" alt="License">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Platform">
   <img src="https://img.shields.io/badge/languages-EN%20%7C%20中文-green" alt="Languages">
