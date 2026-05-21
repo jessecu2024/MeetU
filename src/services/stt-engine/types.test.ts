@@ -85,14 +85,14 @@ describe('migrateSTTConfig', () => {
   it('migrates a stored xfyun selection away — xfyun is currently planned (HMAC signing TODO), not selectable', () => {
     // China users with a stored xfyun selection now land on deepgram (the
     // first stable candidate) instead of being stuck on an engine whose
-    // sessions cannot authenticate. They keep the xfyun key in case it
-    // becomes selectable later, but get a working engine today.
+    // sessions cannot authenticate. The stored xfyun API key is also
+    // pruned (not preserved) because keeping a secret for a non-selectable
+    // engine in encrypted storage is what the migration is supposed to
+    // clean up. Once xfyun becomes selectable (HMAC signing implemented),
+    // the user re-enters their credentials.
     const r = migrateSTTConfig('xfyun', { xfyun: 'app:key:secret' }, 'china');
     expect(r.engine).toBe('deepgram');
     expect(r.engineChanged).toBe(true);
-    // The xfyun key is pruned because xfyun is no longer selectable today.
-    // Once xfyun becomes selectable (HMAC signing implemented) the user
-    // can re-enter their credentials.
     expect(r.apiKeys).toEqual({});
     expect(r.prunedKeys).toEqual(['xfyun']);
   });
