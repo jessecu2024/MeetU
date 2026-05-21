@@ -39,16 +39,37 @@ export class WhisperAPIEngine implements STTEngine {
     }
   }
 
-  async startSession(config: STTConfig): Promise<void> {
-    if (!this.apiKey) throw new Error('Whisper API Key not configured');
+  async startSession(_config: STTConfig): Promise<void> {
+    // Defense in depth (mirrors xfyun-engine.startSession). The production
+    // audio pipeline emits webm/opus chunks via MediaRecorder, but this
+    // engine's feedAudio + processSegment assume PCM Float32 (see line 59),
+    // so any session that gets this far will silently send re-encoded
+    // garbage WAV to OpenAI and either receive nothing or hallucinated
+    // transcripts. Refuse to start until the engine is reworked to accept
+    // webm/opus segments directly.
+    //
+    // isSelectableSTTEngine already blocks whisper_api from being picked
+    // through SettingsModal, OnboardingWizard, sttRegistry.getConfiguredEngine
+    // and the store guards, but a future direct caller (a script, a test,
+    // a feature flag) must not be able to bypass that gate either.
+    throw new Error(
+      'Whisper API live transcription is not yet supported in this build: ' +
+      'the engine expects PCM Float32 input but the production capture ' +
+      'pipeline produces webm/opus, so transcripts would be invalid. ' +
+      '/ Whisper API 实时转写在当前版本暂不支持：引擎按 PCM Float32 解析' +
+      '但生产音频管线输出 webm/opus，会产生无效转写。'
+    );
 
+    // The original session-start logic is intentionally unreachable below
+    // until the audio-format mismatch is fixed. Preserved so the eventual
+    // fix is a removal of the throw above, not a rewrite.
+    /* istanbul ignore next */
+    if (!this.apiKey) throw new Error('Whisper API Key not configured');
     this.running = true;
     this.sessionStartTime = Date.now();
-    this.sampleRate = config.sampleRate || 16000;
+    this.sampleRate = _config.sampleRate || 16000;
     this.audioBuffer = [];
     this.resultCounter = 0;
-
-    // Process accumulated audio every SEGMENT_DURATION_MS
     this.segmentInterval = setInterval(() => {
       this.processSegment();
     }, SEGMENT_DURATION_MS);

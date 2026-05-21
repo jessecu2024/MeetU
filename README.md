@@ -115,10 +115,12 @@ npm run electron:build     # Build for macOS + Windows
 
 MeetU is designed with privacy as a core principle:
 
-- **All data stays on your device** — audio recordings, transcripts, settings, and API keys are stored locally only
-- **API keys are encrypted** at rest using your OS's secure storage (Electron safeStorage)
-- **No telemetry, no analytics, no tracking** — we collect zero data about you
-- **No cloud backend** — the app communicates only with the AI/STT providers you choose
+- **Local storage on your device** — recordings (`.webm`), transcripts (SQLite), settings, and encrypted API keys are persisted on your machine only
+- **Outbound traffic, only to providers you choose**:
+  - Live transcription: audio frames stream directly from your device to the STT provider you configure (currently Deepgram; other engines are roadmap items)
+  - AI features: the relevant transcript text is sent to the AI provider you configure (Anthropic, OpenAI, DeepSeek, etc.)
+- **API keys are encrypted** at rest using your OS's secure storage (Electron safeStorage) and never leave the device
+- **No MeetU servers** — we operate no backend, run no telemetry, no analytics, no tracking. Network traffic only ever goes between your device and the third-party providers you select.
 - **Source code is auditable** — you can verify exactly what the app does
 
 ## Legal Notice
@@ -259,10 +261,12 @@ npm run electron:build     # 为 macOS + Windows 构建
 
 MeetU 以隐私为核心设计原则：
 
-- **所有数据仅存储在你的设备上** — 录音、转写、设置和 API Key 都仅在本地
-- **API Key 使用操作系统级加密** 存储（Electron safeStorage）
-- **零遥测、零分析、零追踪** — 我们不收集任何关于你的数据
-- **无云端后端** — 应用仅与你选择的 AI/STT 服务商通信
+- **本地设备存储** — 录音文件（`.webm`）、转写记录（SQLite）、设置和加密后的 API Key 都仅保存在你的本机
+- **外发流量，仅发往你自己选择的服务商**：
+  - 实时转写：音频帧从你的设备直接流式发送至你配置的 STT 服务商（当前为 Deepgram，其他引擎在路线图中）
+  - AI 功能：相关转写文本发送至你配置的 AI 服务商（Anthropic、OpenAI、DeepSeek 等）
+- **API Key 使用操作系统级加密** 存储（Electron safeStorage），不会离开你的设备
+- **没有 MeetU 服务器** — 我们不运行任何后端，没有遥测、分析或追踪；所有网络流量只发生在你的设备与你选择的第三方服务商之间
 - **源码可审计** — 你可以验证应用的每一个行为
 
 ## 法律声明
