@@ -92,8 +92,8 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 
 - **macOS 13+** or **Windows 10+**
 - **Node.js 18+**
-- At least one AI provider API Key (e.g., DeepSeek, OpenAI, Claude)
-- Optionally, an STT engine API Key (e.g., Deepgram)
+- One STT engine API Key **required for live transcription** (Deepgram or OpenAI Whisper API). Without one, the app falls back to a demo / mock transcript. The planned offline Local Whisper engine is not yet shipped.
+- At least one AI provider API Key (e.g., DeepSeek, OpenAI, Claude) — required for translation, summarization, and speech suggestions. Without one, only the raw recording + STT transcript will work.
 
 ### Installation
 
@@ -236,8 +236,8 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 
 - **macOS 13+** 或 **Windows 10+**
 - **Node.js 18+**
-- 至少一个 AI 提供商的 API Key（如 DeepSeek、OpenAI、Claude）
-- 可选：一个 STT 引擎的 API Key（如 Deepgram）
+- **必需**：一个 STT 引擎的 API Key（Deepgram 或 OpenAI Whisper API）用于实时转写；未配置时应用会退回到 demo/mock 转写。计划中的离线 Local Whisper 引擎尚未发布。
+- 至少一个 AI 提供商的 API Key（如 DeepSeek、OpenAI、Claude）— 用于翻译、摘要、发言建议；未配置时仅原始录音 + STT 转写可用。
 
 ### 安装
 

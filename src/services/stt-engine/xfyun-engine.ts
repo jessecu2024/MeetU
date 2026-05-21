@@ -42,8 +42,17 @@ export class XfyunEngine implements STTEngine {
     if (!this.appId || !this.apiSecret) {
       return { ok: false, error: 'Invalid key format. Use: appId:apiKey:apiSecret' };
     }
-    // iFlytek doesn't have a simple test endpoint, just validate format
-    return { ok: true };
+    // Format validation passes, but the WebSocket auth signing in
+    // generateAuthUrl() is still a hard-coded placeholder. Returning ok=true
+    // here would tell the user the connection works while startSession would
+    // then be rejected by the server. Report the real state instead.
+    return {
+      ok: false,
+      error:
+        'iFlytek (Beta): credentials look well-formed, but WebSocket HMAC-SHA256 ' +
+        'signing is not yet implemented, so live sessions will fail at the auth step. ' +
+        '/ 凭据格式正确，但 WebSocket HMAC-SHA256 鉴权签名尚未实现，实际开启会话会被服务端拒绝。',
+    };
   }
 
   async startSession(_config: STTConfig): Promise<void> {
