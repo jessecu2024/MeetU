@@ -119,7 +119,7 @@ MeetU is designed with privacy as a core principle:
 - **Outbound traffic, only to providers you choose**:
   - Live transcription: audio frames stream directly from your device to the STT provider you configure (currently Deepgram; other engines are roadmap items)
   - AI features: the relevant transcript text is sent to the AI provider you configure (Anthropic, OpenAI, DeepSeek, etc.)
-- **API keys are encrypted** at rest using your OS's secure storage (Electron safeStorage) and never leave the device
+- **API keys are encrypted** at rest using your OS's secure storage (Electron safeStorage). They are never sent to MeetU (we run no servers); they are only sent directly to the provider you configured, attached as the auth credential on requests to that provider's API
 - **No MeetU servers** — we operate no backend, run no telemetry, no analytics, no tracking. Network traffic only ever goes between your device and the third-party providers you select.
 - **Source code is auditable** — you can verify exactly what the app does
 
@@ -265,7 +265,7 @@ MeetU 以隐私为核心设计原则：
 - **外发流量，仅发往你自己选择的服务商**：
   - 实时转写：音频帧从你的设备直接流式发送至你配置的 STT 服务商（当前为 Deepgram，其他引擎在路线图中）
   - AI 功能：相关转写文本发送至你配置的 AI 服务商（Anthropic、OpenAI、DeepSeek 等）
-- **API Key 使用操作系统级加密** 存储（Electron safeStorage），不会离开你的设备
+- **API Key 使用操作系统级加密** 存储（Electron safeStorage）。它们不会发送给 MeetU（我们没有任何服务器），仅作为请求认证凭据直接发送给你所配置的对应服务商
 - **没有 MeetU 服务器** — 我们不运行任何后端，没有遥测、分析或追踪；所有网络流量只发生在你的设备与你选择的第三方服务商之间
 - **源码可审计** — 你可以验证应用的每一个行为
 
