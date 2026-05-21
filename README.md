@@ -30,32 +30,35 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 | 🔔 **@Mention Detection** | Instantly alerts you when someone calls your name or asks you a question |
 | 💡 **Smart Speech Suggestions** | AI generates 3 reply strategies (conservative / assertive / diplomatic) when you're @'d |
 | 📋 **Real-time Summary** | Key points, decisions, and action items extracted every few minutes |
-| 📄 **Meeting Minutes Export** | Structured minutes auto-generated on meeting end, exportable as Markdown or Word |
+| 📄 **Meeting Minutes Export** | Structured minutes auto-generated on meeting end, exportable as Markdown (Word export coming soon) |
 
 ## How It Works
 
 ```
-┌─────────────┐    ┌──────────────┐    ┌────────────────┐
-│ System Audio │───>│ STT Engine   │───>│ AI Provider    │
-│ + Microphone │    │ (Your Key)   │    │ (Your Key)     │
-└─────────────┘    └──────┬───────┘    └───────┬────────┘
-                          │                     │
-                     Transcript            Translation
-                     + Captions          + Summary + Tips
-                          │                     │
-                          └─────────┬───────────┘
-                                    │
-                          ┌─────────▼─────────┐
-                          │  Local SQLite DB   │
-                          │  (Your device only)│
-                          └───────────────────┘
+┌────────────────┐    ┌──────────────┐    ┌────────────────┐
+│ Audio Input    │───>│ STT Engine   │───>│ AI Provider    │
+│ (Mic or system │    │ (Your Key)   │    │ (Your Key)     │
+│  loopback)     │    │              │    │                │
+└────────────────┘    └──────┬───────┘    └───────┬────────┘
+                             │                     │
+                        Transcript            Translation
+                        + Captions          + Summary + Tips
+                             │                     │
+                             └─────────┬───────────┘
+                                       │
+                             ┌─────────▼─────────┐
+                             │  Local SQLite DB   │
+                             │  (Your device only)│
+                             └───────────────────┘
 ```
+
+> **Audio capture today:** macOS records the selected microphone via `getUserMedia`. To capture other participants' voices, route the meeting app's output through a loopback device (Windows: Stereo Mix; macOS: a virtual audio cable). Native system-audio capture (macOS ScreenCaptureKit) is on the roadmap but not yet integrated.
 
 **Key architecture principles:**
 - **BYOK (Bring Your Own Key)** — You use your own AI & STT API keys. We never see them.
 - **Local-first** — Audio, transcripts, and settings stored on your device only.
 - **Zero GPL** — All dependencies are commercially safe (MIT/BSD/Apache-2.0).
-- **No cloud dependency** — The app works offline with local Whisper STT (coming soon).
+- **Offline path planned** — Cloud STT/AI keys are required today; an offline local Whisper STT engine is on the roadmap.
 
 ## Supported Providers
 
@@ -73,13 +76,14 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 
 ### STT Engines
 
-| Engine | Region | Type |
-|--------|--------|------|
-| Deepgram | Global | Real-time WebSocket |
-| Whisper API (OpenAI) | Global | Segment-based REST |
-| iFlytek | China | Real-time WebSocket |
-| Alibaba Speech | China | Real-time WebSocket |
-| Local Whisper | Offline | whisper.cpp (MIT) |
+| Engine | Region | Type | Status |
+|--------|--------|------|--------|
+| Deepgram | Global | Real-time WebSocket | ✅ Stable |
+| Whisper API (OpenAI) | Global | Segment-based REST | ✅ Stable |
+| iFlytek | China | Real-time WebSocket | 🟡 Beta — WebSocket auth signing incomplete |
+| Local Whisper | Offline | whisper.cpp (MIT) | 🔜 Planned — not yet shipped |
+
+> Alibaba Speech (Paraformer) was previously listed but has been removed from the codebase until a real implementation lands.
 
 ## Quick Start
 
@@ -170,32 +174,35 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 | 🔔 **@检测提醒** | 有人叫你名字或向你提问时立即提醒 |
 | 💡 **智能发言建议** | 被@时 AI 自动生成 3 种回复方案（保守/积极/外交） |
 | 📋 **实时摘要** | 每隔几分钟自动提取要点、决策和待办事项 |
-| 📄 **会后纪要导出** | 会议结束自动生成结构化纪要，可导出为 Markdown 或 Word |
+| 📄 **会后纪要导出** | 会议结束自动生成结构化纪要，可导出为 Markdown（Word 导出即将推出） |
 
 ## 工作原理
 
 ```
-┌──────────────┐    ┌──────────────┐    ┌────────────────┐
-│  系统音频     │───>│  STT 引擎    │───>│  AI 提供商     │
-│ + 麦克风     │    │ （你的 Key）  │    │ （你的 Key）   │
-└──────────────┘    └──────┬───────┘    └───────┬────────┘
-                           │                     │
-                       转写文本              翻译 + 摘要
-                       + 字幕              + 发言建议
-                           │                     │
-                           └─────────┬───────────┘
-                                     │
-                           ┌─────────▼─────────┐
-                           │   本地 SQLite 数据库 │
-                           │  （仅存储在你的设备） │
-                           └───────────────────┘
+┌──────────────────┐    ┌──────────────┐    ┌────────────────┐
+│  音频输入         │───>│  STT 引擎    │───>│  AI 提供商     │
+│ （麦克风或系统     │    │ （你的 Key）  │    │ （你的 Key）   │
+│   loopback）     │    │              │    │                │
+└──────────────────┘    └──────┬───────┘    └───────┬────────┘
+                               │                     │
+                           转写文本              翻译 + 摘要
+                           + 字幕              + 发言建议
+                               │                     │
+                               └─────────┬───────────┘
+                                         │
+                               ┌─────────▼─────────┐
+                               │   本地 SQLite 数据库 │
+                               │  （仅存储在你的设备） │
+                               └───────────────────┘
 ```
+
+> **当前音频捕获说明：** 应用通过 `getUserMedia` 捕获你选择的麦克风。如需录制对方声音，需要在系统中启用 loopback（Windows：立体声混音；macOS：虚拟音频线缆，例如 BlackHole 的替代品）。macOS ScreenCaptureKit 原生系统音频捕获在路线图中，目前尚未集成。
 
 **核心架构原则：**
 - **纯 BYOK** — 使用你自己的 AI 和 STT API Key，我们永远看不到它们
 - **本地优先** — 音频、转写文本、设置全部仅存储在你的设备上
 - **零 GPL** — 所有依赖均为商业安全许可（MIT/BSD/Apache-2.0）
-- **无云端依赖** — 应用仅与你选择的 AI/STT 服务商通信
+- **离线路径在计划中** — 当前必须配置至少一个云端 STT/AI Key，离线本地 Whisper STT 引擎在路线图中
 
 ## 支持的服务商
 
@@ -213,13 +220,14 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 
 ### 语音识别引擎
 
-| 引擎 | 地区 | 类型 |
-|------|------|------|
-| Deepgram | 海外 | 实时 WebSocket |
-| Whisper API (OpenAI) | 海外 | 分段 REST |
-| 讯飞语音 | 国内 | 实时 WebSocket |
-| 阿里语音 | 国内 | 实时 WebSocket |
-| 本地 Whisper | 离线 | whisper.cpp (MIT) |
+| 引擎 | 地区 | 类型 | 状态 |
+|------|------|------|------|
+| Deepgram | 海外 | 实时 WebSocket | ✅ 稳定 |
+| Whisper API (OpenAI) | 海外 | 分段 REST | ✅ 稳定 |
+| 讯飞语音 | 国内 | 实时 WebSocket | 🟡 Beta — WebSocket 鉴权签名尚未完整实现 |
+| 本地 Whisper | 离线 | whisper.cpp (MIT) | 🔜 计划中 — 暂未发布 |
+
+> 阿里语音 (Paraformer) 之前列在此处但尚未实现，已从代码中暂时移除，待真正集成后再加回。
 
 ## 快速开始
 

@@ -96,19 +96,18 @@ export async function exportMarkdown(minutes: MeetingMinutes): Promise<string> {
   return (result as string) || filename;
 }
 
-/** Export meeting minutes as Word (.docx) file */
-export async function exportWord(minutes: MeetingMinutes): Promise<string> {
-  // Use docx library to generate Word document
-  // Since docx is a complex library, we'll generate the content in main process
-  const filename = `minutes_${new Date().toISOString().slice(0, 10)}_${sanitizeFilename(minutes.title)}.docx`;
-
-  const result = await window.electronAPI?.file.export('docx', JSON.stringify({
-    filename,
-    minutes,
-    disclaimer: { en: EXPORT_DISCLAIMER_EN, zh: EXPORT_DISCLAIMER_ZH },
-  }));
-
-  return (result as string) || filename;
+/**
+ * Export meeting minutes as Word (.docx) file.
+ *
+ * NOT YET IMPLEMENTED — the `docx` dependency is installed but the generator
+ * is still TODO. This function throws so callers can surface the state honestly
+ * rather than silently writing a .md file with a .docx extension.
+ */
+export async function exportWord(_minutes: MeetingMinutes): Promise<string> {
+  throw new Error(
+    'Word (.docx) export is not yet implemented. Please use Markdown export for now. / ' +
+    'Word 导出暂未实现，请先使用 Markdown 导出。'
+  );
 }
 
 function sanitizeFilename(name: string): string {

@@ -5,11 +5,13 @@
 
 /** Supported STT engine IDs */
 export type STTEngineId =
-  | 'deepgram'        // Deepgram (global)
-  | 'whisper_api'     // OpenAI Whisper API
-  | 'xfyun'           // iFlytek (China)
-  | 'aliyun_speech'   // Alibaba Speech (China)
-  | 'local_whisper';  // Local Whisper.cpp (offline)
+  | 'deepgram'        // Deepgram (global) — stable
+  | 'whisper_api'     // OpenAI Whisper API — stable
+  | 'xfyun'           // iFlytek (China) — beta (auth signature incomplete)
+  | 'local_whisper';  // Local Whisper.cpp (offline) — planned, not yet usable
+
+/** Implementation status — used to gate UI and warn users honestly */
+export type STTEngineStatus = 'stable' | 'beta' | 'planned';
 
 /** STT configuration */
 export interface STTConfig {
@@ -44,6 +46,10 @@ export interface STTEngineInfo {
   apiKeyGuideUrl?: string;
   pricing: string;
   strengths: string[];
+  /** Implementation status. 'beta'/'planned' engines must be clearly marked in UI. */
+  status: STTEngineStatus;
+  /** Short note shown when status is 'beta' or 'planned' (bilingual, " / "-separated) */
+  statusNote?: string;
 }
 
 /** STT Engine interface */
@@ -75,6 +81,7 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     apiKeyGuideUrl: 'https://console.deepgram.com/signup',
     pricing: '$0.0043/min (Pay-as-you-go)',
     strengths: ['Ultra-low latency ~300ms', 'Real-time streaming', 'Speaker diarization', 'Multi-language'],
+    status: 'stable',
   },
   {
     id: 'whisper_api',
@@ -87,6 +94,7 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     apiKeyGuideUrl: 'https://platform.openai.com/api-keys',
     pricing: '$0.006/min',
     strengths: ['High accuracy', '99 languages', 'Auto language detection'],
+    status: 'stable',
   },
   {
     id: 'xfyun',
@@ -99,18 +107,8 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     apiKeyGuideUrl: 'https://console.xfyun.cn/services/iat',
     pricing: 'Free 500h/year',
     strengths: ['Best Chinese accuracy', 'Dialect support', 'Large free tier', 'Real-time streaming'],
-  },
-  {
-    id: 'aliyun_speech',
-    name: '阿里语音 (Paraformer)',
-    nameEn: 'Alibaba Speech (Paraformer)',
-    region: 'china',
-    description: '中文优秀，与通义千问同生态',
-    descriptionEn: 'Excellent Chinese, same ecosystem as Qwen',
-    requiresApiKey: true,
-    apiKeyGuideUrl: 'https://nls-portal.console.aliyun.com/',
-    pricing: 'Free tier + ¥1.8/hr',
-    strengths: ['Excellent Chinese', 'Alibaba Cloud ecosystem', 'Paraformer model'],
+    status: 'beta',
+    statusNote: 'WebSocket auth signing incomplete — connection may fail / WebSocket 鉴权签名未完整实现，可能连接失败',
   },
   {
     id: 'local_whisper',
@@ -122,5 +120,7 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     requiresApiKey: false,
     pricing: 'Free (requires GPU or Apple Silicon)',
     strengths: ['Fully offline', 'Zero cost', 'Data never leaves device', 'Best privacy'],
+    status: 'planned',
+    statusNote: 'whisper.cpp integration not yet shipped / whisper.cpp 集成尚未发布',
   },
 ];

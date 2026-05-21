@@ -17,9 +17,8 @@ class STTEngineRegistry {
   constructor() {
     this.engines.set('deepgram', new DeepgramEngine());
     this.engines.set('whisper_api', new WhisperAPIEngine());
-    this.engines.set('xfyun', new XfyunEngine());
-    this.engines.set('local_whisper', new LocalWhisperEngine());
-    // aliyun_speech: placeholder, not yet implemented
+    this.engines.set('xfyun', new XfyunEngine());          // beta — auth signing incomplete
+    this.engines.set('local_whisper', new LocalWhisperEngine()); // planned — whisper.cpp not yet integrated
   }
 
   /** Get a specific engine */

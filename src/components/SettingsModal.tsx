@@ -326,30 +326,48 @@ export default function SettingsModal() {
                     store.userRegion === 'china'
                       ? e.region === 'china' || e.region === 'local'
                       : e.region === 'global' || e.region === 'local')
-                  .map(engine => (
-                    <button key={engine.id}
-                      onClick={() => store.setSTTEngine(engine.id as STTEngineId)}
-                      className={`w-full p-3 rounded-xl border text-left transition-all ${
-                        store.sttEngine === engine.id
-                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                          : 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300'}`}>
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-sm text-zinc-900 dark:text-white">{engine.nameEn}</p>
-                          <p className="text-xs text-zinc-500">{engine.descriptionEn} / {engine.description}</p>
-                          <p className="text-xs text-zinc-400 mt-0.5">{engine.pricing}</p>
+                  .map(engine => {
+                    const isPlanned = engine.status === 'planned';
+                    const isBeta = engine.status === 'beta';
+                    return (
+                      <button key={engine.id}
+                        onClick={() => !isPlanned && store.setSTTEngine(engine.id as STTEngineId)}
+                        disabled={isPlanned}
+                        className={`w-full p-3 rounded-xl border text-left transition-all ${
+                          isPlanned ? 'opacity-50 cursor-not-allowed' : ''
+                        } ${
+                          store.sttEngine === engine.id
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                            : 'border-zinc-200 dark:border-zinc-700 hover:border-zinc-300'}`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-sm text-zinc-900 dark:text-white">{engine.nameEn}</p>
+                            <p className="text-xs text-zinc-500">{engine.descriptionEn} / {engine.description}</p>
+                            <p className="text-xs text-zinc-400 mt-0.5">{engine.pricing}</p>
+                            {(isBeta || isPlanned) && engine.statusNote && (
+                              <p className={`text-xs mt-1 ${isPlanned ? 'text-zinc-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                                ⚠ {engine.statusNote}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-col gap-1 ml-2 shrink-0">
+                            {isPlanned && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">Planned</span>
+                            )}
+                            {isBeta && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Beta</span>
+                            )}
+                            {engine.region === 'local' && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">Offline</span>
+                            )}
+                            {!engine.requiresApiKey && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">No Key</span>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex flex-col gap-1 ml-2">
-                          {engine.region === 'local' && (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">Offline</span>
-                          )}
-                          {!engine.requiresApiKey && (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">No Key</span>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
               </div>
 
               {/* STT API Key input */}
