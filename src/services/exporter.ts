@@ -1,6 +1,8 @@
 // ============================================================
-// Export Service — Markdown and Word (.docx) export
-// Saves to ~/MeetingAI/minutes/
+// Export Service — Markdown export today; Word (.docx) is planned but
+// not yet implemented (its dependency and exportWord function were
+// removed to avoid a ghost dep — see the note further down).
+// Output saves to ~/MeetingAI/minutes/.
 // ============================================================
 
 import type { MeetingMinutes } from './post-meeting';

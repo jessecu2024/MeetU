@@ -53,7 +53,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
                              └───────────────────┘
 ```
 
-> **Audio capture today:** macOS records the selected microphone via `getUserMedia`. To capture other participants' voices, route the meeting app's output through a loopback device (Windows: Stereo Mix; macOS: a virtual audio cable). Native system-audio capture (macOS ScreenCaptureKit) is on the roadmap but not yet integrated.
+> **Audio capture today:** MeetU records the audio input device you select via `getUserMedia` — by default, the microphone — on both macOS and Windows. To capture other participants' voices, route the meeting app's output through a loopback device (Windows: Stereo Mix; macOS: a non-GPL virtual audio cable) and pick that device as the input. Native driverless system-audio capture (macOS ScreenCaptureKit per-app; Windows WASAPI Loopback full-system) is on the roadmap but not yet integrated.
 
 **Key architecture principles:**
 - **BYOK (Bring Your Own Key)** — You use your own AI & STT API keys. We never see them.

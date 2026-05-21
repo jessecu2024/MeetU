@@ -177,7 +177,7 @@ function MinutesPreview({ minutes }: { minutes: MeetingMinutes }) {
           title="Word (.docx) export is not yet implemented. Please use Markdown for now. / Word 导出暂未实现，请先使用 Markdown。"
           className="flex-1 py-2 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700
             text-zinc-400 dark:text-zinc-500 opacity-60 cursor-not-allowed">
-          Export Word (Coming soon)
+          Export Word (Coming soon) / 导出 Word（即将推出）
         </button>
       </div>
 
