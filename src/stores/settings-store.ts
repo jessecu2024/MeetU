@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import type { AIProviderId, AIFunction, UserAIConfig } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
-import { isSelectableSTTEngine, getDefaultSTTEngineForRegion } from '../services/stt-engine/types';
+import { migrateSTTConfig } from '../services/stt-engine/types';
 
 // Type for electron API (injected via preload)
 declare global {
@@ -215,39 +215,48 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       if (!all) { set({ settingsLoaded: true }); return; }
 
       const aiConfigRaw = all.aiConfig as Record<string, unknown> | undefined;
-
-      // Migrate settings written by earlier versions.
-      // - aliyun_speech was listed in earlier builds but never implemented.
-      // - local_whisper exists in the type union but its engine is a stub
-      //   (status: 'planned') and would silently fall back to demo mode at
-      //   runtime, so a persisted selection must NOT be honored.
-      // Use isSelectableSTTEngine as the single source of truth for which
-      // engines users are allowed to land on, and fall back to the region's
-      // default (xfyun for China, deepgram otherwise) when the stored value
-      // is missing, removed, or planned-only.
-      const storedSttEngine = all.sttEngine as string | undefined;
       const userRegion = (all.userRegion as 'global' | 'china' | null) || null;
-      const sttEngine: STTEngineId = isSelectableSTTEngine(storedSttEngine)
-        ? storedSttEngine
-        : getDefaultSTTEngineForRegion(userRegion);
+
+      // Normalize the persisted STT configuration. migrateSTTConfig handles
+      // three legacy cases (removed engine IDs like `aliyun_speech`, stub
+      // engines like `local_whisper`, and missing values) by returning a
+      // selectable engine plus a pruned key map. We must write the result
+      // back to disk — keeping the migration in memory only would mean the
+      // user re-encounters the broken state on the next launch, and orphan
+      // API keys would survive in encrypted storage indefinitely.
+      const migration = migrateSTTConfig(
+        all.sttEngine as string | undefined,
+        all.sttApiKeys as Record<string, string> | undefined,
+        userRegion,
+      );
 
       set({
         settingsLoaded: true,
         legalAccepted: (all.legalAccepted as boolean) || false,
         isFirstLaunch: all.isFirstLaunch !== false, // default true
-        userRegion: (all.userRegion as 'global' | 'china' | null) || null,
+        userRegion,
         aiConfig: {
           defaultProvider: (aiConfigRaw?.defaultProvider as AIProviderId) || 'claude',
           functionOverrides: (aiConfigRaw?.functionOverrides as Record<string, AIProviderId>) || {},
           apiKeys: (aiConfigRaw?.apiKeys as Record<string, string>) || {},
           selectedModels: (aiConfigRaw?.selectedModels as Record<string, string>) || {},
         },
-        sttEngine,
-        sttApiKeys: (all.sttApiKeys as Record<string, string>) || {},
+        sttEngine: migration.engine,
+        sttApiKeys: migration.apiKeys,
         userProfile: (all.userProfile as UserProfile) || get().userProfile,
         appSettings: { ...get().appSettings, ...(all.appSettings as Partial<AppSettings>) },
         customTerms: (all.customTerms as Array<{ source: string; target: string }>) || [],
       });
+
+      // Persist anything the migration changed so the broken state does not
+      // resurface on next launch.
+      if (migration.engineChanged) {
+        persist('sttEngine', migration.engine);
+      }
+      for (const orphanEngineId of migration.prunedKeys) {
+        // setEncryptedSttApiKey deletes the entry when apiKey is empty.
+        persist('sttApiKey', { engine: orphanEngineId, apiKey: '' });
+      }
     } catch (err) {
       console.error('[Settings] Failed to load settings:', err);
       set({ settingsLoaded: true });

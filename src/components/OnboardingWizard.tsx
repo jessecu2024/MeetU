@@ -8,7 +8,7 @@ import { useSettingsStore } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
-import { STT_ENGINE_INFO } from '../services/stt-engine/types';
+import { STT_ENGINE_INFO, isSelectableSTTEngine } from '../services/stt-engine/types';
 
 /** API Key format patterns for pre-validation (no network request) */
 const API_KEY_PATTERNS: Record<AIProviderId, { pattern: RegExp; hint: string; hintZh: string; placeholder: string }> = {
@@ -378,12 +378,13 @@ export default function OnboardingWizard() {
                   ? e.region === 'china' || e.region === 'local'
                   : e.region === 'global' || e.region === 'local')
               .map((engine) => {
-                const isPlanned = engine.status === 'planned';
+                const selectable = isSelectableSTTEngine(engine.id);
+                const isPlanned = !selectable;
                 const isBeta = engine.status === 'beta';
                 return (
                   <button key={engine.id}
-                    onClick={() => !isPlanned && store.setSTTEngine(engine.id as STTEngineId)}
-                    disabled={isPlanned}
+                    onClick={() => selectable && store.setSTTEngine(engine.id as STTEngineId)}
+                    disabled={!selectable}
                     className={`w-full p-4 rounded-xl border text-left transition-all ${
                       isPlanned ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-400'
                     } ${

@@ -1,6 +1,8 @@
 // ============================================================
 // STT (Speech-to-Text) Engine Interface / 语音识别引擎统一接口
-// Supports: Deepgram, Whisper API, iFlytek, Alibaba, local Whisper
+// Currently shipped: Deepgram, Whisper API (stable); iFlytek (beta);
+// Local Whisper (planned). Alibaba Speech (Paraformer) was previously
+// listed but is removed until a real implementation lands.
 // ============================================================
 
 /** Supported STT engine IDs */
@@ -139,4 +141,57 @@ export function isSelectableSTTEngine(id: string | undefined | null): id is STTE
 /** Region-appropriate default fallback when a stored engine is invalid. */
 export function getDefaultSTTEngineForRegion(region: 'global' | 'china' | null | undefined): STTEngineId {
   return region === 'china' ? 'xfyun' : 'deepgram';
+}
+
+/** Result of migrating a persisted STT configuration. */
+export interface STTMigrationResult {
+  /** The engine the app should use now (always selectable). */
+  engine: STTEngineId;
+  /** API keys after dropping entries for removed / planned engines. */
+  apiKeys: Partial<Record<STTEngineId, string>>;
+  /** Engine IDs whose stored non-empty key was discarded; callers must
+   *  persist a deletion for each so the store doesn't keep orphan secrets. */
+  prunedKeys: string[];
+  /** True iff the resolved engine differs from the persisted value. */
+  engineChanged: boolean;
+}
+
+/**
+ * Normalize a persisted STT configuration written by an earlier version of
+ * the app. Pure function; takes the raw stored values and returns what
+ * should be in memory plus a list of side effects the caller must persist.
+ *
+ * Three classes of legacy values are handled:
+ *  - missing / unknown engine id  → fall back to the region default
+ *  - engine id removed from the union (e.g. `aliyun_speech`) → same
+ *  - engine id still in the union but `status === 'planned'` (e.g.
+ *    `local_whisper`) → same; persisting it would let the runtime hit the
+ *    stub path
+ *
+ * Orphan key entries (keys for engines we no longer accept) are dropped
+ * from the returned map and listed in `prunedKeys` so the caller can issue
+ * the corresponding deletions against the encrypted store. Empty / missing
+ * keys are silently ignored — only actually-set secrets need pruning.
+ */
+export function migrateSTTConfig(
+  storedEngine: string | undefined | null,
+  storedKeys: Record<string, string> | undefined | null,
+  region: 'global' | 'china' | null | undefined,
+): STTMigrationResult {
+  const engine: STTEngineId = isSelectableSTTEngine(storedEngine)
+    ? storedEngine
+    : getDefaultSTTEngineForRegion(region);
+  const engineChanged = storedEngine !== engine;
+
+  const apiKeys: Partial<Record<STTEngineId, string>> = {};
+  const prunedKeys: string[] = [];
+  for (const [id, key] of Object.entries(storedKeys || {})) {
+    if (isSelectableSTTEngine(id)) {
+      apiKeys[id] = key;
+    } else if (key) {
+      prunedKeys.push(id);
+    }
+  }
+
+  return { engine, apiKeys, prunedKeys, engineChanged };
 }
