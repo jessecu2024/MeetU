@@ -1,17 +1,20 @@
 // ============================================================
 // STT (Speech-to-Text) Engine Interface / 语音识别引擎统一接口
-// Currently shipped: Deepgram, Whisper API (stable). iFlytek and Local
-// Whisper are both planned — their skeletons live in this directory but
-// they are not yet selectable (HMAC-SHA256 signing TODO for iFlytek;
-// whisper.cpp integration TODO for Local Whisper). Alibaba Speech
-// (Paraformer) was previously listed but is removed until a real
-// implementation lands.
+// Currently shipped: Deepgram (stable). Whisper API, iFlytek and Local
+// Whisper are all planned — their skeletons live in this directory but
+// they are not yet selectable:
+//   - Whisper API: feedAudio assumes PCM Float32 but production capture
+//     emits webm/opus chunks; needs reworking to accept webm segments.
+//   - iFlytek:    WebSocket HMAC-SHA256 signing is still a placeholder.
+//   - Local Whisper: whisper.cpp integration is TODO.
+// Alibaba Speech (Paraformer) was previously listed but is removed until
+// a real implementation lands.
 // ============================================================
 
 /** Supported STT engine IDs */
 export type STTEngineId =
   | 'deepgram'        // Deepgram (global) — stable
-  | 'whisper_api'     // OpenAI Whisper API — stable
+  | 'whisper_api'     // OpenAI Whisper API — planned (engine expects PCM but production capture is webm/opus)
   | 'xfyun'           // iFlytek (China) — planned (HMAC-SHA256 signing not yet implemented)
   | 'local_whisper';  // Local Whisper.cpp (offline) — planned, not yet usable
 
@@ -104,7 +107,16 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     apiKeyGuideUrl: 'https://platform.openai.com/api-keys',
     pricing: '$0.006/min',
     strengths: ['High accuracy', '99 languages', 'Auto language detection'],
-    status: 'stable',
+    // Demoted from 'stable' to 'planned' after deeper review: the production
+    // audio path is MediaRecorder → webm/opus chunks, but
+    // whisper-api-engine.feedAudio reads each chunk as a `new Float32Array`
+    // and re-encodes a WAV from those bytes. The result is garbage audio,
+    // so Whisper returns either nothing or hallucinated transcripts.
+    // Fixing this requires reworking the engine to accept webm/opus
+    // segments directly (OpenAI accepts webm) — out of scope for the
+    // honesty PR. Marked planned until that lands.
+    status: 'planned',
+    statusNote: 'Audio pipeline mismatch: production capture sends webm/opus but the engine expects PCM Float32. Disabled until reworked. / 当前音频管线为 webm/opus，但 Whisper API 引擎按 PCM Float32 解析，会产生无效音频。已暂时禁用，待重构后再启用。',
   },
   {
     id: 'xfyun',

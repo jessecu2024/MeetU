@@ -23,16 +23,28 @@ describe('sttRegistry.getConfiguredEngine fallback', () => {
     expect(result.isMock).toBe(true);
   });
 
-  it('skips planned engines in the fallback loop and picks the next selectable one with a key', async () => {
-    // Preferred engine has no key; planned engine has a (stale) key; a real
-    // engine also has a key. The loop must skip the planned entry and land
-    // on the real one.
+  it('skips planned engines in the fallback loop and falls back to mock when no selectable engine has a key', async () => {
+    // Whisper API used to be the next selectable engine; once it was
+    // demoted to 'planned' (audio-format mismatch), the only stable
+    // engine left is Deepgram. With no Deepgram key configured and
+    // every other key belonging to a planned engine, the loop must
+    // return the mock rather than picking one of those planned engines.
     const result = await sttRegistry.getConfiguredEngine('deepgram', {
       local_whisper: 'should-be-ignored',
-      whisper_api: 'sk-real',
+      whisper_api: 'sk-also-planned-now',
+      xfyun: 'app:key:secret',
+    });
+    expect(result.isMock).toBe(true);
+  });
+
+  it('uses deepgram when it has a key, regardless of other planned keys present', async () => {
+    const result = await sttRegistry.getConfiguredEngine('xfyun', {
+      deepgram: 'sk-real',
+      xfyun: 'planned-no-effect',
+      whisper_api: 'sk-planned-too',
     });
     expect(result.isMock).toBe(false);
-    expect(result.engine.id).toBe('whisper_api');
+    expect(result.engine.id).toBe('deepgram');
   });
 
   it('skips orphan keys for removed engine IDs (aliyun_speech)', async () => {

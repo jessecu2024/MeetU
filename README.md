@@ -80,7 +80,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 | Engine | Region | Type | Status |
 |--------|--------|------|--------|
 | Deepgram | Global | Real-time WebSocket | ✅ Stable |
-| Whisper API (OpenAI) | Global | Segment-based REST | ✅ Stable |
+| Whisper API (OpenAI) | Global | Segment-based REST | 🔜 Planned — engine expects PCM but production capture is webm/opus; disabled until reworked |
 | iFlytek | China | Real-time WebSocket | 🔜 Planned — WebSocket HMAC-SHA256 signing not yet implemented; disabled in UI |
 | Local Whisper | Offline | whisper.cpp (MIT) | 🔜 Planned — not yet shipped |
 
@@ -92,7 +92,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 
 - **macOS 13+** or **Windows 10+**
 - **Node.js 18+**
-- One STT engine API Key **required for live transcription** (Deepgram or OpenAI Whisper API). Without one, the app falls back to a demo / mock transcript. The planned offline Local Whisper engine is not yet shipped.
+- Deepgram API Key **required for live transcription** — currently the only selectable STT engine. Without one, the app falls back to a demo / mock transcript. Whisper API, iFlytek, and Local Whisper are all in the roadmap but not yet usable.
 - At least one AI provider API Key (e.g., DeepSeek, OpenAI, Claude) — required for translation, summarization, and speech suggestions. Without one, only the raw recording + STT transcript will work.
 
 ### Installation
@@ -224,7 +224,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 | 引擎 | 地区 | 类型 | 状态 |
 |------|------|------|------|
 | Deepgram | 海外 | 实时 WebSocket | ✅ 稳定 |
-| Whisper API (OpenAI) | 海外 | 分段 REST | ✅ 稳定 |
+| Whisper API (OpenAI) | 海外 | 分段 REST | 🔜 计划中 — 引擎按 PCM 解析但实际音频管线为 webm/opus，重构后再启用 |
 | 讯飞语音 | 国内 | 实时 WebSocket | 🔜 计划中 — WebSocket HMAC-SHA256 签名尚未实现；UI 中已禁用 |
 | 本地 Whisper | 离线 | whisper.cpp (MIT) | 🔜 计划中 — 暂未发布 |
 
@@ -236,7 +236,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 
 - **macOS 13+** 或 **Windows 10+**
 - **Node.js 18+**
-- **必需**：一个 STT 引擎的 API Key（Deepgram 或 OpenAI Whisper API）用于实时转写；未配置时应用会退回到 demo/mock 转写。计划中的离线 Local Whisper 引擎尚未发布。
+- **必需**：Deepgram API Key 用于实时转写 — 当前唯一可选的 STT 引擎；未配置时应用会退回到 demo/mock 转写。Whisper API、讯飞、Local Whisper 均在路线图中尚未发布。
 - 至少一个 AI 提供商的 API Key（如 DeepSeek、OpenAI、Claude）— 用于翻译、摘要、发言建议；未配置时仅原始录音 + STT 转写可用。
 
 ### 安装

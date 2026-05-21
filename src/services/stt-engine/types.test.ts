@@ -12,8 +12,11 @@ describe('isSelectableSTTEngine', () => {
     expect(isSelectableSTTEngine('deepgram')).toBe(true);
   });
 
-  it('accepts stable engines (whisper_api)', () => {
-    expect(isSelectableSTTEngine('whisper_api')).toBe(true);
+  it('rejects whisper_api — its feedAudio expects PCM Float32 but the production capture pipeline emits webm/opus, so it would produce garbage transcripts', () => {
+    // Was 'stable' until a deeper review found the audio-format mismatch.
+    // Demoted to 'planned' until the engine is reworked to accept webm
+    // segments directly (OpenAI accepts webm).
+    expect(isSelectableSTTEngine('whisper_api')).toBe(false);
   });
 
   it('rejects planned engines (xfyun) — its auth signing is still a placeholder so live sessions fail', () => {
@@ -44,7 +47,7 @@ describe('isSelectableSTTEngine', () => {
 });
 
 describe('getDefaultSTTEngineForRegion', () => {
-  it('returns deepgram for global users (whisper_api is the next stable candidate)', () => {
+  it('returns deepgram for global users (the only stable engine today; whisper_api is in the fallback chain but currently planned)', () => {
     expect(getDefaultSTTEngineForRegion('global')).toBe('deepgram');
   });
 
@@ -155,13 +158,14 @@ describe('migrateSTTConfig', () => {
     const r = migrateSTTConfig('local_whisper', {
       aliyun_speech: 'old1',
       local_whisper: 'old2',
-      xfyun: 'old3',         // xfyun is also planned today
-      whisper_api: 'sk-real',
+      xfyun: 'old3',
+      whisper_api: 'old4',       // whisper_api is also planned today
+      deepgram: 'sk-real',       // the only selectable engine
     }, null);
     expect(r.engine).toBe('deepgram');               // region null → global default
     expect(r.engineChanged).toBe(true);
-    expect(r.apiKeys).toEqual({ whisper_api: 'sk-real' }); // only selectable engine retained
-    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper', 'xfyun']);
+    expect(r.apiKeys).toEqual({ deepgram: 'sk-real' }); // only selectable engine retained
+    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper', 'whisper_api', 'xfyun']);
   });
 });
 

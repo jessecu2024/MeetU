@@ -49,7 +49,7 @@ MeetU 采用 **100% BYOK** 模式：
 | 操作系统 | Windows 10+ 或 macOS 13+ (Ventura) |
 | 内存 | 建议 4GB+ |
 | 网络 | 使用在线 AI/STT 服务时需要网络连接 |
-| STT API Key | **必需**：Deepgram 或 OpenAI Whisper API 之一（用于实时转写） |
+| STT API Key | **必需**：Deepgram API Key（用于实时转写；当前唯一可选的 STT 引擎） |
 | AI API Key | 至少一个 AI 提供商的 Key（用于翻译/摘要/建议功能） |
 
 > 计划中的离线 Local Whisper 引擎尚未发布；当前版本必须配置一个云端 STT Key 才能完成实时转写，否则应用会退回到 demo/mock 转写。
@@ -129,7 +129,7 @@ npm run build        # 构建发布版
 | 引擎 | 说明 | 状态 |
 |------|------|------|
 | Deepgram | 实时 WebSocket 流式转写，延迟低 | ✅ Stable |
-| Whisper API | OpenAI 的语音识别 API | ✅ Stable |
+| Whisper API | OpenAI 的语音识别 API | 🔜 Planned — 引擎按 PCM 解析但生产音频为 webm/opus，UI 中已禁用 |
 | 讯飞语音 | 国内实时语音识别 | 🔜 Planned — WebSocket HMAC 签名未实现，UI 中已禁用 |
 | 本地 Whisper | 离线运行，MIT 许可 | 🔜 Planned — whisper.cpp 集成尚未发布，UI 中已禁用 |
 
@@ -343,7 +343,7 @@ npm run build        # 构建发布版
 | 引擎 | 状态 | 获取 Key 地址 | 推荐场景 |
 |------|------|--------------|---------|
 | Deepgram | ✅ Stable | [console.deepgram.com](https://console.deepgram.com) | 海外首选，实时性好 |
-| Whisper API | ✅ Stable | [platform.openai.com](https://platform.openai.com) | 海外备选 |
+| Whisper API | 🔜 Planned — 引擎按 PCM 解析但生产音频为 webm/opus，UI 中已禁用 | [platform.openai.com](https://platform.openai.com) | 海外备选（待修复音频管线） |
 | 讯飞语音 | 🔜 Planned — WebSocket HMAC-SHA256 鉴权签名尚未实现，UI 中已禁用 | [console.xfyun.cn](https://console.xfyun.cn) | 国内（待补签名后转 Stable） |
 | 本地 Whisper | 🔜 Planned — 在设置面板中显示为禁用状态 | — | whisper.cpp 集成尚未发布 |
 
@@ -373,9 +373,9 @@ npm run build        # 构建发布版
 
 ### Q: 没有 AI API Key 可以使用吗？
 
-可以。**录音 + 语音转文字**只需要一个 STT API Key（Deepgram 或 Whisper API），无需 AI Key。但翻译、摘要、发言建议等 AI 功能需要额外配置 AI Key。
+可以。**录音 + 语音转文字**只需要一个 Deepgram API Key，无需 AI Key。但翻译、摘要、发言建议等 AI 功能需要额外配置 AI Key。
 
-> 计划中的"本地 Whisper" 离线引擎尚未发布；目前实时转写必须配置一个云端 STT Key。
+> Whisper API、讯飞、本地 Whisper 都在路线图中尚未发布；当前实时转写必须使用 Deepgram。
 
 ### Q: API 费用由谁承担？
 

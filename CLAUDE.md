@@ -10,14 +10,14 @@
 | macOS ScreenCaptureKit 原生捕获 | 🔜 Planned | `native/macos/` 有 Swift 草稿与 binding.gyp，但 `audio_tap.mm` 的 N-API 绑定仍是 placeholder，未参与构建 |
 | Windows WASAPI Loopback 原生捕获 | 🔜 Planned | `native/windows/` 尚未创建 |
 | Deepgram STT | ✅ Stable | WebSocket 经主进程 IPC，已可用 |
-| OpenAI Whisper API STT | ✅ Stable | REST，分段 5s |
+| OpenAI Whisper API STT | 🔜 Planned | 引擎实现按 PCM Float32 解析音频，但生产 capture pipeline 输出 webm/opus，会产生无效转写；需要改写 engine 接受 webm 段后再启用 |
 | 讯飞 STT | 🔜 Planned | WebSocket auth 签名为 placeholder，运行时鉴权一定失败；engine 已降为 `status: 'planned'`，UI 与 fallback 全部跳过，待 WebCrypto 补全 HMAC-SHA256 后再升级为 Stable |
 | 阿里语音 STT | ❌ Removed | 之前列在文档/类型中，但代码从未实现，已从 `STTEngineId` 移除 |
 | Local Whisper (whisper.cpp) | 🔜 Planned | `local-whisper.ts` 为 stub，`feedAudio`/`stopSession` 是 TODO |
 | 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
 | Markdown 纪要导出 | ✅ Stable | 主进程写 `~/MeetingAI/minutes/*.md` |
 | Word (.docx) 纪要导出 | 🔜 Planned | `docx@^8` 已装但生成器未实现；UI 上 "Export Word" 按钮已暂时禁用，不再静默保存为 .md |
-| PDF 纪要导出 | ❌ Not planned right now | `pdfkit` 在 `package.json` 但 0 引用，待删除或真实现 |
+| PDF 纪要导出 | ❌ Not planned right now | 此前装的 `pdfkit` 依赖已删除（曾在 `package.json` 但全代码 0 引用）；如未来需要 PDF 导出，请再添加依赖并真实现 |
 | i18n 多语言 | ❌ 未引入框架 | 渲染层用硬编码 `"English / 中文"` 双语字符串，扩展到日韩需要先引入 i18n 框架 |
 | GPL/AGPL 许可证审计 | ✅ Stable | `npm run check-licenses` 已实现 |
 | 单元测试 / CI | ✅ Stable | Vitest (`npm test`)、ESLint v9 flat config (`npm run lint`)、`tsc --noEmit` (`npm run typecheck`)、`.github/workflows/ci.yml` 在 push/PR 时跑 typecheck + lint + test + license 审计 |
@@ -68,7 +68,7 @@ macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；�
 - **通用**：DeepSeek（国内外均可）
 - **国内**：通义千问(Qwen) / MiniMax / 智谱(GLM)
 
-**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写必须至少配置一个云端 STT Key**（Deepgram 或 OpenAI Whisper API；讯飞引擎在路线图中尚未发布）；只有原始音频录制可以完全无 Key 工作。Local Whisper 离线引擎尚未发布。
+**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写必须配置 Deepgram API Key** — 是当前唯一可选的 STT 引擎；只有原始音频录制可以完全无 Key 工作。Whisper API、讯飞、Local Whisper 都在路线图中尚未发布。
 
 **收费模式：** 软件本身收费（一次性购买或订阅），AI 和 STT 费用由用户直接向对应服务商支付。
 
@@ -77,7 +77,7 @@ macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；�
 | 引擎 | 许可证 | 商用合规 | 实现状态 |
 |------|--------|---------|---------|
 | Deepgram | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable |
-| OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable |
+| OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | 🔜 Planned — 引擎按 PCM Float32 解析但生产 capture 输出 webm/opus；需先重构 engine 接受 webm 段 |
 | 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | 🔜 Planned — `xfyun-engine.ts` 的 HMAC 签名仍为 placeholder；`status: 'planned'`，UI / fallback / 迁移全部跳过；补全 WebCrypto HMAC-SHA256 后升级为 Stable |
 | 阿里语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ❌ 尚未实现，已暂时从 `STTEngineId` 类型中移除 |
 | whisper.cpp (本地) | **MIT 许可** | ✅ 可安全嵌入分发 | 🔜 Planned — `local-whisper.ts` 是 stub，`feedAudio` / `stopSession` 仍是 TODO |
