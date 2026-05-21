@@ -124,3 +124,19 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     statusNote: 'whisper.cpp integration not yet shipped / whisper.cpp 集成尚未发布',
   },
 ];
+
+/**
+ * Single source of truth for whether a user is allowed to actively select an
+ * STT engine. Engines with status === 'planned' are skeletons only and would
+ * silently fall back to demo mode at runtime; do not let users pick them.
+ */
+export function isSelectableSTTEngine(id: string | undefined | null): id is STTEngineId {
+  if (!id) return false;
+  const info = STT_ENGINE_INFO.find(e => e.id === id);
+  return !!info && info.status !== 'planned';
+}
+
+/** Region-appropriate default fallback when a stored engine is invalid. */
+export function getDefaultSTTEngineForRegion(region: 'global' | 'china' | null | undefined): STTEngineId {
+  return region === 'china' ? 'xfyun' : 'deepgram';
+}

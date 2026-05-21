@@ -377,46 +377,68 @@ export default function OnboardingWizard() {
                 store.userRegion === 'china'
                   ? e.region === 'china' || e.region === 'local'
                   : e.region === 'global' || e.region === 'local')
-              .map((engine) => (
-                <button key={engine.id}
-                  onClick={() => store.setSTTEngine(engine.id as STTEngineId)}
-                  className={`w-full p-4 rounded-xl border text-left transition-all hover:border-blue-400 ${
-                    store.sttEngine === engine.id
-                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                      : 'border-zinc-200 dark:border-zinc-700'}`}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-zinc-900 dark:text-white">{engine.nameEn}</p>
-                      <p className="text-xs text-zinc-500">{engine.name}</p>
-                      <p className="text-sm text-zinc-400 mt-0.5">
-                        {engine.descriptionEn}
-                      </p>
-                      <p className="text-xs text-zinc-400">{engine.description}</p>
-                      <p className="text-xs text-zinc-400 mt-1">{engine.pricing}</p>
+              .map((engine) => {
+                const isPlanned = engine.status === 'planned';
+                const isBeta = engine.status === 'beta';
+                return (
+                  <button key={engine.id}
+                    onClick={() => !isPlanned && store.setSTTEngine(engine.id as STTEngineId)}
+                    disabled={isPlanned}
+                    className={`w-full p-4 rounded-xl border text-left transition-all ${
+                      isPlanned ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-400'
+                    } ${
+                      store.sttEngine === engine.id
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                        : 'border-zinc-200 dark:border-zinc-700'}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-zinc-900 dark:text-white">{engine.nameEn}</p>
+                        <p className="text-xs text-zinc-500">{engine.name}</p>
+                        <p className="text-sm text-zinc-400 mt-0.5">
+                          {engine.descriptionEn}
+                        </p>
+                        <p className="text-xs text-zinc-400">{engine.description}</p>
+                        <p className="text-xs text-zinc-400 mt-1">{engine.pricing}</p>
+                        {(isBeta || isPlanned) && engine.statusNote && (
+                          <p className={`text-xs mt-1.5 ${isPlanned ? 'text-zinc-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                            ⚠ {engine.statusNote}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1.5 ml-2 shrink-0">
+                        {isPlanned && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
+                            Planned
+                          </span>
+                        )}
+                        {isBeta && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            Beta
+                          </span>
+                        )}
+                        {engine.region === 'local' && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                            Offline / 离线
+                          </span>
+                        )}
+                        {!engine.requiresApiKey && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                            No Key
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex flex-col gap-1.5 ml-2">
-                      {engine.region === 'local' && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
-                          Offline / 离线
-                        </span>
-                      )}
-                      {!engine.requiresApiKey && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
-                          No Key
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
 
-            <div className="mt-3 p-3 rounded-lg bg-green-50 dark:bg-green-900/20
-              border border-green-200 dark:border-green-800">
-              <p className="text-sm text-green-800 dark:text-green-300">
-                Choose "Local Whisper" for offline transcription — completely free, data never leaves your device.
+            <div className="mt-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/50
+              border border-zinc-200 dark:border-zinc-700">
+              <p className="text-sm text-zinc-700 dark:text-zinc-300">
+                A fully offline option (Local Whisper) is on the roadmap but not yet shipped. For now pick a cloud STT engine — your audio data still stays on your device, only the transcript request goes to your chosen provider.
               </p>
-              <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                选择「本地 Whisper」可在无网络时使用基础转写功能，完全免费、数据不出本机。
+              <p className="text-xs text-zinc-500 mt-1">
+                完全离线方案（本地 Whisper）在路线图中但尚未发布。当前请选择一个云端 STT 引擎 — 你的音频数据仍仅保存在本地，只有转写请求会发送给你选择的服务商。
               </p>
             </div>
 

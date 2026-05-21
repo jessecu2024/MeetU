@@ -14,7 +14,7 @@ import { listAudioDevices, listAudioOutputDevices } from '../services/audio/capt
 import type { AudioInputDevice, AudioOutputDevice } from '../services/audio/capture';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
-import { STT_ENGINE_INFO } from '../services/stt-engine/types';
+import { STT_ENGINE_INFO, isSelectableSTTEngine } from '../services/stt-engine/types';
 
 type Tab = 'ai' | 'stt' | 'profile' | 'app';
 
@@ -327,12 +327,13 @@ export default function SettingsModal() {
                       ? e.region === 'china' || e.region === 'local'
                       : e.region === 'global' || e.region === 'local')
                   .map(engine => {
-                    const isPlanned = engine.status === 'planned';
+                    const selectable = isSelectableSTTEngine(engine.id);
+                    const isPlanned = !selectable;
                     const isBeta = engine.status === 'beta';
                     return (
                       <button key={engine.id}
-                        onClick={() => !isPlanned && store.setSTTEngine(engine.id as STTEngineId)}
-                        disabled={isPlanned}
+                        onClick={() => selectable && store.setSTTEngine(engine.id as STTEngineId)}
+                        disabled={!selectable}
                         className={`w-full p-3 rounded-xl border text-left transition-all ${
                           isPlanned ? 'opacity-50 cursor-not-allowed' : ''
                         } ${

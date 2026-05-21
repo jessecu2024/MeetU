@@ -7,6 +7,7 @@
 import { create } from 'zustand';
 import type { AIProviderId, AIFunction, UserAIConfig } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
+import { isSelectableSTTEngine, getDefaultSTTEngineForRegion } from '../services/stt-engine/types';
 
 // Type for electron API (injected via preload)
 declare global {
@@ -215,15 +216,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
       const aiConfigRaw = all.aiConfig as Record<string, unknown> | undefined;
 
-      // Migrate settings written by earlier versions: aliyun_speech was listed
-      // but never implemented. If a stored engine ID is no longer in
-      // STTEngineId, fall back to the regional default so the UI doesn't get
-      // stuck on a non-existent engine.
-      const VALID_STT_IDS: STTEngineId[] = ['deepgram', 'whisper_api', 'xfyun', 'local_whisper'];
+      // Migrate settings written by earlier versions.
+      // - aliyun_speech was listed in earlier builds but never implemented.
+      // - local_whisper exists in the type union but its engine is a stub
+      //   (status: 'planned') and would silently fall back to demo mode at
+      //   runtime, so a persisted selection must NOT be honored.
+      // Use isSelectableSTTEngine as the single source of truth for which
+      // engines users are allowed to land on, and fall back to the region's
+      // default (xfyun for China, deepgram otherwise) when the stored value
+      // is missing, removed, or planned-only.
       const storedSttEngine = all.sttEngine as string | undefined;
-      const sttEngine: STTEngineId = (storedSttEngine && VALID_STT_IDS.includes(storedSttEngine as STTEngineId))
-        ? (storedSttEngine as STTEngineId)
-        : 'deepgram';
+      const userRegion = (all.userRegion as 'global' | 'china' | null) || null;
+      const sttEngine: STTEngineId = isSelectableSTTEngine(storedSttEngine)
+        ? storedSttEngine
+        : getDefaultSTTEngineForRegion(userRegion);
 
       set({
         settingsLoaded: true,
