@@ -24,14 +24,30 @@ Recording laws vary significantly across jurisdictions. In some regions, all par
   {
     titleEn: '2. Data Processing',
     titleZh: '2. 数据处理说明',
-    bodyEn: `• Your audio data and transcribed text are stored ONLY on your local device
-• When you use AI features (translation, summary, etc.), related text is sent to third-party AI service providers that YOU choose and pay for (e.g., Anthropic, OpenAI, DeepSeek)
-• This application does NOT store, transmit, or access any of your data
-• Each AI service's data processing policy is the responsibility of the respective service provider — please review them independently`,
-    bodyZh: `• 您的音频数据和文字内容仅存储在您的本地设备上
-• 当您使用 AI 翻译/摘要等功能时，相关文本将发送至您自行选择和付费的第三方 AI 服务商（如 Anthropic、OpenAI、DeepSeek 等）
-• 本应用不存储、不传输、不访问您的任何数据
-• 各 AI 服务的数据处理政策由对应服务商负责，请您自行了解`,
+    bodyEn: `Persistent storage on your device:
+• Raw recordings (.webm files) are saved to a folder under your home directory
+• Meeting transcripts are stored in a local SQLite database
+• Application settings and your encrypted API Keys are persisted via your OS's secure storage
+
+Outbound transmission (only to providers YOU configure and pay for):
+• Live transcription: audio frames are streamed directly from your device to your chosen STT provider (currently only Deepgram is selectable; Whisper API, iFlytek, and Local Whisper are roadmap items)
+• AI features (translation, summary, mention detection, speech suggestions): the relevant transcript text is sent to your chosen AI provider (e.g., Anthropic, OpenAI, Google, DeepSeek)
+
+What MeetU does NOT do:
+• MeetU operates no servers and does not receive, store, or proxy your audio, transcripts, or API Keys. All network traffic goes directly between your device and the providers you select.
+• Each STT/AI provider's data-handling policy is the responsibility of that provider — please review them independently before configuring a key.`,
+    bodyZh: `保存在您本地设备上：
+• 原始录音文件（.webm）存放于您主目录下的指定文件夹
+• 会议转写文本存放于本地 SQLite 数据库
+• 应用设置和加密后的 API Key 通过操作系统安全存储进行持久化
+
+向外发送（仅发往您自己配置并付费的服务商）：
+• 实时转写：音频帧从您的设备直接流式发送至您选择的 STT 服务商（当前仅 Deepgram 可选；Whisper API、讯飞、Local Whisper 均在路线图中）
+• AI 功能（翻译/摘要/@检测/发言建议）：相关转写文本将发送至您选择的 AI 服务商（如 Anthropic、OpenAI、Google、DeepSeek 等）
+
+MeetU 本身不会做的事：
+• MeetU 不运行任何服务器，不接收、不存储、不代理您的音频、转写或 API Key。所有网络流量直接发生在您的设备与您选择的服务商之间。
+• 各 STT/AI 服务商的数据处理政策由其各自负责，配置 API Key 前请自行了解。`,
   },
   {
     titleEn: '3. API Key Security',
