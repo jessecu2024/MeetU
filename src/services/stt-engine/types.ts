@@ -1,8 +1,11 @@
 // ============================================================
 // STT (Speech-to-Text) Engine Interface / 语音识别引擎统一接口
-// Currently shipped: Deepgram, Whisper API (stable); iFlytek (beta);
-// Local Whisper (planned). Alibaba Speech (Paraformer) was previously
-// listed but is removed until a real implementation lands.
+// Currently shipped: Deepgram, Whisper API (stable). iFlytek and Local
+// Whisper are both planned — their skeletons live in this directory but
+// they are not yet selectable (HMAC-SHA256 signing TODO for iFlytek;
+// whisper.cpp integration TODO for Local Whisper). Alibaba Speech
+// (Paraformer) was previously listed but is removed until a real
+// implementation lands.
 // ============================================================
 
 /** Supported STT engine IDs */

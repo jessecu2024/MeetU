@@ -286,19 +286,32 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setUserRegion: (region) => {
+    const nextDefaultProvider: AIProviderId = region === 'china' ? 'deepseek' : 'claude';
+    const nextSttEngine = getDefaultSTTEngineForRegion(region);
     set((state) => ({
       userRegion: region,
       aiConfig: {
         ...state.aiConfig,
-        defaultProvider: region === 'china' ? 'deepseek' : 'claude',
+        defaultProvider: nextDefaultProvider,
       },
       // Delegate to the helper instead of hard-coding xfyun for China.
       // The helper walks a fallback list and only returns engines for which
       // isSelectableSTTEngine is true, so this stays correct even when an
       // engine's status flips (e.g. xfyun → planned today, future Stable).
-      sttEngine: getDefaultSTTEngineForRegion(region),
+      sttEngine: nextSttEngine,
     }));
+    // Persist BOTH the region change and every value the store derived
+    // from it. Without this the user's first launch after picking China
+    // saw sttEngine=deepgram (or deepseek) in memory but the next launch
+    // re-loaded the old (or default-default) values from disk.
     persist('userRegion', region);
+    persist('sttEngine', nextSttEngine);
+    const s = get();
+    persist('aiConfig', {
+      defaultProvider: nextDefaultProvider,
+      functionOverrides: s.aiConfig.functionOverrides || {},
+      selectedModels: s.aiConfig.selectedModels || {},
+    });
   },
 
   setDefaultProvider: (id) => {
@@ -387,6 +400,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setSTTApiKey: (engine, key) => {
+    // Mirror the guard on setSTTEngine: even if a stray callsite tries to
+    // store an API key for a planned engine (e.g. via a debug shortcut or
+    // a future feature flag that gets shipped half-baked), refuse the
+    // write. Letting the key land would leave a secret in encrypted
+    // storage that the next migration would then have to clean up.
+    if (!isSelectableSTTEngine(engine)) {
+      console.warn(`[Settings] setSTTApiKey ignored — ${engine} is not currently selectable`);
+      return;
+    }
     set((state) => ({
       sttApiKeys: { ...state.sttApiKeys, [engine]: key },
     }));

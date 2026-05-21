@@ -48,6 +48,31 @@ describe('useSettingsStore.setUserRegion', () => {
   });
 });
 
+describe('useSettingsStore.setSTTApiKey', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ sttApiKeys: {} });
+  });
+
+  it('accepts a key for a selectable engine (deepgram)', () => {
+    useSettingsStore.getState().setSTTApiKey('deepgram', 'sk-xxx');
+    expect(useSettingsStore.getState().sttApiKeys.deepgram).toBe('sk-xxx');
+  });
+
+  it('refuses to persist a key for a planned engine (local_whisper)', () => {
+    // Regression guard: even if a UI/feature-flag bug lets the user reach
+    // the "save key" code path for a planned engine, the store must drop
+    // the write so that no secret lands in encrypted storage that the next
+    // migration would have to clean up.
+    useSettingsStore.getState().setSTTApiKey('local_whisper', 'pretend-secret');
+    expect(useSettingsStore.getState().sttApiKeys.local_whisper).toBeUndefined();
+  });
+
+  it('refuses to persist a key for a planned engine (xfyun)', () => {
+    useSettingsStore.getState().setSTTApiKey('xfyun', 'app:key:secret');
+    expect(useSettingsStore.getState().sttApiKeys.xfyun).toBeUndefined();
+  });
+});
+
 describe('useSettingsStore.setSTTEngine', () => {
   beforeEach(() => {
     useSettingsStore.setState({

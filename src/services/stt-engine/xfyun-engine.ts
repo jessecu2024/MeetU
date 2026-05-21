@@ -49,9 +49,9 @@ export class XfyunEngine implements STTEngine {
     return {
       ok: false,
       error:
-        'iFlytek (Beta): credentials look well-formed, but WebSocket HMAC-SHA256 ' +
+        'iFlytek (Planned — not yet shipped): credentials look well-formed, but WebSocket HMAC-SHA256 ' +
         'signing is not yet implemented, so live sessions will fail at the auth step. ' +
-        '/ 凭据格式正确，但 WebSocket HMAC-SHA256 鉴权签名尚未实现，实际开启会话会被服务端拒绝。',
+        '/ 讯飞引擎在路线图中尚未发布：凭据格式正确，但 WebSocket HMAC-SHA256 鉴权签名尚未实现，实际开启会话会被服务端拒绝。',
     };
   }
 
