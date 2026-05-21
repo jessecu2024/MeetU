@@ -36,7 +36,7 @@
 
 MeetU 采用 **100% BYOK** 模式：
 - 你使用自己的 AI API Key（Claude / OpenAI / DeepSeek 等）
-- 你使用自己的语音转文字 API Key（Deepgram / 讯飞等）
+- 你使用自己的语音转文字 API Key（当前仅 Deepgram；Whisper API / 讯飞 / Local Whisper 在路线图中）
 - **所有数据存储在本地**，音频和文字不会发送到 MeetU 的服务器
 - AI 请求直接从你的设备发送到你选择的 AI 服务商
 

@@ -433,10 +433,10 @@ export default function OnboardingWizard() {
             <div className="mt-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/50
               border border-zinc-200 dark:border-zinc-700">
               <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                A fully offline option (Local Whisper) is on the roadmap but not yet shipped. iFlytek is also still planned (HMAC-SHA256 signing TODO). For now choose Deepgram or OpenAI Whisper API — audio frames are streamed directly to the provider you choose. MeetU never receives or stores your audio, transcripts, or API keys on any of our servers.
+                Deepgram is currently the only selectable STT engine. OpenAI Whisper API, iFlytek, and Local Whisper are all on the roadmap but not yet usable. Audio frames are streamed directly to Deepgram; MeetU never receives or stores your audio, transcripts, or API keys on any of our servers.
               </p>
               <p className="text-xs text-zinc-500 mt-1">
-                完全离线方案（本地 Whisper）和讯飞引擎当前都在路线图中尚未发布。请选择 Deepgram 或 OpenAI Whisper API — 音频流会直接发送到你选择的服务商，由该服务商完成转写。MeetU 本身不会接收、存储你的音频、转写文本或 API Key。
+                当前唯一可选的 STT 引擎是 Deepgram。OpenAI Whisper API、讯飞和 Local Whisper 都在路线图中尚未发布。音频流会直接发送到 Deepgram 完成转写；MeetU 本身不会接收、存储你的音频、转写文本或 API Key。
               </p>
             </div>
 
