@@ -1,6 +1,6 @@
 # MeetU (开会啦) 用户指南 / User Guide
 
-> **Version 1.0.0** | 最后更新 / Last Updated: 2026-03-19
+> **Version 1.1.0** | 最后更新 / Last Updated: 2026-05-21
 
 ---
 
@@ -63,12 +63,12 @@ MeetU 采用 **100% BYOK** 模式：
 前往 [GitHub Releases](https://github.com/jessecu2024/MeetU/releases) 下载最新版本。
 
 **Windows 用户：**
-1. 下载 `MeetU-Setup-1.0.0.exe` 安装程序
+1. 下载 `MeetU-Setup-1.1.0.exe` 安装程序
 2. 双击运行，按提示完成安装
 3. 从开始菜单或桌面快捷方式启动 MeetU
 
 **macOS 用户：**
-1. 下载 `MeetU-1.0.0.dmg`
+1. 下载 `MeetU-1.1.0.dmg`
 2. 打开 DMG，将 MeetU 拖入 Applications 文件夹
 3. 首次打开时，如遇到"无法验证开发者"提示，请在 **系统设置 → 隐私与安全性** 中点击"仍要打开"
 4. macOS 会提示授予麦克风权限（用于录音），请允许。若日后启用 ScreenCaptureKit 原生捕获（路线图中），届时会另外申请屏幕录制权限
@@ -455,6 +455,6 @@ MeetU 本身：
 ---
 
 <p align="center">
-  <sub>MeetU v1.0.0 — Built with care by the MeetU team</sub><br>
+  <sub>MeetU v1.1.0 — Built with care by the MeetU team</sub><br>
   <sub>Issues & Feedback: <a href="https://github.com/jessecu2024/MeetU/issues">github.com/jessecu2024/MeetU/issues</a></sub>
 </p>

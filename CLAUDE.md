@@ -16,7 +16,7 @@
 | Local Whisper (whisper.cpp) | 🔜 Planned | `local-whisper.ts` 为 stub，`feedAudio`/`stopSession` 是 TODO |
 | 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
 | Markdown 纪要导出 | ✅ Stable | 主进程写 `~/MeetingAI/minutes/*.md` |
-| Word (.docx) 纪要导出 | 🔜 Planned | `docx@^8` 已装但生成器未实现；UI 上 "Export Word" 按钮已暂时禁用，不再静默保存为 .md |
+| Word (.docx) 纪要导出 | 🔜 Planned | 之前装的 `docx@^8` 依赖已删除（生成器未实现，留着会形成幽灵 dep）；UI 上 "Export Word" 按钮仍渲染为禁用状态以反映路线图；真实现时重新 `npm install docx` 并加回生成代码 |
 | PDF 纪要导出 | ❌ Not planned right now | 此前装的 `pdfkit` 依赖已删除（曾在 `package.json` 但全代码 0 引用）；如未来需要 PDF 导出，请再添加依赖并真实现 |
 | i18n 多语言 | ❌ 未引入框架 | 渲染层用硬编码 `"English / 中文"` 双语字符串，扩展到日韩需要先引入 i18n 框架 |
 | GPL/AGPL 许可证审计 | ✅ Stable | `npm run check-licenses` 已实现 |

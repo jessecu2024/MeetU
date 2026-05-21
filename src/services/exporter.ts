@@ -96,19 +96,11 @@ export async function exportMarkdown(minutes: MeetingMinutes): Promise<string> {
   return (result as string) || filename;
 }
 
-/**
- * Export meeting minutes as Word (.docx) file.
- *
- * NOT YET IMPLEMENTED — the `docx` dependency is installed but the generator
- * is still TODO. This function throws so callers can surface the state honestly
- * rather than silently writing a .md file with a .docx extension.
- */
-export async function exportWord(_minutes: MeetingMinutes): Promise<string> {
-  throw new Error(
-    'Word (.docx) export is not yet implemented. Please use Markdown export for now. / ' +
-    'Word 导出暂未实现，请先使用 Markdown 导出。'
-  );
-}
+// `exportWord` (Word/.docx export) was removed from this module along with
+// the unused `docx` dependency to keep the dependency surface honest. The
+// SummaryView still renders a disabled "Export Word (Coming soon)" button
+// so users see the planned feature; if/when the generator is implemented,
+// add `docx` back to package.json and reintroduce the export function here.
 
 /**
  * Replace any character that is not ASCII alphanumeric, Han, underscore, or
