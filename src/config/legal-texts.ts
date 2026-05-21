@@ -7,7 +7,7 @@ export const LEGAL_SECTIONS = [
   {
     titleEn: '1. Recording Compliance',
     titleZh: '1. 录音合规责任',
-    bodyEn: `This application records audio from the input device you select via your operating system — by default, your microphone. If you want to capture other meeting participants' voices (not only your own), you can route the meeting application's output through a loopback device (Windows: Stereo Mix; macOS: a non-GPL virtual audio cable) and select that device as the input. Native single-application system-audio capture (macOS ScreenCaptureKit / Windows WASAPI Loopback) is on the roadmap but not yet implemented.
+    bodyEn: `This application records audio from the input device you select via your operating system — by default, your microphone. If you want to capture other meeting participants' voices (not only your own), you can route the meeting application's output through a loopback device (Windows: Stereo Mix; macOS: a non-GPL virtual audio cable) and select that device as the input. Native driverless system-audio capture is on the roadmap (macOS ScreenCaptureKit can capture a specific application's audio; Windows WASAPI Loopback captures the full system output) but neither is implemented yet.
 
 Before using this feature, you are responsible for ensuring:
 • You comply with all applicable laws and regulations regarding audio recording in your jurisdiction
@@ -15,7 +15,7 @@ Before using this feature, you are responsible for ensuring:
 • You will not use recordings in any way that violates others' privacy rights
 
 Recording laws vary significantly across jurisdictions. In some regions, all participants must consent to be legally recorded; in others, only one party's consent is required. Violating recording laws may constitute a criminal or civil offense. Please familiarize yourself with the specific regulations in your jurisdiction.`,
-    bodyZh: `本应用通过您在操作系统中选择的音频输入设备进行录制 — 默认为麦克风。如需同时录制其他会议参与者的声音（而不仅是您自己的），可在系统层启用 loopback（Windows：立体声混音；macOS：非 GPL 的虚拟音频线缆），并在应用内选择该 loopback 设备作为输入。原生的"按应用捕获系统音频"功能（macOS ScreenCaptureKit / Windows WASAPI Loopback）在路线图中尚未发布。
+    bodyZh: `本应用通过您在操作系统中选择的音频输入设备进行录制 — 默认为麦克风。如需同时录制其他会议参与者的声音（而不仅是您自己的），可在系统层启用 loopback（Windows：立体声混音；macOS：非 GPL 的虚拟音频线缆），并在应用内选择该 loopback 设备作为输入。原生免驱动的系统音频捕获在路线图中（macOS ScreenCaptureKit 可按应用捕获单个程序的音频；Windows WASAPI Loopback 捕获整个系统输出），但两者目前都未实现。
 
 使用本功能前，您有责任确保：
 • 已遵守您所在地区关于录音的法律法规
