@@ -159,6 +159,19 @@ class AudioCaptureManager {
     return () => { this.pcmFrameCallbacks = this.pcmFrameCallbacks.filter(c => c !== cb); };
   }
 
+  /**
+   * Drop every chunk/segment/PCM subscriber registered via
+   * onAudioChunk / onSegment / onPcmFrame. Called whenever start()
+   * is about to throw so a subsequent fallback session does not
+   * inherit stale subscribers from the failed start attempt. The
+   * caller (the failing branch) owns the throw itself.
+   */
+  private clearAudioSubscribers(): void {
+    this.audioChunkCallbacks = [];
+    this.segmentCallbacks = [];
+    this.pcmFrameCallbacks = [];
+  }
+
   private _state: CaptureState = {
     micActive: false, recording: false,
     volume: 0, filePath: '', error: null,
@@ -242,11 +255,13 @@ class AudioCaptureManager {
         } catch (fallbackErr) {
           console.error('[Audio] Default also failed:', (fallbackErr as DOMException)?.name);
           const msg = mapMicError(fallbackErr);
+          this.clearAudioSubscribers();
           this.emit({ micActive: false, error: msg, recording: false });
           throw new Error(msg);
         }
       } else {
         const msg = mapMicError(err);
+        this.clearAudioSubscribers();
         this.emit({ micActive: false, error: msg, recording: false });
         throw new Error(msg);
       }
@@ -304,6 +319,7 @@ class AudioCaptureManager {
       console.error('[Audio] MediaRecorder creation failed:', err);
       try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
       this.stream = null;
+      this.clearAudioSubscribers();
       this.emit({ error: msg, recording: false, micActive: false });
       throw new Error(msg);
     }
@@ -340,9 +356,7 @@ class AudioCaptureManager {
         try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
         this.stream = null;
         try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
-        this.audioChunkCallbacks = [];
-        this.segmentCallbacks = [];
-        this.pcmFrameCallbacks = [];
+        this.clearAudioSubscribers();
         this.pcmStreamEnabled = false;
         this.emit({ error: `PCM stream setup failed: ${msg} / PCM 流启动失败`, recording: false, micActive: false });
         throw err;
