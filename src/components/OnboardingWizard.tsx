@@ -8,7 +8,7 @@ import { useSettingsStore } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
-import { STT_ENGINE_INFO } from '../services/stt-engine/types';
+import { STT_ENGINE_INFO, isSelectableSTTEngine, isSTTEngineVisibleForRegion } from '../services/stt-engine/types';
 
 /** API Key format patterns for pre-validation (no network request) */
 const API_KEY_PATTERNS: Record<AIProviderId, { pattern: RegExp; hint: string; hintZh: string; placeholder: string }> = {
@@ -373,50 +373,70 @@ export default function OnboardingWizard() {
         {step === 4 && (
           <div className="space-y-2.5">
             {STT_ENGINE_INFO
-              .filter(e =>
-                store.userRegion === 'china'
-                  ? e.region === 'china' || e.region === 'local'
-                  : e.region === 'global' || e.region === 'local')
-              .map((engine) => (
-                <button key={engine.id}
-                  onClick={() => store.setSTTEngine(engine.id as STTEngineId)}
-                  className={`w-full p-4 rounded-xl border text-left transition-all hover:border-blue-400 ${
-                    store.sttEngine === engine.id
-                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                      : 'border-zinc-200 dark:border-zinc-700'}`}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-zinc-900 dark:text-white">{engine.nameEn}</p>
-                      <p className="text-xs text-zinc-500">{engine.name}</p>
-                      <p className="text-sm text-zinc-400 mt-0.5">
-                        {engine.descriptionEn}
-                      </p>
-                      <p className="text-xs text-zinc-400">{engine.description}</p>
-                      <p className="text-xs text-zinc-400 mt-1">{engine.pricing}</p>
+              .filter(e => isSTTEngineVisibleForRegion(e, store.userRegion))
+              .map((engine) => {
+                const selectable = isSelectableSTTEngine(engine.id);
+                const isPlanned = !selectable;
+                const isBeta = engine.status === 'beta';
+                return (
+                  <button key={engine.id}
+                    onClick={() => selectable && store.setSTTEngine(engine.id as STTEngineId)}
+                    disabled={!selectable}
+                    className={`w-full p-4 rounded-xl border text-left transition-all ${
+                      isPlanned ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-400'
+                    } ${
+                      store.sttEngine === engine.id
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                        : 'border-zinc-200 dark:border-zinc-700'}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-zinc-900 dark:text-white">{engine.nameEn}</p>
+                        <p className="text-xs text-zinc-500">{engine.name}</p>
+                        <p className="text-sm text-zinc-400 mt-0.5">
+                          {engine.descriptionEn}
+                        </p>
+                        <p className="text-xs text-zinc-400">{engine.description}</p>
+                        <p className="text-xs text-zinc-400 mt-1">{engine.pricing}</p>
+                        {(isBeta || isPlanned) && engine.statusNote && (
+                          <p className={`text-xs mt-1.5 ${isPlanned ? 'text-zinc-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                            ⚠ {engine.statusNote}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1.5 ml-2 shrink-0">
+                        {isPlanned && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
+                            Planned
+                          </span>
+                        )}
+                        {isBeta && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            Beta
+                          </span>
+                        )}
+                        {engine.region === 'local' && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                            Offline / 离线
+                          </span>
+                        )}
+                        {!engine.requiresApiKey && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                            No Key
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex flex-col gap-1.5 ml-2">
-                      {engine.region === 'local' && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
-                          Offline / 离线
-                        </span>
-                      )}
-                      {!engine.requiresApiKey && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
-                          No Key
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
 
-            <div className="mt-3 p-3 rounded-lg bg-green-50 dark:bg-green-900/20
-              border border-green-200 dark:border-green-800">
-              <p className="text-sm text-green-800 dark:text-green-300">
-                Choose "Local Whisper" for offline transcription — completely free, data never leaves your device.
+            <div className="mt-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/50
+              border border-zinc-200 dark:border-zinc-700">
+              <p className="text-sm text-zinc-700 dark:text-zinc-300">
+                Deepgram is currently the only selectable STT engine. OpenAI Whisper API, iFlytek, and Local Whisper are all on the roadmap but not yet usable. Audio frames are streamed directly to Deepgram. Recordings, transcripts, and your encrypted API Keys are stored on your local device; MeetU operates no servers and never receives, stores, or proxies any of this data.
               </p>
-              <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                选择「本地 Whisper」可在无网络时使用基础转写功能，完全免费、数据不出本机。
+              <p className="text-xs text-zinc-500 mt-1">
+                当前唯一可选的 STT 引擎是 Deepgram。OpenAI Whisper API、讯飞和 Local Whisper 都在路线图中尚未发布。音频流会直接发送到 Deepgram 完成转写。本地设备上会保存录音、转写文本与加密后的 API Key；MeetU 服务器不接收、不存储、不代理这些内容。
               </p>
             </div>
 

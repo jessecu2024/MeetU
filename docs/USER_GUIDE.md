@@ -1,6 +1,6 @@
 # MeetU (开会啦) 用户指南 / User Guide
 
-> **Version 1.0.0** | 最后更新 / Last Updated: 2026-03-19
+> **Version 1.1.0** | 最后更新 / Last Updated: 2026-05-21
 
 ---
 
@@ -26,17 +26,17 @@
 
 **MeetU（开会啦）** 是一款跨平台桌面 AI 会议助手。在线上会议期间运行本应用，即可获得：
 
-- **实时语音转文字** — 自动转写系统音频和麦克风输入
+- **实时语音转文字** — 转写你选择的音频输入设备（默认麦克风；如需捕获会议中其他参与者的声音，需在系统层启用 Stereo Mix / 虚拟音频线缆 loopback）
 - **实时翻译** — 中英双向即时翻译
 - **@检测与智能回复建议** — 检测到有人叫你时，自动生成三种风格的回复建议
 - **实时摘要** — 每隔几分钟自动提取会议要点
-- **会后纪要导出** — 自动生成结构化会议纪要（Markdown / Word）
+- **会后纪要导出** — 自动生成结构化会议纪要（当前导出为 Markdown；Word 导出在路线图中尚未发布）
 
 ### BYOK（自带 Key）模式
 
 MeetU 采用 **100% BYOK** 模式：
 - 你使用自己的 AI API Key（Claude / OpenAI / DeepSeek 等）
-- 你使用自己的语音转文字 API Key（Deepgram / 讯飞等）
+- 你使用自己的语音转文字 API Key（当前仅 Deepgram；Whisper API / 讯飞 / Local Whisper 在路线图中）
 - **所有数据存储在本地**，音频和文字不会发送到 MeetU 的服务器
 - AI 请求直接从你的设备发送到你选择的 AI 服务商
 
@@ -49,9 +49,10 @@ MeetU 采用 **100% BYOK** 模式：
 | 操作系统 | Windows 10+ 或 macOS 13+ (Ventura) |
 | 内存 | 建议 4GB+ |
 | 网络 | 使用在线 AI/STT 服务时需要网络连接 |
-| API Key | 至少一个 AI 提供商的 Key（用于翻译/摘要/建议功能） |
+| STT API Key | **必需**：Deepgram API Key（用于实时转写；当前唯一可选的 STT 引擎） |
+| AI API Key | 至少一个 AI 提供商的 Key（用于翻译/摘要/建议功能） |
 
-> 如果选择"本地 Whisper"作为 STT 引擎，基础转写功能可完全离线使用。
+> 计划中的离线 Local Whisper 引擎尚未发布；当前版本必须配置一个云端 STT Key 才能完成实时转写，否则应用会退回到 demo/mock 转写。
 
 ---
 
@@ -62,15 +63,15 @@ MeetU 采用 **100% BYOK** 模式：
 前往 [GitHub Releases](https://github.com/jessecu2024/MeetU/releases) 下载最新版本。
 
 **Windows 用户：**
-1. 下载 `MeetU-Setup-1.0.0.exe` 安装程序
+1. 下载 `MeetU-Setup-1.1.0.exe` 安装程序
 2. 双击运行，按提示完成安装
 3. 从开始菜单或桌面快捷方式启动 MeetU
 
 **macOS 用户：**
-1. 下载 `MeetU-1.0.0.dmg`
+1. 下载 `MeetU-1.1.0.dmg`
 2. 打开 DMG，将 MeetU 拖入 Applications 文件夹
 3. 首次打开时，如遇到"无法验证开发者"提示，请在 **系统设置 → 隐私与安全性** 中点击"仍要打开"
-4. macOS 会提示授予屏幕录制权限（用于捕获系统音频），请允许
+4. macOS 会提示授予麦克风权限（用于录音），请允许。若日后启用 ScreenCaptureKit 原生捕获（路线图中），届时会另外申请屏幕录制权限
 
 ### 方法二：从源码构建
 
@@ -125,13 +126,14 @@ npm run build        # 构建发布版
 
 ### 步骤 6：选择语音转文字引擎
 
-| 引擎 | 说明 | 是否需要 Key |
-|------|------|-------------|
-| Deepgram | 实时 WebSocket 流式转写，延迟低 | 需要 |
-| Whisper API | OpenAI 的语音识别 API | 需要 |
-| 讯飞语音 | 国内首选实时语音识别 | 需要 |
-| 阿里语音 | 国内备选 | 需要 |
-| 本地 Whisper | 离线运行，MIT 许可 | **不需要** |
+| 引擎 | 说明 | 状态 |
+|------|------|------|
+| Deepgram | 实时 WebSocket 流式转写，延迟低 | ✅ Stable |
+| Whisper API | OpenAI 的语音识别 API | 🔜 Planned — 引擎按 PCM 解析但生产音频为 webm/opus，UI 中已禁用 |
+| 讯飞语音 | 国内实时语音识别 | 🔜 Planned — WebSocket HMAC 签名未实现，UI 中已禁用 |
+| 本地 Whisper | 离线运行，MIT 许可 | 🔜 Planned — whisper.cpp 集成尚未发布，UI 中已禁用 |
+
+> 阿里语音 (Paraformer) 之前列在此处但尚未实现，已暂时从代码中移除。
 
 ### 步骤 7：填写个人信息
 
@@ -152,7 +154,7 @@ npm run build        # 构建发布版
 - **录音计时器**：显示录音时长（MM:SS 或 HH:MM:SS）
 - **REC 指示灯**：录音中显示红色闪烁圆点
 - **音量指示器**：绿色→黄色→红色 表示音量大小
-- **音频状态**：麦克风 ✓/✗ 和系统音频 ✓/✗
+- **音频状态**：当前所选输入设备的状态（绿色显示设备名 + ✓ 表示正常采集；红色 ✗ 表示无音频）。如启用了 Stereo Mix / 虚拟音频线缆作为输入设备，这一栏会显示该 loopback 设备名
 - **设置按钮**：⚙ 图标
 - **窗口控制**：最小化、关闭
 
@@ -181,10 +183,15 @@ npm run build        # 构建发布版
 
 ### 音频捕获方式
 
-| 平台 | 捕获方式 | 说明 |
-|------|---------|------|
-| Windows 10+ | WASAPI Loopback | 系统原生 API，自动捕获系统音频输出 |
-| macOS 13+ | ScreenCaptureKit | Apple 原生框架，可指定捕获特定应用音频 |
+当前版本通过浏览器 `getUserMedia` 捕获选定的音频输入设备。若需要录制会议中**其他**参与者的声音（而不仅是你自己的麦克风），需要在系统层面启用 loopback。
+
+| 平台 | 当前实际方案 | 状态 |
+|------|------------|------|
+| 所有平台 | `getUserMedia` 选择麦克风（默认） | ✅ 可用 |
+| Windows 10+ | 在系统中启用 **Stereo Mix**（设置 → 系统 → 声音 → 录制设备），再在应用内选择此设备 | ✅ 可用，需用户启用 |
+| macOS 13+ | 安装虚拟音频线缆（如非 GPL 替代品），把会议应用输出路由到该设备，再在应用内选择 | ✅ 可用，需用户配置 |
+| Windows 10+ | WASAPI Loopback 原生捕获 | 🔜 计划中（`native/windows/` 尚未创建） |
+| macOS 13+ | ScreenCaptureKit 原生捕获 | 🔜 计划中（`native/macos/` 有 Swift 草稿但 N-API 绑定为 placeholder） |
 
 ### 转写界面
 
@@ -292,11 +299,9 @@ npm run build        # 构建发布版
 - 生成 `.md` 文件，包含完整的结构化会议纪要
 - 文件名格式：`minutes_YYYY-MM-DD_会议标题.md`
 
-### Word 格式
+### Word 格式（🔜 计划中，暂不可用）
 
-点击 **"导出 Word / Export Word"**：
-- 生成 `.docx` 文件，专业排版格式
-- 文件名格式：`minutes_YYYY-MM-DD_会议标题.docx`
+应用界面上的 **"导出 Word / Export Word"** 按钮目前是禁用状态，悬停会显示 "Word (.docx) export is not yet implemented." 的提示。曾装的 `docx` 依赖因生成器未实现已删除（避免形成幽灵 dep），真实现时会重新加回并启用按钮。**请先使用上方的 Markdown 导出**，需要 Word 格式时可在 Word/Pages/Google Docs 中打开 `.md` 文件转换。
 
 **默认保存位置**：`~/MeetingAI/minutes/`
 
@@ -331,17 +336,18 @@ npm run build        # 构建发布版
 
 - 切换语音转文字引擎
 - 配置 STT API Key
-- 本地 Whisper 无需 Key，标记为 "Offline" + "No Key"
+- "本地 Whisper" 未来无需 Key，但当前版本被标记为 "Planned" 且不可选（whisper.cpp 集成尚未发布）
 
 **支持的 STT 引擎：**
 
-| 引擎 | 获取 Key 地址 | 推荐场景 |
-|------|--------------|---------|
-| Deepgram | [console.deepgram.com](https://console.deepgram.com) | 海外首选，实时性好 |
-| Whisper API | [platform.openai.com](https://platform.openai.com) | 海外备选 |
-| 讯飞语音 | [console.xfyun.cn](https://console.xfyun.cn) | 国内首选 |
-| 阿里语音 | [nls-portal.console.aliyun.com](https://nls-portal.console.aliyun.com) | 国内备选 |
-| 本地 Whisper | 无需 Key | 离线使用，隐私最佳 |
+| 引擎 | 状态 | 获取 Key 地址 | 推荐场景 |
+|------|------|--------------|---------|
+| Deepgram | ✅ Stable | [console.deepgram.com](https://console.deepgram.com) | 海外首选，实时性好 |
+| Whisper API | 🔜 Planned — 引擎按 PCM 解析但生产音频为 webm/opus，UI 中已禁用 | [platform.openai.com](https://platform.openai.com) | 海外备选（待修复音频管线） |
+| 讯飞语音 | 🔜 Planned — WebSocket HMAC-SHA256 鉴权签名尚未实现，UI 中已禁用 | [console.xfyun.cn](https://console.xfyun.cn) | 国内（待补签名后转 Stable） |
+| 本地 Whisper | 🔜 Planned — 在设置面板中显示为禁用状态 | — | whisper.cpp 集成尚未发布 |
+
+> 阿里语音 (Paraformer) 曾列在此处，但代码从未实现，已暂时从应用中移除。后续真正集成后会重新出现。
 
 ### 个人信息
 
@@ -367,7 +373,9 @@ npm run build        # 构建发布版
 
 ### Q: 没有 AI API Key 可以使用吗？
 
-可以。**基础转写功能**（录音 + 语音转文字）无需 AI Key。如果选择"本地 Whisper"作为 STT 引擎，甚至不需要任何 API Key 即可完成离线转写。但翻译、摘要、发言建议等 AI 功能需要配置 API Key。
+可以。**录音 + 语音转文字**只需要一个 Deepgram API Key，无需 AI Key。但翻译、摘要、发言建议等 AI 功能需要额外配置 AI Key。
+
+> Whisper API、讯飞、本地 Whisper 都在路线图中尚未发布；当前实时转写必须使用 Deepgram。
 
 ### Q: API 费用由谁承担？
 
@@ -375,14 +383,23 @@ npm run build        # 构建发布版
 
 ### Q: 支持哪些会议软件？
 
-MeetU 不与任何会议软件直接集成。它通过捕获 **系统音频输出** 来工作，因此适用于任何会议软件（Zoom、Teams、腾讯会议、Google Meet、飞书等），就像你按下录音键一样。
+MeetU 不与任何会议软件直接集成。它通过 `getUserMedia` 录制你在系统中选择的音频输入设备，因此适用于任何会议软件（Zoom、Teams、腾讯会议、Google Meet、飞书等）。**默认只录你的麦克风**；如需同时录到对方的声音，请在系统层启用 Stereo Mix（Windows）或虚拟音频线缆（macOS），并在应用内"音频输入设备"中选择该 loopback 设备。
 
 ### Q: 我的数据安全吗？
 
-- 音频和转写文字 **仅存储在本地设备**
-- API Key 使用系统安全存储 **加密保存**
-- AI 请求直接发送到你选择的服务商，**不经过 MeetU 服务器**
-- 应用本身 **不收集任何用户数据**
+本地设备上：
+- 录音文件（`.webm`）保存在本机指定文件夹
+- 转写记录保存在本地 SQLite 数据库
+- API Key 使用操作系统安全存储**加密保存**
+
+外发流量（仅发往你自己配置的服务商）：
+- 实时转写：音频帧从你的设备直接流式发送至 Deepgram（当前唯一可选的 STT 引擎）
+- AI 功能（翻译/摘要/@检测/发言建议）：相关转写文本发送至你选择的 AI 服务商
+
+MeetU 本身：
+- **没有任何 MeetU 服务器** — 不接收、不存储、不代理上述任何内容
+- **零遥测、零分析、零追踪** — 不收集任何用户数据
+- 所有网络流量只发生在你的设备与你选择的第三方服务商之间
 
 ### Q: 录音是否合法？
 
@@ -408,17 +425,18 @@ MeetU 不与任何会议软件直接集成。它通过捕获 **系统音频输�
 
 ### Q: Windows 上录音没有声音怎么办？
 
-1. 检查系统音频输出设备是否正常
-2. 确保会议软件的音频正在播放
-3. 检查 MeetU 是否有权限访问音频设备
-4. 尝试重启 MeetU
+1. **检查麦克风权限**：系统设置 → 隐私 → 麦克风，确保 MeetU 已获得权限
+2. **检查所选输入设备**：在 MeetU 设置 → 偏好设置 → 音频输入设备，确认选择的是当前在用的麦克风/loopback；点击"刷新设备"重新枚举
+3. **如要录会议中其他参与者的声音**：在系统中启用 Stereo Mix（右键任务栏音量图标 → 声音 → 录制 → 显示已禁用的设备 → 启用 Stereo Mix），再在 MeetU 中选择该设备；如声卡不支持 Stereo Mix，可改用 VB-Cable 等非 GPL 的虚拟音频线缆
+4. **确认没被独占**：另一个应用（会议软件等）有时会独占麦克风，关闭后再重启 MeetU
+5. 上述都不行可重启 MeetU 看 dev console 的 `[Audio]` 日志定位具体错误
 
 ### Q: macOS 上无法捕获音频？
 
-1. 前往 **系统设置 → 隐私与安全 → 屏幕录制**
-2. 确保 MeetU 已获得权限
-3. 如果仍有问题，尝试移除权限后重新添加
-4. 确保 macOS 版本为 13 Ventura 或更高
+1. 前往 **系统设置 → 隐私与安全 → 麦克风**，确保 MeetU 已获得权限
+2. 如果想录制对方的声音（不仅是自己的麦克风），需要安装一个非 GPL 的虚拟音频线缆（如商业替代品），把会议应用的输出路由到该设备，再在 MeetU 设置中选择该设备
+3. 确保 macOS 版本为 13 Ventura 或更高
+4. 路线图中：原生 ScreenCaptureKit 集成（届时无需虚拟线缆即可直接捕获指定应用音频，但当前版本尚未实现）
 
 ### Q: 可以同时使用多个 AI 提供商吗？
 
@@ -429,7 +447,7 @@ MeetU 不与任何会议软件直接集成。它通过捕获 **系统音频输�
 ## 快捷操作提示 / Tips
 
 1. **半透明叠加** — 将窗口透明度调到 70%，覆盖在会议窗口上，边开会边看字幕
-2. **离线模式** — 选择"本地 Whisper"作为 STT 引擎，无需网络也能转写
+2. **离线模式** — 计划中（"本地 Whisper" 引擎尚未发布）；当前需要至少一个云端 STT Key 才能转写
 3. **快速复制回复** — 在发言建议卡片上悬停鼠标，点击"复制"按钮即可复制建议内容
 4. **切换 AI 服务商** — 在设置中随时更换 AI 提供商，无需重启应用
 5. **深色模式** — 在弱光环境下切换为深色主题，保护眼睛
@@ -437,6 +455,6 @@ MeetU 不与任何会议软件直接集成。它通过捕获 **系统音频输�
 ---
 
 <p align="center">
-  <sub>MeetU v1.0.0 — Built with care by the MeetU team</sub><br>
+  <sub>MeetU v1.1.0 — Built with care by the MeetU team</sub><br>
   <sub>Issues & Feedback: <a href="https://github.com/jessecu2024/MeetU/issues">github.com/jessecu2024/MeetU/issues</a></sub>
 </p>

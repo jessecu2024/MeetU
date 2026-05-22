@@ -1,15 +1,30 @@
 // ============================================================
 // STT (Speech-to-Text) Engine Interface / 语音识别引擎统一接口
-// Supports: Deepgram, Whisper API, iFlytek, Alibaba, local Whisper
+// Currently shipped: Deepgram (stable). Whisper API, iFlytek and Local
+// Whisper are all planned — their skeletons live in this directory but
+// they are not yet selectable:
+//   - Whisper API: feedAudio assumes PCM Float32 but production capture
+//     emits webm/opus chunks; needs reworking to accept webm segments.
+//   - iFlytek:    WebSocket HMAC-SHA256 signing is still a placeholder.
+//   - Local Whisper: whisper.cpp integration is TODO.
+// Alibaba Speech (Paraformer) was previously listed but is removed until
+// a real implementation lands.
 // ============================================================
 
 /** Supported STT engine IDs */
 export type STTEngineId =
-  | 'deepgram'        // Deepgram (global)
-  | 'whisper_api'     // OpenAI Whisper API
-  | 'xfyun'           // iFlytek (China)
-  | 'aliyun_speech'   // Alibaba Speech (China)
-  | 'local_whisper';  // Local Whisper.cpp (offline)
+  | 'deepgram'        // Deepgram (global) — stable
+  | 'whisper_api'     // OpenAI Whisper API — planned (engine expects PCM but production capture is webm/opus)
+  | 'xfyun'           // iFlytek (China) — planned (HMAC-SHA256 signing not yet implemented)
+  | 'local_whisper';  // Local Whisper.cpp (offline) — planned, not yet usable
+
+/**
+ * Implementation status — used to gate UI and warn users honestly.
+ * `beta` is still a legal value (engines that work but have rough edges)
+ * but no engine currently uses it; both incomplete engines are 'planned'
+ * because they cannot complete a real session today.
+ */
+export type STTEngineStatus = 'stable' | 'beta' | 'planned';
 
 /** STT configuration */
 export interface STTConfig {
@@ -44,6 +59,10 @@ export interface STTEngineInfo {
   apiKeyGuideUrl?: string;
   pricing: string;
   strengths: string[];
+  /** Implementation status. 'beta'/'planned' engines must be clearly marked in UI. */
+  status: STTEngineStatus;
+  /** Short note shown when status is 'beta' or 'planned' (bilingual, " / "-separated) */
+  statusNote?: string;
 }
 
 /** STT Engine interface */
@@ -75,6 +94,7 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     apiKeyGuideUrl: 'https://console.deepgram.com/signup',
     pricing: '$0.0043/min (Pay-as-you-go)',
     strengths: ['Ultra-low latency ~300ms', 'Real-time streaming', 'Speaker diarization', 'Multi-language'],
+    status: 'stable',
   },
   {
     id: 'whisper_api',
@@ -87,6 +107,16 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     apiKeyGuideUrl: 'https://platform.openai.com/api-keys',
     pricing: '$0.006/min',
     strengths: ['High accuracy', '99 languages', 'Auto language detection'],
+    // Demoted from 'stable' to 'planned' after deeper review: the production
+    // audio path is MediaRecorder → webm/opus chunks, but
+    // whisper-api-engine.feedAudio reads each chunk as a `new Float32Array`
+    // and re-encodes a WAV from those bytes. The result is garbage audio,
+    // so Whisper returns either nothing or hallucinated transcripts.
+    // Fixing this requires reworking the engine to accept webm/opus
+    // segments directly (OpenAI accepts webm) — out of scope for the
+    // honesty PR. Marked planned until that lands.
+    status: 'planned',
+    statusNote: 'Audio pipeline mismatch: production capture sends webm/opus but the engine expects PCM Float32. Disabled until reworked. / 当前音频管线为 webm/opus，但 Whisper API 引擎按 PCM Float32 解析，会产生无效音频。已暂时禁用，待重构后再启用。',
   },
   {
     id: 'xfyun',
@@ -99,18 +129,14 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     apiKeyGuideUrl: 'https://console.xfyun.cn/services/iat',
     pricing: 'Free 500h/year',
     strengths: ['Best Chinese accuracy', 'Dialect support', 'Large free tier', 'Real-time streaming'],
-  },
-  {
-    id: 'aliyun_speech',
-    name: '阿里语音 (Paraformer)',
-    nameEn: 'Alibaba Speech (Paraformer)',
-    region: 'china',
-    description: '中文优秀，与通义千问同生态',
-    descriptionEn: 'Excellent Chinese, same ecosystem as Qwen',
-    requiresApiKey: true,
-    apiKeyGuideUrl: 'https://nls-portal.console.aliyun.com/',
-    pricing: 'Free tier + ¥1.8/hr',
-    strengths: ['Excellent Chinese', 'Alibaba Cloud ecosystem', 'Paraformer model'],
+    // Promoted from 'beta' to 'planned' after a deeper review confirmed the
+    // WebSocket auth signer in xfyun-engine.ts emits `signature="placeholder"`,
+    // so live sessions are guaranteed to fail at iFlytek's auth step. Marking
+    // it 'planned' makes isSelectableSTTEngine return false everywhere — UI
+    // gating, the engine-registry fallback, and the settings-store migration
+    // — so users cannot land on it until real HMAC-SHA256 signing ships.
+    status: 'planned',
+    statusNote: 'WebSocket HMAC-SHA256 signing is still a placeholder — sessions cannot authenticate yet / WebSocket HMAC-SHA256 鉴权签名尚未实现，目前无法建立会话',
   },
   {
     id: 'local_whisper',
@@ -122,5 +148,121 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     requiresApiKey: false,
     pricing: 'Free (requires GPU or Apple Silicon)',
     strengths: ['Fully offline', 'Zero cost', 'Data never leaves device', 'Best privacy'],
+    status: 'planned',
+    statusNote: 'whisper.cpp integration not yet shipped / whisper.cpp 集成尚未发布',
   },
 ];
+
+/**
+ * Single source of truth for whether a user is allowed to actively select an
+ * STT engine. Engines with status === 'planned' are skeletons only and would
+ * silently fall back to demo mode at runtime; do not let users pick them.
+ */
+export function isSelectableSTTEngine(id: string | undefined | null): id is STTEngineId {
+  if (!id) return false;
+  const info = STT_ENGINE_INFO.find(e => e.id === id);
+  return !!info && info.status !== 'planned';
+}
+
+/**
+ * Region-appropriate default fallback when a stored engine is invalid.
+ *
+ * Returns the most region-native engine that is currently selectable
+ * (`status !== 'planned'`). If that engine is planned today (e.g. iFlytek
+ * before its auth signing is implemented), falls back through a stable
+ * candidate list rather than handing the caller an unusable default.
+ * Guaranteed to return an id for which isSelectableSTTEngine is true so
+ * long as the codebase contains at least one stable engine.
+ */
+export function getDefaultSTTEngineForRegion(region: 'global' | 'china' | null | undefined): STTEngineId {
+  const preference: STTEngineId[] = region === 'china'
+    ? ['xfyun', 'deepgram', 'whisper_api']
+    : ['deepgram', 'whisper_api'];
+  for (const candidate of preference) {
+    if (isSelectableSTTEngine(candidate)) return candidate;
+  }
+  // Last resort: scan the full registry for any stable engine. This branch
+  // should be unreachable in a shipped build (CI invariants require at least
+  // one stable engine to exist), but keeping it makes the function total.
+  const anyStable = STT_ENGINE_INFO.find(e => e.status === 'stable');
+  return anyStable?.id ?? 'deepgram';
+}
+
+/**
+ * Decide whether an engine should appear in the picker for a given region.
+ *
+ * - `local` engines always show.
+ * - `global` engines always show.
+ * - `china` engines show for China users only.
+ *
+ * Note this is a UI filter, not a selectability filter — planned engines
+ * still appear (badged) so users see the roadmap, but they cannot be
+ * activated; that gate is `isSelectableSTTEngine`. The reason we don't
+ * hide China-region engines for Global users is the inverse case: if
+ * China's only native engine becomes planned (today: xfyun), Global users
+ * are unaffected, but China users would have *zero* visible engines if we
+ * applied a symmetric filter — so China users see Global engines too as
+ * fallback. This asymmetry is intentional.
+ */
+export function isSTTEngineVisibleForRegion(
+  engine: { region: 'global' | 'china' | 'local' },
+  region: 'global' | 'china' | null | undefined,
+): boolean {
+  if (engine.region === 'local') return true;
+  if (engine.region === 'global') return true;
+  // engine.region === 'china'
+  return region === 'china';
+}
+
+/** Result of migrating a persisted STT configuration. */
+export interface STTMigrationResult {
+  /** The engine the app should use now (always selectable). */
+  engine: STTEngineId;
+  /** API keys after dropping entries for removed / planned engines. */
+  apiKeys: Partial<Record<STTEngineId, string>>;
+  /** Engine IDs whose stored non-empty key was discarded; callers must
+   *  persist a deletion for each so the store doesn't keep orphan secrets. */
+  prunedKeys: string[];
+  /** True iff the resolved engine differs from the persisted value. */
+  engineChanged: boolean;
+}
+
+/**
+ * Normalize a persisted STT configuration written by an earlier version of
+ * the app. Pure function; takes the raw stored values and returns what
+ * should be in memory plus a list of side effects the caller must persist.
+ *
+ * Three classes of legacy values are handled:
+ *  - missing / unknown engine id  → fall back to the region default
+ *  - engine id removed from the union (e.g. `aliyun_speech`) → same
+ *  - engine id still in the union but `status === 'planned'` (e.g.
+ *    `local_whisper`) → same; persisting it would let the runtime hit the
+ *    stub path
+ *
+ * Orphan key entries (keys for engines we no longer accept) are dropped
+ * from the returned map and listed in `prunedKeys` so the caller can issue
+ * the corresponding deletions against the encrypted store. Empty / missing
+ * keys are silently ignored — only actually-set secrets need pruning.
+ */
+export function migrateSTTConfig(
+  storedEngine: string | undefined | null,
+  storedKeys: Record<string, string> | undefined | null,
+  region: 'global' | 'china' | null | undefined,
+): STTMigrationResult {
+  const engine: STTEngineId = isSelectableSTTEngine(storedEngine)
+    ? storedEngine
+    : getDefaultSTTEngineForRegion(region);
+  const engineChanged = storedEngine !== engine;
+
+  const apiKeys: Partial<Record<STTEngineId, string>> = {};
+  const prunedKeys: string[] = [];
+  for (const [id, key] of Object.entries(storedKeys || {})) {
+    if (isSelectableSTTEngine(id)) {
+      apiKeys[id] = key;
+    } else if (key) {
+      prunedKeys.push(id);
+    }
+  }
+
+  return { engine, apiKeys, prunedKeys, engineChanged };
+}

@@ -5,7 +5,7 @@
 
 import { useSettingsStore } from '../stores/settings-store';
 import { useMeetingStore } from '../stores/meeting-store';
-import { STT_ENGINE_INFO } from '../services/stt-engine/types';
+import { STT_ENGINE_INFO, isSelectableSTTEngine } from '../services/stt-engine/types';
 
 export default function Header() {
   const openSettings = useSettingsStore((s) => s.openSettingsModal);
@@ -15,6 +15,14 @@ export default function Header() {
   const sttEngineId = useSettingsStore((s) => s.sttEngine);
   const hasSttKey = useSettingsStore((s) => !!s.sttApiKeys[s.sttEngine]);
   const sttTestResult = useSettingsStore((s) => s.sttTestResult);
+  const sttEngineInfo = STT_ENGINE_INFO.find(e => e.id === sttEngineId);
+  // STT badge should show "not configured" unless the engine is selectable
+  // (rules out planned engines) AND either has a key OR doesn't need one.
+  // Previously this hard-coded `local_whisper` as keyless/usable, which was
+  // wrong because local_whisper is planned today.
+  const sttConfigured =
+    isSelectableSTTEngine(sttEngineId) &&
+    (hasSttKey || sttEngineInfo?.requiresApiKey === false);
   const {
     isRecording, recordingDuration, currentVolume,
     micActive, useMock,
@@ -130,7 +138,7 @@ export default function Header() {
             <button
               onClick={() => openSettings('stt')}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer ${
-                !hasSttKey && sttEngineId !== 'local_whisper'
+                !sttConfigured
                   ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700'
                   : sttTestResult?.status === 'ok'
                     ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 hover:bg-green-100'
@@ -144,7 +152,7 @@ export default function Header() {
             >
               {sttTestResult?.status === 'testing' ? (
                 <span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full" />
-              ) : !hasSttKey && sttEngineId !== 'local_whisper' ? (
+              ) : !sttConfigured ? (
                 <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
               ) : sttTestResult?.status === 'ok' ? (
                 <span className="w-1.5 h-1.5 rounded-full bg-green-500" />

@@ -7,6 +7,7 @@
 import { create } from 'zustand';
 import type { AIProviderId, AIFunction, UserAIConfig } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
+import { migrateSTTConfig, getDefaultSTTEngineForRegion, isSelectableSTTEngine } from '../services/stt-engine/types';
 
 // Type for electron API (injected via preload)
 declare global {
@@ -214,23 +215,48 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       if (!all) { set({ settingsLoaded: true }); return; }
 
       const aiConfigRaw = all.aiConfig as Record<string, unknown> | undefined;
+      const userRegion = (all.userRegion as 'global' | 'china' | null) || null;
+
+      // Normalize the persisted STT configuration. migrateSTTConfig handles
+      // three legacy cases (removed engine IDs like `aliyun_speech`, stub
+      // engines like `local_whisper`, and missing values) by returning a
+      // selectable engine plus a pruned key map. We must write the result
+      // back to disk — keeping the migration in memory only would mean the
+      // user re-encounters the broken state on the next launch, and orphan
+      // API keys would survive in encrypted storage indefinitely.
+      const migration = migrateSTTConfig(
+        all.sttEngine as string | undefined,
+        all.sttApiKeys as Record<string, string> | undefined,
+        userRegion,
+      );
+
       set({
         settingsLoaded: true,
         legalAccepted: (all.legalAccepted as boolean) || false,
         isFirstLaunch: all.isFirstLaunch !== false, // default true
-        userRegion: (all.userRegion as 'global' | 'china' | null) || null,
+        userRegion,
         aiConfig: {
           defaultProvider: (aiConfigRaw?.defaultProvider as AIProviderId) || 'claude',
           functionOverrides: (aiConfigRaw?.functionOverrides as Record<string, AIProviderId>) || {},
           apiKeys: (aiConfigRaw?.apiKeys as Record<string, string>) || {},
           selectedModels: (aiConfigRaw?.selectedModels as Record<string, string>) || {},
         },
-        sttEngine: (all.sttEngine as STTEngineId) || 'deepgram',
-        sttApiKeys: (all.sttApiKeys as Record<string, string>) || {},
+        sttEngine: migration.engine,
+        sttApiKeys: migration.apiKeys,
         userProfile: (all.userProfile as UserProfile) || get().userProfile,
         appSettings: { ...get().appSettings, ...(all.appSettings as Partial<AppSettings>) },
         customTerms: (all.customTerms as Array<{ source: string; target: string }>) || [],
       });
+
+      // Persist anything the migration changed so the broken state does not
+      // resurface on next launch.
+      if (migration.engineChanged) {
+        persist('sttEngine', migration.engine);
+      }
+      for (const orphanEngineId of migration.prunedKeys) {
+        // setEncryptedSttApiKey deletes the entry when apiKey is empty.
+        persist('sttApiKey', { engine: orphanEngineId, apiKey: '' });
+      }
     } catch (err) {
       console.error('[Settings] Failed to load settings:', err);
       set({ settingsLoaded: true });
@@ -260,15 +286,32 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setUserRegion: (region) => {
+    const nextDefaultProvider: AIProviderId = region === 'china' ? 'deepseek' : 'claude';
+    const nextSttEngine = getDefaultSTTEngineForRegion(region);
     set((state) => ({
       userRegion: region,
       aiConfig: {
         ...state.aiConfig,
-        defaultProvider: region === 'china' ? 'deepseek' : 'claude',
+        defaultProvider: nextDefaultProvider,
       },
-      sttEngine: region === 'china' ? 'xfyun' : 'deepgram',
+      // Delegate to the helper instead of hard-coding xfyun for China.
+      // The helper walks a fallback list and only returns engines for which
+      // isSelectableSTTEngine is true, so this stays correct even when an
+      // engine's status flips (e.g. xfyun → planned today, future Stable).
+      sttEngine: nextSttEngine,
     }));
+    // Persist BOTH the region change and every value the store derived
+    // from it. Without this the user's first launch after picking China
+    // saw sttEngine=deepgram (or deepseek) in memory but the next launch
+    // re-loaded the old (or default-default) values from disk.
     persist('userRegion', region);
+    persist('sttEngine', nextSttEngine);
+    const s = get();
+    persist('aiConfig', {
+      defaultProvider: nextDefaultProvider,
+      functionOverrides: s.aiConfig.functionOverrides || {},
+      selectedModels: s.aiConfig.selectedModels || {},
+    });
   },
 
   setDefaultProvider: (id) => {
@@ -342,11 +385,30 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setSTTEngine: (id) => {
-    set({ sttEngine: id });
-    persist('sttEngine', id);
+    // Store-level guard: reject any attempt to set the active engine to a
+    // planned / non-selectable id, even if a UI gating bug or stale code
+    // path lets one through. The previous behavior relied entirely on
+    // SettingsModal / OnboardingWizard never offering planned engines as
+    // clickable — that's too much rope. Now the store itself normalizes:
+    // selectable values are accepted; everything else is replaced with the
+    // region default (which the store has already validated).
+    const safeId = isSelectableSTTEngine(id)
+      ? id
+      : getDefaultSTTEngineForRegion(get().userRegion);
+    set({ sttEngine: safeId });
+    persist('sttEngine', safeId);
   },
 
   setSTTApiKey: (engine, key) => {
+    // Mirror the guard on setSTTEngine: even if a stray callsite tries to
+    // store an API key for a planned engine (e.g. via a debug shortcut or
+    // a future feature flag that gets shipped half-baked), refuse the
+    // write. Letting the key land would leave a secret in encrypted
+    // storage that the next migration would then have to clean up.
+    if (!isSelectableSTTEngine(engine)) {
+      console.warn(`[Settings] setSTTApiKey ignored — ${engine} is not currently selectable`);
+      return;
+    }
     set((state) => ({
       sttApiKeys: { ...state.sttApiKeys, [engine]: key },
     }));

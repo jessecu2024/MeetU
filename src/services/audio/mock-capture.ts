@@ -9,11 +9,12 @@ import type { CaptureState, CaptureListener } from './capture';
 class MockCaptureManager {
   private _state: CaptureState = {
     micActive: false,
-    sysActive: false,
     recording: false,
     volume: 0,
     filePath: '',
     error: null,
+    bluetoothDetected: false,
+    deviceLabel: '',
   };
   private listeners: CaptureListener[] = [];
   private volumeInterval: ReturnType<typeof setInterval> | null = null;
@@ -50,8 +51,7 @@ class MockCaptureManager {
     this.emit({
       recording: true,
       micActive: true,
-      sysActive: false,
-      filePath,
+        filePath,
       error: 'Mock mode — using simulated audio / 模拟模式 — 使用模拟音频数据',
     });
 
@@ -82,8 +82,7 @@ class MockCaptureManager {
     this.emit({
       recording: false,
       micActive: false,
-      sysActive: false,
-      volume: 0,
+        volume: 0,
     });
 
     return savedPath;

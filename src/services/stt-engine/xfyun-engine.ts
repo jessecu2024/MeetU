@@ -42,15 +42,41 @@ export class XfyunEngine implements STTEngine {
     if (!this.appId || !this.apiSecret) {
       return { ok: false, error: 'Invalid key format. Use: appId:apiKey:apiSecret' };
     }
-    // iFlytek doesn't have a simple test endpoint, just validate format
-    return { ok: true };
+    // Format validation passes, but the WebSocket auth signing in
+    // generateAuthUrl() is still a hard-coded placeholder. Returning ok=true
+    // here would tell the user the connection works while startSession would
+    // then be rejected by the server. Report the real state instead.
+    return {
+      ok: false,
+      error:
+        'iFlytek (Planned — not yet shipped): credentials look well-formed, but WebSocket HMAC-SHA256 ' +
+        'signing is not yet implemented, so live sessions will fail at the auth step. ' +
+        '/ 讯飞引擎在路线图中尚未发布：凭据格式正确，但 WebSocket HMAC-SHA256 鉴权签名尚未实现，实际开启会话会被服务端拒绝。',
+    };
   }
 
-  async startSession(config: STTConfig): Promise<void> {
+  async startSession(_config: STTConfig): Promise<void> {
     if (!this.apiKey || !this.appId) {
       throw new Error('iFlytek credentials not configured (appId:apiKey:apiSecret)');
     }
 
+    // Defense in depth: even if some caller bypasses isSelectableSTTEngine
+    // and reaches this engine directly, refuse to "start" a session whose
+    // WebSocket would only get auth-rejected after `open`. Without this,
+    // the WS would resolve on open() and the caller would think the session
+    // is live for ~100ms before the server closes the connection with an
+    // auth error, leaving a window where the mock fallback wouldn't trigger.
+    throw new Error(
+      'iFlytek live transcription is not yet supported in this build: ' +
+      'WebSocket HMAC-SHA256 signing is still a placeholder so the server ' +
+      'will reject the session at the auth step. ' +
+      '/ 讯飞实时转写在当前版本暂不支持：WebSocket HMAC-SHA256 鉴权签名尚未实现。'
+    );
+
+    // The original session-start logic is intentionally unreachable below
+    // until generateAuthUrl emits a real HMAC signature. It is preserved
+    // so the eventual fix is a removal of the throw above, not a rewrite.
+    /* istanbul ignore next */
     this.sessionStartTime = Date.now();
     this.resultCounter = 0;
 

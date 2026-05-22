@@ -4,6 +4,7 @@
 // ============================================================
 
 import type { STTEngine, STTEngineId } from './types';
+import { isSelectableSTTEngine } from './types';
 import { DeepgramEngine } from './deepgram-engine';
 import { WhisperAPIEngine } from './whisper-api-engine';
 import { XfyunEngine } from './xfyun-engine';
@@ -17,9 +18,8 @@ class STTEngineRegistry {
   constructor() {
     this.engines.set('deepgram', new DeepgramEngine());
     this.engines.set('whisper_api', new WhisperAPIEngine());
-    this.engines.set('xfyun', new XfyunEngine());
-    this.engines.set('local_whisper', new LocalWhisperEngine());
-    // aliyun_speech: placeholder, not yet implemented
+    this.engines.set('xfyun', new XfyunEngine());          // planned — HMAC-SHA256 signing not yet implemented
+    this.engines.set('local_whisper', new LocalWhisperEngine()); // planned — whisper.cpp not yet integrated
   }
 
   /** Get a specific engine */
@@ -41,42 +41,45 @@ class STTEngineRegistry {
   /**
    * Get the best available engine based on user config.
    * Falls back to mock if no engine is configured/available.
+   *
+   * Every path must respect isSelectableSTTEngine — a planned engine
+   * (currently `local_whisper`) or a removed-from-union engine must NEVER
+   * be returned with `isMock: false`, because at runtime its `startSession`
+   * / `feedAudio` are TODO and the user would silently get no transcripts.
    */
   async getConfiguredEngine(
     preferredId: STTEngineId,
     apiKeys: Partial<Record<STTEngineId, string>>
   ): Promise<{ engine: STTEngine; isMock: boolean }> {
-    // Try preferred engine
-    const preferred = this.engines.get(preferredId);
-    const preferredKey = apiKeys[preferredId];
-    if (preferred && preferredKey) {
-      preferred.setApiKey(preferredKey);
-      return { engine: preferred, isMock: false };
-    }
-
-    // Try local whisper (no key needed) — only if model is actually available
-    if (preferredId === 'local_whisper') {
-      const local = this.engines.get('local_whisper');
-      if (local) {
-        const test = await local.testConnection().catch(() => ({ ok: false }));
-        if (test.ok) return { engine: local, isMock: false };
-        // local_whisper is a stub — fall through to mock
-        console.log('[STT] local_whisper not available, falling back to demo mode');
-      }
-    }
-
-    // Try any engine with a configured key
-    for (const [id, key] of Object.entries(apiKeys)) {
-      if (key) {
-        const engine = this.engines.get(id as STTEngineId);
-        if (engine) {
-          engine.setApiKey(key);
-          return { engine, isMock: false };
+    // 1. Try the user's preferred engine, but only if it's actually usable.
+    if (isSelectableSTTEngine(preferredId)) {
+      const preferred = this.engines.get(preferredId);
+      if (preferred) {
+        const preferredKey = apiKeys[preferredId];
+        if (preferredKey) {
+          preferred.setApiKey(preferredKey);
+          return { engine: preferred, isMock: false };
         }
+        // No key required (offline engines) — confirm runtime availability
+        // before claiming non-mock status.
+        const test = await preferred.testConnection().catch(() => ({ ok: false }));
+        if (test.ok) return { engine: preferred, isMock: false };
       }
     }
 
-    // Fall back to mock
+    // 2. Fall back to any other selectable engine that has a configured key.
+    //    Skipping non-selectable IDs is what prevents an orphan
+    //    `local_whisper` / `aliyun_speech` key from surfacing the stub.
+    for (const [id, key] of Object.entries(apiKeys)) {
+      if (!key || !isSelectableSTTEngine(id) || id === preferredId) continue;
+      const engine = this.engines.get(id as STTEngineId);
+      if (engine) {
+        engine.setApiKey(key);
+        return { engine, isMock: false };
+      }
+    }
+
+    // 3. Nothing usable — demo mode.
     return { engine: this.mockEngine, isMock: true };
   }
 }

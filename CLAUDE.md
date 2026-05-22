@@ -1,11 +1,33 @@
 # MeetU (开会啦) — Claude Code 开发指南
 
+## 当前实现状态（v1.1.0，最新一次审计：2026-05-21）
+
+下面这张表反映**代码实际状态**，不是路线图。改 README、CLAUDE.md 或营销材料前先看这里。
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| 麦克风录音（`getUserMedia`） | ✅ Stable | 单声道麦克风 + Windows Stereo Mix / macOS 虚拟声卡 loopback 路径走通 |
+| macOS ScreenCaptureKit 原生捕获 | 🔜 Planned | `native/macos/` 有 Swift 草稿与 binding.gyp，但 `audio_tap.mm` 的 N-API 绑定仍是 placeholder，未参与构建 |
+| Windows WASAPI Loopback 原生捕获 | 🔜 Planned | `native/windows/` 尚未创建 |
+| Deepgram STT | ✅ Stable | WebSocket 经主进程 IPC，已可用 |
+| OpenAI Whisper API STT | 🔜 Planned | 引擎实现按 PCM Float32 解析音频，但生产 capture pipeline 输出 webm/opus，会产生无效转写；需要改写 engine 接受 webm 段后再启用 |
+| 讯飞 STT | 🔜 Planned | WebSocket auth 签名为 placeholder，运行时鉴权一定失败；engine 已降为 `status: 'planned'`，UI 与 fallback 全部跳过，待 WebCrypto 补全 HMAC-SHA256 后再升级为 Stable |
+| 阿里语音 STT | ❌ Removed | 之前列在文档/类型中，但代码从未实现，已从 `STTEngineId` 移除 |
+| Local Whisper (whisper.cpp) | 🔜 Planned | `local-whisper.ts` 为 stub，`feedAudio`/`stopSession` 是 TODO |
+| 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
+| Markdown 纪要导出 | ✅ Stable | 主进程写 `~/MeetingAI/minutes/*.md` |
+| Word (.docx) 纪要导出 | 🔜 Planned | 之前装的 `docx@^8` 依赖已删除（生成器未实现，留着会形成幽灵 dep）；UI 上 "Export Word" 按钮仍渲染为禁用状态以反映路线图；真实现时重新 `npm install docx` 并加回生成代码 |
+| PDF 纪要导出 | ❌ Not planned right now | 此前装的 `pdfkit` 依赖已删除（曾在 `package.json` 但全代码 0 引用）；如未来需要 PDF 导出，请再添加依赖并真实现 |
+| i18n 多语言 | ❌ 未引入框架 | 渲染层用硬编码 `"English / 中文"` 双语字符串，扩展到日韩需要先引入 i18n 框架 |
+| GPL/AGPL 许可证审计 | ✅ Stable | `npm run check-licenses` 已实现 |
+| 单元测试 / CI | ✅ Stable | Vitest (`npm test`)、ESLint v9 flat config (`npm run lint`)、`tsc --noEmit` (`npm run typecheck`)、`.github/workflows/ci.yml` 在 push/PR 时跑 typecheck + lint + test + license 审计 |
+
 ## ⚠️ 商业合规定位（最重要，贯穿全项目）
 
 本产品的法律定位是：**个人会议笔记辅助工具**。
 
 核心原则：
-1. **我们是录音笔记工具，不是会议平台插件** — 不调用任何会议平台（Zoom/Teams/腾讯会议）的 API，不以机器人身份加入会议，只捕获用户电脑的系统音频，等同于用户自己按下录音键
+1. **我们是录音笔记工具，不是会议平台插件** — 不调用任何会议平台（Zoom/Teams/腾讯会议）的 API，不以机器人身份加入会议；当前版本通过 `getUserMedia` 捕获用户在系统中选择的音频输入设备（默认麦克风；用户可手动启用 Stereo Mix / 虚拟音频线缆以捕获系统输出），等同于用户自己按下录音键
 2. **用户自带一切（纯 BYOK）** — 用户必须使用自己的 AI API Key 和 STT API Key，我们不代理、不转售任何 AI 服务。应用本身是纯工具软件
 3. **用户承担录音合规责任** — 首次使用前必须展示法律声明，用户确认知晓并遵守当地录音法规后才能使用
 4. **零 GPL 依赖** — 不使用 BlackHole 或任何 GPL 许可的组件，确保闭源商业发布合规
@@ -14,11 +36,11 @@
 
 跨平台（macOS + Windows）桌面应用，用户的「AI 会议笔记助手」。用户参加线上会议时启动本应用：
 
-1. **实时语音转文字** — 捕获系统音频 + 麦克风，实时转写为字幕
+1. **实时语音转文字** — 捕获用户选择的音频输入（默认麦克风；可手动启用 loopback 捕获系统输出），实时转写为字幕
 2. **实时翻译** — 中英双向翻译（可扩展更多语言）
 3. **@检测与发言准备** — 检测用户被点名/提问，自动生成回复建议
 4. **实时摘要** — 每5分钟提取会议要点
-5. **会后纪要** — 结构化文档自动生成（Word/PDF/Markdown）
+5. **会后纪要** — 结构化文档自动生成（当前仅 Markdown；Word 导出在路线图中尚未发布；PDF 目前不打算实现）
 
 ## 核心架构原则
 
@@ -26,15 +48,16 @@
 
 **禁止使用 BlackHole(GPL-3.0)、Soundflower(GPL) 或任何 GPL 许可的虚拟音频驱动。**
 
-| 平台 | 方案 | 说明 |
-|------|------|------|
-| macOS 13+ | **ScreenCaptureKit** | Apple 原生框架，可直接捕获指定应用或全屏音频，无需额外驱动 |
+| 平台 | 目标方案 | 当前状态 |
+|------|---------|---------|
+| macOS 13+ | **ScreenCaptureKit** | 🔜 计划中 — `native/macos/` 已有 Swift 草稿和 binding.gyp，但 N-API 绑定 (`audio_tap.mm`) 仍是占位符；运行时尚未挂载 |
 | macOS 12及以下 | 暂不支持 | 要求最低 macOS 13 Ventura |
-| Windows 10+ | **WASAPI Loopback** | 系统原生 API，零依赖，可直接捕获系统音频输出 |
+| Windows 10+ | **WASAPI Loopback** | 🔜 计划中 — `native/windows/` 尚未创建 |
+| 当前所有平台 | **`getUserMedia` 麦克风 + loopback 指引** | ✅ 已落地 — 渲染层使用 `navigator.mediaDevices.getUserMedia`，UI 引导用户在 Windows 启用 Stereo Mix 或在 macOS 路由虚拟音频线缆 |
 
-macOS ScreenCaptureKit 是首选方案：Apple 官方 API 无许可证问题；可选择捕获特定应用（如 Zoom）的音频而非全系统；不需要用户安装任何额外驱动；macOS 13+ 覆盖主流用户群。
+macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；可选择捕获特定应用（如 Zoom）的音频而非全系统；不需要用户安装任何额外驱动；macOS 13+ 覆盖主流用户群。
 
-> **开发注意：** ScreenCaptureKit 需通过 Node.js 原生模块（N-API addon）在 Electron 主进程中调用 Swift/ObjC 代码。需要创建 `native/` 目录存放原生模块。
+> **开发注意：** ScreenCaptureKit 需通过 Node.js 原生模块（N-API addon）在 Electron 主进程中调用 Swift/ObjC 代码。`native/macos/` 已有目录骨架，但 `audio_tap.mm` 中的 N-API 绑定仍为 TODO，需要补全后才能真正捕获系统音频。在此之前，README 与 UI 不应承诺"系统音频自动捕获"。
 
 ### AI 提供商：纯 BYOK 模式
 
@@ -45,21 +68,21 @@ macOS ScreenCaptureKit 是首选方案：Apple 官方 API 无许可证问题；�
 - **通用**：DeepSeek（国内外均可）
 - **国内**：通义千问(Qwen) / MiniMax / 智谱(GLM)
 
-**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。基础功能（录音、本地 STT 转写）可独立工作。
+**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写必须配置 Deepgram API Key** — 是当前唯一可选的 STT 引擎；只有原始音频录制可以完全无 Key 工作。Whisper API、讯飞、Local Whisper 都在路线图中尚未发布。
 
 **收费模式：** 软件本身收费（一次性购买或订阅），AI 和 STT 费用由用户直接向对应服务商支付。
 
 ### STT 引擎选型（合规优先）
 
-| 引擎 | 许可证 | 商用合规 | 推荐 |
-|------|--------|---------|------|
-| Deepgram | 商业 API（BYOK） | ✅ 用户自己付费 | 海外首选 |
-| OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | 海外备选 |
-| 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | 国内首选 |
-| 阿里语音 | 商业 API（BYOK） | ✅ 用户自己付费 | 国内备选 |
-| whisper.cpp (本地) | **MIT 许可** | ✅ 可安全嵌入分发 | 离线首选 |
+| 引擎 | 许可证 | 商用合规 | 实现状态 |
+|------|--------|---------|---------|
+| Deepgram | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable |
+| OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | 🔜 Planned — 引擎按 PCM Float32 解析但生产 capture 输出 webm/opus；需先重构 engine 接受 webm 段 |
+| 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | 🔜 Planned — `xfyun-engine.ts` 的 HMAC 签名仍为 placeholder；`status: 'planned'`，UI / fallback / 迁移全部跳过；补全 WebCrypto HMAC-SHA256 后升级为 Stable |
+| 阿里语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ❌ 尚未实现，已暂时从 `STTEngineId` 类型中移除 |
+| whisper.cpp (本地) | **MIT 许可** | ✅ 可安全嵌入分发 | 🔜 Planned — `local-whisper.ts` 是 stub，`feedAudio` / `stopSession` 仍是 TODO |
 
-> **whisper.cpp** 是 Georgi Gerganov 用 C/C++ 重写的 Whisper 推理引擎，MIT 许可，可安全嵌入闭源商业产品。本地运行，零网络依赖，隐私最佳。作为离线兜底方案，即使用户没有任何 STT API Key，基础转写仍可工作。
+> **whisper.cpp** 是 Georgi Gerganov 用 C/C++ 重写的 Whisper 推理引擎，MIT 许可，可安全嵌入闭源商业产品。本地运行，零网络依赖，隐私最佳。**目标**是作为离线兜底方案，但当前版本只有接口骨架，尚未集成 WASM/native 二进制；用户必须配置至少一个云端 STT Key 才能转写。
 
 ### Electron 构建：排除 GPL ffmpeg
 
@@ -75,24 +98,27 @@ Electron 本身是 MIT 许可，可商用。但内置 Chromium 的 ffmpeg 包含
 
 ### 首次启动法律声明（LegalDisclaimer 组件）
 
-在引导流程最前面，用户必须阅读并同意以下声明后才能继续：
+在引导流程最前面，用户必须阅读并同意以下声明后才能继续。**最终展示文案以 `src/config/legal-texts.ts` 中的当前版本为准**；下面这一段只是结构示例：
 
 ```
-法律声明与使用条款
+法律声明与使用条款（示例 — 实际文案见 src/config/legal-texts.ts）
 
 1. 录音合规责任
-本应用可以捕获您设备上的系统音频并进行录制。您有责任确保：
+本应用通过您在操作系统中选择的音频输入设备（默认为麦克风）进行录制。
+如需同时录制其他参与者的声音，需要在系统层启用 loopback（Windows: Stereo Mix；
+macOS: 非 GPL 虚拟音频线缆），并在应用内选择该设备。原生 ScreenCaptureKit /
+WASAPI Loopback 在路线图中尚未发布。
+您有责任确保：
 - 已遵守您所在地区关于录音的法律法规
 - 已获得所有会议参与者的知情同意（如适用法律要求）
 - 不会将录音用于违反他人隐私权的目的
 不同地区的录音法律差异很大，违反可能构成违法行为。
 
 2. 数据处理说明
-- 您的音频和文字数据仅存储在您的本地设备上
-- 使用 AI 功能时，相关文本将发送至您自行选择和付费的
-  第三方 AI 服务商
-- 我们不存储、不传输、不访问您的任何数据
-- 各 AI 服务的数据处理政策由对应服务商负责
+- 本地存储：录音文件、转写记录、设置和加密 API Key 仅保存在您的设备
+- 外发流量：实时转写音频发往您选择的 STT 服务商；AI 翻译/摘要/建议文本
+  发往您选择的 AI 服务商；API Key 作为认证凭据随请求发送给对应服务商
+- MeetU 不运行任何服务器，不接收、不存储、不代理上述任何内容
 
 3. 免责声明
 本软件是个人笔记辅助工具。使用本软件产生的一切法律后果
@@ -125,8 +151,9 @@ Electron 本身是 MIT 许可，可商用。但内置 Chromium 的 ffmpeg 包含
 | whisper.cpp | MIT | ✅ 安全 |
 | libopus | BSD-3-Clause | ✅ 安全 |
 | ws (WebSocket) | MIT | ✅ 安全 |
-| docx (docx-js) | MIT | ✅ 安全 |
 | lucide-react | ISC | ✅ 安全 |
+
+> `docx` (docx-js, MIT) 和 `pdfkit` (MIT) 之前列在此表中。两者都被记入"暂时移除"清单：在生成器代码真正落地前不保留依赖，避免幽灵 dep。Word/PDF 导出真正实现时再加回依赖与许可证条目。
 
 > **禁止清单：** BlackHole(GPL-3.0)、Soundflower(GPL)、ffmpeg CLI(GPL)、任何 GPL/AGPL 库。引入新依赖前必须运行 `npm run check-licenses`。
 

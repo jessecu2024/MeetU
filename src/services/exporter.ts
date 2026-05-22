@@ -1,6 +1,8 @@
 // ============================================================
-// Export Service — Markdown and Word (.docx) export
-// Saves to ~/MeetingAI/minutes/
+// Export Service — Markdown export today; Word (.docx) is planned but
+// not yet implemented (its dependency and exportWord function were
+// removed to avoid a ghost dep — see the note further down).
+// Output saves to ~/MeetingAI/minutes/.
 // ============================================================
 
 import type { MeetingMinutes } from './post-meeting';
@@ -96,21 +98,16 @@ export async function exportMarkdown(minutes: MeetingMinutes): Promise<string> {
   return (result as string) || filename;
 }
 
-/** Export meeting minutes as Word (.docx) file */
-export async function exportWord(minutes: MeetingMinutes): Promise<string> {
-  // Use docx library to generate Word document
-  // Since docx is a complex library, we'll generate the content in main process
-  const filename = `minutes_${new Date().toISOString().slice(0, 10)}_${sanitizeFilename(minutes.title)}.docx`;
+// `exportWord` (Word/.docx export) was removed from this module along with
+// the unused `docx` dependency to keep the dependency surface honest. The
+// SummaryView still renders a disabled "Export Word (Coming soon)" button
+// so users see the planned feature; if/when the generator is implemented,
+// add `docx` back to package.json and reintroduce the export function here.
 
-  const result = await window.electronAPI?.file.export('docx', JSON.stringify({
-    filename,
-    minutes,
-    disclaimer: { en: EXPORT_DISCLAIMER_EN, zh: EXPORT_DISCLAIMER_ZH },
-  }));
-
-  return (result as string) || filename;
-}
-
-function sanitizeFilename(name: string): string {
+/**
+ * Replace any character that is not ASCII alphanumeric, Han, underscore, or
+ * hyphen with an underscore, and cap to 50 characters. Exported for testing.
+ */
+export function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').slice(0, 50);
 }
