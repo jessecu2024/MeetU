@@ -94,7 +94,11 @@ class AudioCaptureManager {
   private pcmAudioContext: AudioContext | null = null;
   private pcmWorkletNode: AudioWorkletNode | null = null;
   private pcmSourceNode: MediaStreamAudioSourceNode | null = null;
-  private pcmResampleBuffer: Float32Array = new Float32Array(0);
+  // Muted GainNode that gives the Web Audio graph a "sink" so the
+  // worklet's process() actually runs. Without this connection (and
+  // because routing straight to destination would feed back into the
+  // mic), the worklet sits idle. See startPcmStream for details.
+  private pcmMuteNode: GainNode | null = null;
   private pcmWorkletObjectUrl: string | null = null;
 
   private deviceId = '';
@@ -495,10 +499,21 @@ class AudioCaptureManager {
       for (const cb of this.pcmFrameCallbacks) cb(buf);
     };
 
+    // The Web Audio graph only runs nodes that are connected (directly
+    // or transitively) to the destination. An AudioWorklet with no
+    // downstream connection sits idle — its `process()` is never
+    // called, no messages arrive, and iFlytek would see zero PCM
+    // frames. We must connect downstream, but routing the mic output
+    // straight to speakers would create a feedback loop. So we go
+    // through a muted GainNode (gain=0) to give the graph a "sink"
+    // without anything actually playing back.
+    const muteNode = this.pcmAudioContext.createGain();
+    muteNode.gain.value = 0;
     this.pcmSourceNode.connect(this.pcmWorkletNode);
-    // Connecting to destination would route audio to speakers (feedback).
-    // We do NOT connect to destination — the worklet only needs the
-    // input side, and disconnect during stop() suffices to tear down.
+    this.pcmWorkletNode.connect(muteNode);
+    muteNode.connect(this.pcmAudioContext.destination);
+    // Keep a reference so stop() can disconnect cleanly.
+    this.pcmMuteNode = muteNode;
     console.log(`[Audio] PCM stream started (source ${sourceSampleRate} Hz → ${targetSampleRate} Hz mono)`);
   }
 
@@ -509,6 +524,7 @@ class AudioCaptureManager {
   private async stopPcmStream(): Promise<void> {
     try { this.pcmSourceNode?.disconnect(); } catch { /* ignore */ }
     try { this.pcmWorkletNode?.disconnect(); } catch { /* ignore */ }
+    try { this.pcmMuteNode?.disconnect(); } catch { /* ignore */ }
     if (this.pcmAudioContext) {
       try { await this.pcmAudioContext.close(); } catch { /* ignore */ }
     }
@@ -518,8 +534,8 @@ class AudioCaptureManager {
     }
     this.pcmSourceNode = null;
     this.pcmWorkletNode = null;
+    this.pcmMuteNode = null;
     this.pcmAudioContext = null;
-    this.pcmResampleBuffer = new Float32Array(0);
   }
 
   async stop(): Promise<string> {

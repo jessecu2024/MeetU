@@ -292,7 +292,46 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       }
 
       // Start audio capture
-      await audioManager.start();
+      try {
+        await audioManager.start();
+      } catch (audioErr) {
+        // Audio capture failed to come up — for engines with custom
+        // pipelines (PCM stream for iFlytek), this can happen if the
+        // AudioWorklet's addModule rejects, the AudioContext is
+        // blocked, etc. Rather than abort the session, fall through
+        // to a mock-audio + mock-STT pairing so the user can still
+        // exercise the meeting flow and see what happened.
+        console.error('[MeetingStore] Real audio start failed, falling back to mock:', audioErr);
+        const msg = audioErr instanceof Error ? audioErr.message : 'Audio start failed';
+        set({
+          audioError: `Audio capture failed: ${msg} — running in demo mode / 音频启动失败，已切换到演示模式`,
+        });
+        try { await activeSttEngine.stopSession(); } catch { /* ignore */ }
+
+        const mockEngine = sttRegistry.getMock();
+        if ('setUserName' in mockEngine) {
+          (mockEngine as import('../services/stt-engine/mock-engine').MockSTTEngine)
+            .setUserName(settings.userProfile.name, settings.userProfile.nameEn);
+        }
+        mockEngine.onTranscript((result) => {
+          useTranscriptStore.getState().addResult(result);
+          if (result.isFinal) {
+            const entry = {
+              id: result.id, text: result.text, isFinal: true,
+              speaker: result.speaker, language: result.language,
+              startMs: result.startMs, endMs: result.endMs,
+              confidence: result.confidence, timestamp: Date.now(),
+            };
+            translationService.processEntry(entry);
+            mentionDetector.processEntry(entry);
+          }
+        });
+        await mockEngine.startSession({ sampleRate: 16000 });
+        activeSttEngine = mockEngine;
+        activeSttIsMock = true;
+        await mockCaptureManager.start();
+        transcriptStore.startSession(meetingId, 'mock', true);
+      }
 
       const startTime = Date.now();
       const interval = setInterval(() => {
@@ -303,7 +342,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         isRecording: true,
         recordingStartTime: startTime,
         meetingId,
-        useMock: !useRealAudio,
+        useMock: !useRealAudio || activeSttIsMock,
         sttActive: true,
         sttMock: activeSttIsMock,
         sttEngineId: activeSttIsMock ? 'mock' : activeSttEngine.id,

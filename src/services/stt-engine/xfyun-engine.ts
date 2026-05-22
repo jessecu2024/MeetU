@@ -42,17 +42,18 @@ export class XfyunEngine implements STTEngine {
   private sentenceCounter = 0;
   private sessionStartTime = 0;
   // iFlytek streams partial results that grow inside a single sentence
-  // (pgs='rpl' means "replace the previous partial") and then emits a
-  // final (ls=true) at sentence end. To make the transcript store
-  // overwrite the partial in place instead of accumulating duplicate
-  // rows, every partial for the same sentence must carry the SAME id.
-  // We bump `sentenceCounter` only when we receive a final, so the
-  // current partial keeps the id assigned at sentence start.
+  // (pgs='rpl' means "replace the previous partial", 'apd' means
+  // "append to the previous partial") and then emits a final
+  // (ls=true) at sentence end. To make the transcript store overwrite
+  // the partial in place instead of accumulating duplicate rows,
+  // every partial for the same sentence must carry the SAME id.
+  // We mint a new id at the start of each sentence and reuse it for
+  // every partial until ls=true closes the sentence.
   private currentSentenceId = '';
-  // Text already finalized in earlier sentences of this session. Used
-  // so a new sentence's partial doesn't lose context already shown.
-  // Reset on session start.
-  private accumulatedFinalText = '';
+  // Text accumulated within the CURRENT sentence by 'apd' partials.
+  // 'rpl' partials reset it; 'ls=true' (final) freezes the sentence
+  // into a transcript row and clears this for the next sentence.
+  private currentSentenceBuffer = '';
 
   /**
    * iFlytek requires credentials in `AppID:APIKey:APISecret` form.
@@ -176,42 +177,89 @@ export class XfyunEngine implements STTEngine {
     this.sessionStartTime = Date.now();
     this.sentenceCounter = 0;
     this.currentSentenceId = '';
+    this.currentSentenceBuffer = '';
     this.firstFrame = true;
-    this.accumulatedFinalText = '';
 
+    // iFlytek's auth-reject is asynchronous: the server accepts the
+    // WebSocket OPEN handshake first, then closes (or sends a 401-ish
+    // JSON) within a few hundred milliseconds if the signature/host/
+    // date are wrong. If we resolve on `open` and the engine reports
+    // success, meeting-store wires audio in BEFORE the close arrives,
+    // misses its chance to fall back to the mock engine, and the user
+    // sees a permanently dead recording.
+    //
+    // To avoid that race, we wait `SETTLE_MS` after `open` before
+    // resolving. Any close/error/code!=0 message during that window
+    // turns into a reject; afterwards we hand off to the session's
+    // own onmessage / onclose handlers.
+    const SETTLE_MS = 800;
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
       this.ws = ws;
-      let opened = false;
+      let settled = false;     // either resolved or rejected
+      let opened = false;      // ws.onopen has fired
 
       const openTimer = setTimeout(() => {
-        if (!opened) {
-          try { ws.close(); } catch { /* ignore */ }
-          reject(new Error('iFlytek WebSocket open timeout (8s)'));
-        }
+        if (settled) return;
+        settled = true;
+        try { ws.close(); } catch { /* ignore */ }
+        reject(new Error('iFlytek WebSocket open timeout (8s)'));
       }, 8000);
 
-      ws.onopen = () => {
-        opened = true;
+      let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const finishOk = () => {
+        if (settled) return;
+        settled = true;
         clearTimeout(openTimer);
+        if (settleTimer) clearTimeout(settleTimer);
         this.running = true;
-        console.log('[iFlytek] WebSocket connected');
+        console.log('[iFlytek] WebSocket connected (auth settled)');
+        // After settling, the session's regular onmessage handles
+        // results and onclose flips `running`. Both are re-attached
+        // here as plain assignments.
+        ws.onmessage = (event) => this.handleMessage(event.data);
+        ws.onclose = () => { this.running = false; };
         resolve();
       };
 
-      ws.onmessage = (event) => this.handleMessage(event.data);
-
-      ws.onerror = (err) => {
+      const finishFail = (msg: string) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(openTimer);
-        if (!opened) reject(new Error(`iFlytek WebSocket error: ${String((err as Event).type)}`));
+        if (settleTimer) clearTimeout(settleTimer);
+        try { ws.close(); } catch { /* ignore */ }
+        this.ws = null;
+        reject(new Error(msg));
+      };
+
+      ws.onopen = () => {
+        opened = true;
+        // Don't resolve yet — give iFlytek a window to reject.
+        settleTimer = setTimeout(finishOk, SETTLE_MS);
+      };
+
+      ws.onmessage = (event) => {
+        // During the settle window, an error JSON (code !== 0) means
+        // the session is dead — reject. After settling, the real
+        // handler takes over via finishOk's reassignment.
+        if (settled) return;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.code && data.code !== 0) {
+            finishFail(`iFlytek error code ${data.code}: ${data.message || 'unknown'}`);
+          }
+        } catch { /* skip malformed */ }
+      };
+
+      ws.onerror = () => {
+        finishFail(opened
+          ? 'iFlytek WebSocket error during auth settle'
+          : 'iFlytek WebSocket error before open');
       };
 
       ws.onclose = (event) => {
-        clearTimeout(openTimer);
-        if (!opened) {
-          reject(new Error(`iFlytek WebSocket closed before open (code ${event.code}: ${event.reason || 'no reason given'})`));
-        }
-        this.running = false;
+        finishFail(`iFlytek WebSocket closed (code ${event.code}: ${event.reason || 'no reason given'})`);
       };
     });
   }
@@ -292,33 +340,38 @@ export class XfyunEngine implements STTEngine {
       .trim();
     if (!text) return;
 
-    // iFlytek result framing:
-    //   - `pgs: 'apd'` (or no pgs)  → text appends to the previous partial
-    //   - `pgs: 'rpl'`              → text replaces the previous partial
-    //   - `ls: true`                → this is the final result for the
-    //                                 current sentence; next message starts
-    //                                 a new sentence
-    // To make the transcript store overwrite partials in place we must
-    // keep the SAME id across every partial of a given sentence and
-    // only mint a new id when ls=true tells us the sentence is closed.
+    // iFlytek result framing (when dwa=wpgs is enabled in business):
+    //   - `pgs: 'rpl'`  → text replaces the buffer for the current sentence
+    //   - `pgs: 'apd'`  → text appends to the buffer for the current sentence
+    //   - no pgs        → treat like 'rpl' (i.e. the buffer is just text)
+    //   - `ls: true`    → this is the final result for the current sentence
+    //                     and the next message starts a fresh sentence
+    //
+    // We keep one transcript row per sentence by reusing the same id
+    // across every partial within a sentence and only minting a new id
+    // when ls=true closes it. The buffer is per-sentence; final flips
+    // the transcript to isFinal=true and clears for the next sentence.
     const isFinal = result.ls === true;
-    const isReplacement = result.pgs === 'rpl';
-    const fullText = isReplacement ? text : (this.accumulatedFinalText + text);
+    if (result.pgs === 'apd') {
+      this.currentSentenceBuffer += text;
+    } else {
+      this.currentSentenceBuffer = text;
+    }
 
     if (!this.currentSentenceId) {
       this.currentSentenceId = `xf-${++this.sentenceCounter}`;
     }
     const id = this.currentSentenceId;
+    const sentenceText = this.currentSentenceBuffer;
     if (isFinal) {
-      // Sentence closed — next message will mint a fresh id.
       this.currentSentenceId = '';
-      this.accumulatedFinalText = '';
+      this.currentSentenceBuffer = '';
     }
 
     const now = Date.now();
     this.callback?.({
       id,
-      text: fullText,
+      text: sentenceText,
       isFinal,
       language: 'zh',
       startMs: Math.max(0, now - this.sessionStartTime - 2000),
