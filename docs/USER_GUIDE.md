@@ -49,7 +49,7 @@ MeetU 采用 **100% BYOK** 模式：
 | 操作系统 | Windows 10+ 或 macOS 13+ (Ventura) |
 | 内存 | 建议 4GB+ |
 | 网络 | 使用在线 AI/STT 服务时需要网络连接 |
-| STT API Key | **必需**：Deepgram API Key（用于实时转写；当前唯一可选的 STT 引擎） |
+| STT API Key | **必需**：Deepgram 或 OpenAI Whisper API Key 之一（用于实时转写） |
 | AI API Key | 至少一个 AI 提供商的 Key（用于翻译/摘要/建议功能） |
 
 > 计划中的离线 Local Whisper 引擎尚未发布；当前版本必须配置一个云端 STT Key 才能完成实时转写，否则应用会退回到 demo/mock 转写。
@@ -396,7 +396,7 @@ MeetU 不与任何会议软件直接集成。它通过 `getUserMedia` 录制你�
 - API Key 使用操作系统安全存储**加密保存**
 
 外发流量（仅发往你自己配置的服务商）：
-- 实时转写：音频帧从你的设备直接流式发送至 Deepgram（当前唯一可选的 STT 引擎）
+- 实时转写：音频从你的设备直接发送至你选择的 STT 服务商 —— 流式（Deepgram）或 5 秒分段（OpenAI Whisper API）
 - AI 功能（翻译/摘要/@检测/发言建议）：相关转写文本发送至你选择的 AI 服务商
 
 MeetU 本身：

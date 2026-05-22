@@ -47,6 +47,7 @@
     "electron-builder": "^24.13.0",
     "eslint": "^9.0.0",
     "globals": "^15.0.0",
+    "jszip": "^3.10.1",
     "license-checker": "^25.0.1",
     "postcss": "^8.4.0",
     "sharp": "^0.34.5",

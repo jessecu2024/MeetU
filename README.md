@@ -117,7 +117,7 @@ MeetU is designed with privacy as a core principle:
 
 - **Local storage on your device** — recordings (`.webm`), transcripts (SQLite), settings, and encrypted API keys are persisted on your machine only
 - **Outbound traffic, only to providers you choose**:
-  - Live transcription: audio frames stream directly from your device to the STT provider you configure (currently Deepgram; other engines are roadmap items)
+  - Live transcription: audio is sent directly from your device to the STT provider you configure — streamed (Deepgram) or in 5-second segments (OpenAI Whisper API). iFlytek and Local Whisper are roadmap items.
   - AI features: the relevant transcript text is sent to the AI provider you configure (Anthropic, OpenAI, DeepSeek, etc.)
 - **API keys are encrypted** at rest using your OS's secure storage (Electron safeStorage). They are never sent to MeetU (we run no servers); they are only sent directly to the provider you configured, attached as the auth credential on requests to that provider's API
 - **No MeetU servers** — we operate no backend, run no telemetry, no analytics, no tracking. Network traffic only ever goes between your device and the third-party providers you select.
@@ -263,7 +263,7 @@ MeetU 以隐私为核心设计原则：
 
 - **本地设备存储** — 录音文件（`.webm`）、转写记录（SQLite）、设置和加密后的 API Key 都仅保存在你的本机
 - **外发流量，仅发往你自己选择的服务商**：
-  - 实时转写：音频帧从你的设备直接流式发送至你配置的 STT 服务商（当前为 Deepgram，其他引擎在路线图中）
+  - 实时转写：音频从你的设备直接发送至你配置的 STT 服务商 —— 流式（Deepgram）或 5 秒分段（OpenAI Whisper API）。讯飞和 Local Whisper 在路线图中
   - AI 功能：相关转写文本发送至你配置的 AI 服务商（Anthropic、OpenAI、DeepSeek 等）
 - **API Key 使用操作系统级加密** 存储（Electron safeStorage）。它们不会发送给 MeetU（我们没有任何服务器），仅作为请求认证凭据直接发送给你所配置的对应服务商
 - **没有 MeetU 服务器** — 我们不运行任何后端，没有遥测、分析或追踪；所有网络流量只发生在你的设备与你选择的第三方服务商之间

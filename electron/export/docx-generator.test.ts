@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import JSZip from 'jszip';
 import { renderMinutesDocx, type MinutesPayload, type DisclaimerPayload } from './docx-generator';
 
 const DISCLAIMER: DisclaimerPayload = {
@@ -27,10 +28,19 @@ const FULL_MINUTES: MinutesPayload = {
 };
 
 /**
- * .docx files are ZIP archives — the first 4 bytes are the local file
- * header magic number `PK\x03\x04`. Checking this proves Packer produced
- * a real Office Open XML container, not a plain-text fallback.
+ * docx is an Office Open XML container — a ZIP with an XML payload at
+ * `word/document.xml`. Tests extract that XML and assert on its
+ * contents directly, so a regression that silently dropped content
+ * cannot pass by virtue of the buffer just being large enough.
  */
+async function extractDocumentXml(buf: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buf);
+  const entry = zip.file('word/document.xml');
+  if (!entry) throw new Error('docx is missing word/document.xml');
+  return entry.async('string');
+}
+
+/** ZIP local file header magic, used as a cheap sanity check. */
 function isValidZip(buf: Buffer): boolean {
   return buf.length >= 4
     && buf[0] === 0x50
@@ -40,16 +50,21 @@ function isValidZip(buf: Buffer): boolean {
 }
 
 describe('renderMinutesDocx', () => {
-  it('produces a buffer that starts with the ZIP magic (PK\\x03\\x04)', async () => {
+  it('produces a valid Office Open XML container', async () => {
     const buf = await renderMinutesDocx(FULL_MINUTES, DISCLAIMER);
     expect(buf).toBeInstanceOf(Buffer);
-    expect(buf.length).toBeGreaterThan(1000); // any non-trivial docx is > 1 KB
+    expect(buf.length).toBeGreaterThan(1000);
     expect(isValidZip(buf)).toBe(true);
+    // word/document.xml must exist and be non-empty XML.
+    const xml = await extractDocumentXml(buf);
+    expect(xml.startsWith('<?xml')).toBe(true);
+    expect(xml.length).toBeGreaterThan(200);
   });
 
   it('handles minimal minutes (title only) without crashing', async () => {
     const buf = await renderMinutesDocx({ title: 'Empty Meeting' }, DISCLAIMER);
-    expect(isValidZip(buf)).toBe(true);
+    const xml = await extractDocumentXml(buf);
+    expect(xml).toContain('Empty Meeting');
   });
 
   it('handles minutes with no topics and empty arrays gracefully', async () => {
@@ -60,31 +75,55 @@ describe('renderMinutesDocx', () => {
       actionItems: [],
       openQuestions: [],
     }, DISCLAIMER);
-    expect(isValidZip(buf)).toBe(true);
+    const xml = await extractDocumentXml(buf);
+    expect(xml).toContain('Quick Sync');
+    expect(xml).toContain('Nothing decided');
   });
 
-  it('embeds the executive summary inside the document XML', async () => {
+  it('embeds the title in the document XML', async () => {
     const buf = await renderMinutesDocx(FULL_MINUTES, DISCLAIMER);
-    // The summary text should appear in the document.xml inside the zip.
-    // We don't decompress here — just check the raw bytes contain the
-    // run-encoded substring, which is enough to prove the renderer
-    // actually consumed the input rather than ignoring it. (XML is
-    // stored as UTF-8 within the zip's deflate streams; for short ASCII
-    // substrings, a literal search usually hits unless the deflater
-    // chose a high-compression encoding. We use a short unique token.)
-    const haystack = buf.toString('binary');
-    // A character pair from the executive summary; "15%" is short
-    // enough to survive most deflate runs. If this becomes flaky we
-    // can decompress with adm-zip; for now this is a cheap smoke test.
-    expect(haystack.includes('15%') || buf.length > 2000).toBe(true);
+    const xml = await extractDocumentXml(buf);
+    expect(xml).toContain('Q1 Review');
   });
 
-  it('embeds the disclaimer footer', async () => {
+  it('embeds the executive summary text', async () => {
     const buf = await renderMinutesDocx(FULL_MINUTES, DISCLAIMER);
-    expect(buf.length).toBeGreaterThan(0);
-    // We at minimum want a complete document; the smoke test above
-    // already validates ZIP structure. A separate decompress-based
-    // assertion can be added if we ever regress on disclaimer rendering.
-    expect(isValidZip(buf)).toBe(true);
+    const xml = await extractDocumentXml(buf);
+    expect(xml).toContain('15% revenue growth');
+    expect(xml).toContain('onboarding v2');
+  });
+
+  it('embeds every topic, its discussion, key points, and decisions', async () => {
+    const buf = await renderMinutesDocx(FULL_MINUTES, DISCLAIMER);
+    const xml = await extractDocumentXml(buf);
+    expect(xml).toContain('Performance');
+    expect(xml).toContain('Retention plateaued');
+    expect(xml).toContain('Revenue +15%');
+    expect(xml).toContain('Conversion +22%');
+    expect(xml).toContain('Hold prices for Q2');
+  });
+
+  it('embeds every action item (assignee + task), including Han characters', async () => {
+    const buf = await renderMinutesDocx(FULL_MINUTES, DISCLAIMER);
+    const xml = await extractDocumentXml(buf);
+    expect(xml).toContain('张明');
+    expect(xml).toContain('Draft Q2 plan');
+    expect(xml).toContain('Sarah');
+    expect(xml).toContain('Vendor follow-up');
+  });
+
+  it('embeds open questions and next-steps sections', async () => {
+    const buf = await renderMinutesDocx(FULL_MINUTES, DISCLAIMER);
+    const xml = await extractDocumentXml(buf);
+    expect(xml).toContain('focus on i18n');
+    expect(xml).toContain('Q2 kickoff next Monday');
+    expect(xml).toContain('Same time next week');
+  });
+
+  it('embeds BOTH the EN and ZH disclaimer footers', async () => {
+    const buf = await renderMinutesDocx(FULL_MINUTES, DISCLAIMER);
+    const xml = await extractDocumentXml(buf);
+    expect(xml).toContain('AI-generated; please verify');
+    expect(xml).toContain('AI 生成');
   });
 });
