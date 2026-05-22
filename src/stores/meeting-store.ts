@@ -326,14 +326,20 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
     if (_durationInterval) clearInterval(_durationInterval);
 
-    // Stop STT
+    // Stop audio FIRST so the final segment (segment-mode engines like
+    // Whisper) or the last 250ms chunk (streaming engines like Deepgram)
+    // is flushed through capture's `await this.segmentInflight` and fed
+    // to the STT engine before we tell that engine to shut down. The
+    // previous order (STT first, then audio) discarded the final segment
+    // because the engine's `running` flag was already false by the time
+    // capture delivered the blob.
+    const audioManager = useMock ? mockCaptureManager : captureManager;
+    const tempPath = await audioManager.stop();
+
+    // Now safe to stop the STT engine — no more audio is coming.
     if (_sttEngine) {
       await _sttEngine.stopSession().catch(() => {});
     }
-
-    // Stop audio — get temp file path
-    const audioManager = useMock ? mockCaptureManager : captureManager;
-    const tempPath = await audioManager.stop();
 
     // Update meeting in database with temp path for now
     if (meetingId && meetingId > 0 && tempPath) {

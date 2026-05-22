@@ -39,6 +39,16 @@ export class WhisperAPIEngine implements STTEngine {
   // segment we will receive, so each transcript carries a startMs that
   // matches its real position in the meeting timeline.
   private nextSegmentOffsetMs = 0;
+  // Ordering machinery for parallel transcription requests. Because
+  // each segment's fetch runs in parallel, OpenAI's response order is
+  // not the input order — a fast segment 2 can return before a slower
+  // segment 1. To avoid mis-rendered transcripts and out-of-order
+  // summaries, we keep `nextEmitMs` (the startMs we are waiting to
+  // emit) and buffer any result that arrives early in `pending`.
+  // A `null` value in `pending` is a "skip" marker for failed/empty
+  // segments so the cursor still advances past them.
+  private nextEmitMs = 0;
+  private pending = new Map<number, TranscriptResult | null>();
   // Override-able for tests; the runtime always feeds webm/opus.
   private readonly mimeType = 'audio/webm';
 
@@ -69,6 +79,8 @@ export class WhisperAPIEngine implements STTEngine {
     this.running = true;
     this.nextSegmentOffsetMs = 0;
     this.resultCounter = 0;
+    this.nextEmitMs = 0;
+    this.pending.clear();
   }
 
   /**
@@ -107,12 +119,14 @@ export class WhisperAPIEngine implements STTEngine {
       });
     } catch (err) {
       console.error('[Whisper] network error:', err);
+      this.markSegmentEmpty(startMs);
       return;
     }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       console.error(`[Whisper] HTTP ${res.status}: ${detail.substring(0, 200)}`);
+      this.markSegmentEmpty(startMs);
       return;
     }
 
@@ -121,23 +135,26 @@ export class WhisperAPIEngine implements STTEngine {
       data = await res.json();
     } catch {
       console.warn('[Whisper] malformed JSON response');
+      this.markSegmentEmpty(startMs);
       return;
     }
 
     const text = (data.text || '').trim();
-    if (!text) return;
+    if (!text) {
+      this.markSegmentEmpty(startMs);
+      return;
+    }
 
     // Reject Whisper hallucinations on silent segments. The model has
     // known "Thank you for watching" / "字幕组" failure modes when fed
     // mostly-silence audio.
     if (looksLikeHallucination(text)) {
       console.log('[Whisper] dropping likely-hallucination text');
+      this.markSegmentEmpty(startMs);
       return;
     }
 
-    if (!this.running) return; // session may have ended mid-flight
-
-    this.callback?.({
+    this.deliverSegmentResult({
       id: `whisper-${++this.resultCounter}`,
       text,
       isFinal: true,
@@ -146,6 +163,52 @@ export class WhisperAPIEngine implements STTEngine {
       endMs,
       confidence: 0.9, // Whisper does not return per-segment confidence
     });
+  }
+
+  /**
+   * Emit a transcript in startMs order. Because per-segment fetches run
+   * in parallel, OpenAI's response order is not the input order — a
+   * fast segment 2 can return before a slower segment 1. We buffer
+   * early arrivals and only fire the callback once the cursor reaches
+   * their slot.
+   */
+  private deliverSegmentResult(result: TranscriptResult): void {
+    if (result.startMs < this.nextEmitMs) {
+      // Result came after we already moved past its slot (this would
+      // imply the segment ID was reused or a startMs was duplicated).
+      // Emit immediately rather than dropping — out-of-order is better
+      // than silently losing transcript content.
+      this.fireResult(result);
+      return;
+    }
+    this.pending.set(result.startMs, result);
+    this.drainPending();
+  }
+
+  /**
+   * Mark a segment slot as having no transcript (failed fetch, empty
+   * response, or hallucination). Without this, a permanent failure on
+   * one segment would block every later segment forever because the
+   * cursor would never advance past the failed slot.
+   */
+  private markSegmentEmpty(startMs: number): void {
+    if (startMs < this.nextEmitMs) return; // already past it
+    this.pending.set(startMs, null);
+    this.drainPending();
+  }
+
+  private drainPending(): void {
+    while (this.pending.has(this.nextEmitMs)) {
+      const next = this.pending.get(this.nextEmitMs);
+      this.pending.delete(this.nextEmitMs);
+      if (next) this.fireResult(next);
+      this.nextEmitMs += SEGMENT_DURATION_MS;
+    }
+  }
+
+  private fireResult(result: TranscriptResult): void {
+    if (!this.running) return; // session may have ended mid-flight
+    this.callback?.(result);
   }
 
   onTranscript(callback: (result: TranscriptResult) => void): void {
@@ -169,13 +232,24 @@ export class WhisperAPIEngine implements STTEngine {
  */
 export function looksLikeHallucination(text: string): boolean {
   const trimmed = text.trim();
-  const lower = trimmed.toLowerCase();
+  // For letter-based patterns we strip trailing `.` / `!` so that
+  // "Thank you", "Thank you.", "Thank you!" all collapse to the same
+  // normalized form. We do NOT strip punctuation from the
+  // punctuation-only cases ("..." / ". .") — those are checked against
+  // `trimmed` directly below.
+  const normalized = trimmed.toLowerCase().replace(/[!.]+$/, '');
   return (
-    lower === 'thank you.' ||
-    lower === 'thanks for watching!' ||
-    lower === 'thanks for watching.' ||
-    lower === '. .' ||
-    lower === '...' ||
+    // English silent-segment hallucinations
+    normalized === 'thank you' ||
+    normalized === 'thanks for watching' ||
+    normalized === 'thank you for watching' ||
+    normalized === 'thank you so much for watching' ||
+    normalized === 'thanks for watching everyone' ||
+    normalized === 'thanks for watching the video' ||
+    normalized === 'thank you very much' ||
+    // Punctuation-only emissions Whisper produces on silence
+    trimmed === '...' ||
+    trimmed === '. .' ||
     trimmed === '。' ||
     // Common Chinese-subtitle hallucinations Whisper emits on silence.
     // The `\s*` is intentional: Whisper inserts spaces between Han and

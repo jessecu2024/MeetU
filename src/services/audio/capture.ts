@@ -53,6 +53,10 @@ class AudioCaptureManager {
   private segmentCallbacks: AudioSegmentCallback[] = [];
   private segmentRecorder: MediaRecorder | null = null;
   private segmentTimer: ReturnType<typeof setTimeout> | null = null;
+  // Promise that resolves when the currently-recording segment finishes
+  // delivering its blob to subscribers. stop() awaits this so the final
+  // segment is not lost. Replaced on every new segment.
+  private segmentInflight: Promise<void> = Promise.resolve();
 
   private deviceId = '';
 
@@ -217,11 +221,19 @@ class AudioCaptureManager {
   }
 
   /**
-   * Internal: spawn a fresh MediaRecorder that records the same stream
-   * for exactly `segmentDurationMs`, then stops, packages its chunks
-   * into a complete webm Blob, fires segment callbacks, and recursively
-   * spawns the next segment. Two MediaRecorders on the same MediaStream
-   * is explicitly allowed by the Web spec and tested across browsers.
+   * Spawn a fresh MediaRecorder on the same MediaStream for one
+   * `segmentDurationMs` window. Two correctness guarantees this
+   * function provides:
+   *
+   * 1. **No boundary gap.** The next segment recorder starts in the
+   *    first synchronous step of `onstop`, BEFORE blob packaging and
+   *    callback dispatch. There is a brief overlap where both the
+   *    just-stopped and just-started recorders are alive — that's
+   *    allowed by the spec and is what keeps audio continuous.
+   * 2. **No lost final segment.** Each segment's delivery is tracked
+   *    via `segmentInflight`. `stop()` awaits this so the last
+   *    in-flight blob still reaches subscribers before we tear
+   *    `segmentCallbacks` down.
    */
   private startSegmentRecorder(): void {
     if (!this.stream || !this.segmentDurationMs || !this._state.recording) return;
@@ -243,20 +255,38 @@ class AudioCaptureManager {
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) chunks.push(event.data);
     };
-    recorder.onstop = async () => {
-      if (chunks.length > 0 && this.segmentCallbacks.length > 0) {
-        try {
-          const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
-          const buffer = await blob.arrayBuffer();
-          for (const cb of this.segmentCallbacks) cb(buffer);
-        } catch (err) {
-          console.error('[Audio] Segment delivery failed:', err);
-        }
-      }
-      // Schedule next segment if still recording in segment mode
+
+    // The promise that resolves when this segment's blob has been
+    // packaged and dispatched to subscribers. `stop()` awaits the
+    // most recent value before clearing callbacks.
+    let resolveDelivery!: () => void;
+    this.segmentInflight = new Promise<void>((resolve) => { resolveDelivery = resolve; });
+
+    recorder.onstop = () => {
+      // STEP 1 (sync, first): start the next segment so audio recording
+      // never gaps. The previous recorder is still alive and its
+      // packaging happens below; we let them coexist briefly.
       if (this._state.recording && this.segmentDurationMs) {
         this.startSegmentRecorder();
       }
+
+      // STEP 2 (async): package the chunks we collected and dispatch.
+      // Even if there are no callbacks (e.g. stop() already cleared
+      // them in tear-down) we still resolve the delivery promise so
+      // anyone awaiting it doesn't hang forever.
+      void (async () => {
+        try {
+          if (chunks.length > 0 && this.segmentCallbacks.length > 0) {
+            const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+            const buffer = await blob.arrayBuffer();
+            for (const cb of this.segmentCallbacks) cb(buffer);
+          }
+        } catch (err) {
+          console.error('[Audio] Segment delivery failed:', err);
+        } finally {
+          resolveDelivery();
+        }
+      })();
     };
 
     this.segmentRecorder = recorder;
@@ -269,9 +299,23 @@ class AudioCaptureManager {
   async stop(): Promise<string> {
     if (this.volumeInterval) { clearInterval(this.volumeInterval); this.volumeInterval = null; }
 
+    // Disable scheduling of further segments BEFORE we trigger the
+    // current one's stop. onstop checks segmentDurationMs before
+    // spawning a successor, so setting this to null first ensures
+    // tear-down doesn't restart segments mid-shutdown.
+    const wasSegmentMode = !!this.segmentDurationMs;
+    this.segmentDurationMs = null;
     if (this.segmentTimer) { clearTimeout(this.segmentTimer); this.segmentTimer = null; }
+
     if (this.segmentRecorder && this.segmentRecorder.state !== 'inactive') {
       try { this.segmentRecorder.stop(); } catch { /* ignore */ }
+    }
+    // Wait for the in-flight segment to finish delivering BEFORE we
+    // clear segmentCallbacks. Without this await, the final segment's
+    // onstop handler races against the callback teardown below and
+    // the last few seconds of audio never reach Whisper.
+    if (wasSegmentMode) {
+      try { await this.segmentInflight; } catch { /* ignore */ }
     }
     this.segmentRecorder = null;
 

@@ -183,8 +183,19 @@ function registerIPC(): void {
     try {
       const data = JSON.parse(content);
 
+      // SECURITY: the renderer is trusted-ish (it's our own UI) but we
+      // never want a filename from IPC to escape minutesDir. A renderer
+      // bug or a future "import minutes from elsewhere" feature could
+      // accidentally send `../../etc/passwd.docx`. path.basename strips
+      // every directory component; sanitizeFilename does a second pass
+      // to drop characters the host filesystem might choke on.
+      const safeFilename = sanitizeFilenameForExport(
+        path.basename(String(data.filename || 'minutes.dat')),
+        format,
+      );
+      const filePath = path.join(minutesDir, safeFilename);
+
       if (format === 'markdown') {
-        const filePath = path.join(minutesDir, data.filename);
         fs.writeFileSync(filePath, data.content, 'utf-8');
         console.log('[Export] Markdown saved:', filePath);
         return filePath;
@@ -194,7 +205,6 @@ function registerIPC(): void {
         // Renderer sends `{ filename, minutes, disclaimer }`. We build a
         // real .docx Buffer in the main process (the docx library is a
         // Node module) and write it to ~/MeetingAI/minutes/.
-        const filePath = path.join(minutesDir, data.filename);
         const buf = await renderMinutesDocx(data.minutes, data.disclaimer);
         fs.writeFileSync(filePath, buf);
         console.log('[Export] DOCX saved:', filePath, `(${buf.length} bytes)`);
@@ -486,3 +496,36 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
+
+/**
+ * Defense-in-depth filename sanitizer for `file:export`. The renderer
+ * already runs `sanitizeFilename`, but the main process must not trust
+ * that: a renderer bug, a feature flag that ships half-baked, or a
+ * future import-from-elsewhere flow could feed `../../etc/passwd.docx`.
+ *
+ * - `path.basename` (applied at the call site) strips any directory
+ *   component, so even if `../../foo` somehow reached us, this view
+ *   sees only `foo`.
+ * - This function additionally:
+ *   - rejects empty / dot-only names with a fallback
+ *   - replaces every char that is not ASCII alphanumeric, underscore,
+ *     hyphen, Han, or dot with `_` (matches renderer-side
+ *     sanitizeFilename plus dot for the extension)
+ *   - caps at 100 bytes
+ *   - re-attaches the expected extension if it was stripped
+ */
+function sanitizeFilenameForExport(input: string, format: string): string {
+  const cleaned = input
+    .replace(/[^a-zA-Z0-9一-鿿_\-.]/g, '_')
+    .slice(0, 100);
+
+  // Drop bare "." / ".." that path.basename might leave behind
+  if (!cleaned || cleaned === '.' || cleaned === '..') {
+    return `minutes_${Date.now()}.${format === 'docx' ? 'docx' : 'md'}`;
+  }
+
+  const expectedExt = format === 'docx' ? '.docx' : '.md';
+  return cleaned.toLowerCase().endsWith(expectedExt)
+    ? cleaned
+    : cleaned + expectedExt;
+}
