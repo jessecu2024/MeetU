@@ -270,18 +270,12 @@ class AudioCaptureManager {
     this.segmentDeliveries.add(delivery);
     void delivery.finally(() => this.segmentDeliveries.delete(delivery));
 
+    // onstop only handles blob packaging + dispatch. The successor
+    // recorder is started BEFORE this one is stopped (see the timer
+    // below) so the boundary doesn't depend on the stop→onstop async
+    // gap that browsers leave between MediaRecorder.stop() and the
+    // event firing.
     recorder.onstop = () => {
-      // STEP 1 (sync, first): start the next segment so audio recording
-      // never gaps. The previous recorder is still alive and its
-      // packaging happens below; we let them coexist briefly.
-      if (this._state.recording && this.segmentDurationMs) {
-        this.startSegmentRecorder();
-      }
-
-      // STEP 2 (async): package the chunks we collected and dispatch.
-      // Even if there are no callbacks (e.g. stop() already cleared
-      // them in tear-down) we still resolve the delivery promise so
-      // anyone awaiting it doesn't hang forever.
       void (async () => {
         try {
           if (chunks.length > 0 && this.segmentCallbacks.length > 0) {
@@ -300,6 +294,17 @@ class AudioCaptureManager {
     this.segmentRecorder = recorder;
     recorder.start();
     this.segmentTimer = setTimeout(() => {
+      // Start the successor FIRST so the new recorder is actively
+      // capturing before we tell the old one to stop. Without this
+      // ordering, MediaRecorder.stop() returns synchronously but the
+      // browser stops sampling immediately and the next recorder
+      // doesn't start sampling until after `start()` is called from
+      // onstop — a gap of tens of milliseconds where audio is lost,
+      // every 5 seconds. Two MediaRecorders briefly coexist on the
+      // same MediaStream, which the Web spec explicitly allows.
+      if (this._state.recording && this.segmentDurationMs) {
+        this.startSegmentRecorder();
+      }
       try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* ignore */ }
     }, this.segmentDurationMs);
   }
