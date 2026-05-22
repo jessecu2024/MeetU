@@ -12,6 +12,7 @@ import {
   isRecording as isFileRecording, getRecordingsPath
 } from './audio/file-manager';
 import { initDatabase, runQuery } from './database';
+import { renderMinutesDocx } from './export/docx-generator';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -190,10 +191,14 @@ function registerIPC(): void {
       }
 
       if (format === 'docx') {
-        // .docx generation is not yet implemented — refuse explicitly instead of
-        // silently saving a markdown file with a misleading extension.
-        console.warn('[Export] docx requested but not yet implemented');
-        return '';
+        // Renderer sends `{ filename, minutes, disclaimer }`. We build a
+        // real .docx Buffer in the main process (the docx library is a
+        // Node module) and write it to ~/MeetingAI/minutes/.
+        const filePath = path.join(minutesDir, data.filename);
+        const buf = await renderMinutesDocx(data.minutes, data.disclaimer);
+        fs.writeFileSync(filePath, buf);
+        console.log('[Export] DOCX saved:', filePath, `(${buf.length} bytes)`);
+        return filePath;
       }
 
       return '';

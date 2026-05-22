@@ -23,15 +23,22 @@ describe('sttRegistry.getConfiguredEngine fallback', () => {
     expect(result.isMock).toBe(true);
   });
 
-  it('skips planned engines in the fallback loop and falls back to mock when no selectable engine has a key', async () => {
-    // Whisper API used to be the next selectable engine; once it was
-    // demoted to 'planned' (audio-format mismatch), the only stable
-    // engine left is Deepgram. With no Deepgram key configured and
-    // every other key belonging to a planned engine, the loop must
-    // return the mock rather than picking one of those planned engines.
+  it('falls through preferred=deepgram (no key) to whisper_api when only whisper_api has a key', async () => {
+    // Whisper API is selectable again now that capture drives it in
+    // segment mode. With no Deepgram key but a Whisper key configured,
+    // the fallback loop should land on whisper_api as non-mock.
     const result = await sttRegistry.getConfiguredEngine('deepgram', {
       local_whisper: 'should-be-ignored',
-      whisper_api: 'sk-also-planned-now',
+      whisper_api: 'sk-valid',
+      xfyun: 'app:key:secret',
+    });
+    expect(result.isMock).toBe(false);
+    expect(result.engine.id).toBe('whisper_api');
+  });
+
+  it('skips planned engines in the fallback loop and falls back to mock when no selectable engine has a key', async () => {
+    const result = await sttRegistry.getConfiguredEngine('deepgram', {
+      local_whisper: 'should-be-ignored',
       xfyun: 'app:key:secret',
     });
     expect(result.isMock).toBe(true);
@@ -41,7 +48,6 @@ describe('sttRegistry.getConfiguredEngine fallback', () => {
     const result = await sttRegistry.getConfiguredEngine('xfyun', {
       deepgram: 'sk-real',
       xfyun: 'planned-no-effect',
-      whisper_api: 'sk-planned-too',
     });
     expect(result.isMock).toBe(false);
     expect(result.engine.id).toBe('deepgram');

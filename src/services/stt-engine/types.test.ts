@@ -12,11 +12,12 @@ describe('isSelectableSTTEngine', () => {
     expect(isSelectableSTTEngine('deepgram')).toBe(true);
   });
 
-  it('rejects whisper_api — its feedAudio expects PCM Float32 but the production capture pipeline emits webm/opus, so it would produce garbage transcripts', () => {
-    // Was 'stable' until a deeper review found the audio-format mismatch.
-    // Demoted to 'planned' until the engine is reworked to accept webm
-    // segments directly (OpenAI accepts webm).
-    expect(isSelectableSTTEngine('whisper_api')).toBe(false);
+  it('accepts whisper_api now that capture drives it in segment mode (one complete webm file per 5s window)', () => {
+    // Was demoted to 'planned' for a while: feedAudio expected PCM Float32
+    // but production capture emits webm/opus. After reworking the engine
+    // to receive complete webm segments from a parallel MediaRecorder in
+    // capture.ts, whisper_api is back to stable.
+    expect(isSelectableSTTEngine('whisper_api')).toBe(true);
   });
 
   it('rejects planned engines (xfyun) — its auth signing is still a placeholder so live sessions fail', () => {
@@ -47,11 +48,11 @@ describe('isSelectableSTTEngine', () => {
 });
 
 describe('getDefaultSTTEngineForRegion', () => {
-  it('returns deepgram for global users (the only stable engine today; whisper_api is in the fallback chain but currently planned)', () => {
+  it('returns deepgram for global users (first stable candidate; whisper_api is also stable now but deepgram is listed first because of its streaming latency advantage)', () => {
     expect(getDefaultSTTEngineForRegion('global')).toBe('deepgram');
   });
 
-  it('returns deepgram for China users today — xfyun is planned, so the function skips it and falls back to a stable candidate', () => {
+  it('returns deepgram for China users today — xfyun is planned, so the function skips it and falls back to the global default', () => {
     // Codex review caught the previous behavior: returning 'xfyun' for
     // China handed users a default that was guaranteed to fail at runtime
     // because xfyun's auth signer is a placeholder. The function now walks
@@ -159,13 +160,19 @@ describe('migrateSTTConfig', () => {
       aliyun_speech: 'old1',
       local_whisper: 'old2',
       xfyun: 'old3',
-      whisper_api: 'old4',       // whisper_api is also planned today
-      deepgram: 'sk-real',       // the only selectable engine
+      whisper_api: 'sk-also-valid',  // whisper_api is stable now, key kept
+      deepgram: 'sk-real',
     }, null);
     expect(r.engine).toBe('deepgram');               // region null → global default
     expect(r.engineChanged).toBe(true);
-    expect(r.apiKeys).toEqual({ deepgram: 'sk-real' }); // only selectable engine retained
-    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper', 'whisper_api', 'xfyun']);
+    // Both stable-engine keys are kept; only truly-unusable engine keys
+    // (aliyun_speech removed; local_whisper + xfyun still planned) are
+    // pruned from encrypted storage.
+    expect(r.apiKeys).toEqual({
+      deepgram: 'sk-real',
+      whisper_api: 'sk-also-valid',
+    });
+    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper', 'xfyun']);
   });
 });
 

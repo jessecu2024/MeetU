@@ -255,11 +255,31 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     }
 
     try {
-      // Hook up audio chunks to STT engine via capture manager callback
+      // Hook up audio to STT engine via capture manager callbacks. Two
+      // delivery modes exist; the engine declares which one it wants:
+      // - 'stream' (default): the engine receives raw 250ms MediaRecorder
+      //   chunks. Used by Deepgram (streams audio over a WebSocket).
+      // - 'segment': capture spawns a parallel MediaRecorder per segment
+      //   window and each callback fires with one complete webm file.
+      //   Used by Whisper API (each REST request needs a self-contained
+      //   audio file). setSegmentMode must run BEFORE audioManager.start
+      //   so the segment recorder is wired up on the first window.
       if (useRealAudio && !activeSttIsMock) {
-        captureManager.onAudioChunk((data: ArrayBuffer) => {
-          activeSttEngine.feedAudio(data);
-        });
+        if (
+          activeSttEngine.audioMode === 'segment' &&
+          activeSttEngine.segmentDurationMs &&
+          activeSttEngine.segmentDurationMs > 0
+        ) {
+          captureManager.setSegmentMode(activeSttEngine.segmentDurationMs);
+          captureManager.onSegment((data: ArrayBuffer) => {
+            activeSttEngine.feedAudio(data);
+          });
+        } else {
+          captureManager.setSegmentMode(null);
+          captureManager.onAudioChunk((data: ArrayBuffer) => {
+            activeSttEngine.feedAudio(data);
+          });
+        }
       }
 
       // Start audio capture

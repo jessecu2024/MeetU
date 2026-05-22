@@ -18,6 +18,7 @@ export interface CaptureState {
 
 export type CaptureListener = (state: Partial<CaptureState>) => void;
 export type AudioChunkCallback = (data: ArrayBuffer) => void;
+export type AudioSegmentCallback = (data: ArrayBuffer) => void;
 
 function mapMicError(err: unknown): string {
   const name = (err as DOMException)?.name;
@@ -42,6 +43,17 @@ class AudioCaptureManager {
   private audioChunkCallbacks: AudioChunkCallback[] = [];
   private volumeInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Segment-mode state. Set via setSegmentMode() before start().
+  // When non-null, capture spawns a second, parallel MediaRecorder for each
+  // window of `segmentDurationMs` and emits one complete webm file at the
+  // end of each window via segmentCallbacks. The primary `recorder` above
+  // is unaffected and continues to stream 250ms chunks to onAudioChunk
+  // for streaming engines (Deepgram) and to the main-process file writer.
+  private segmentDurationMs: number | null = null;
+  private segmentCallbacks: AudioSegmentCallback[] = [];
+  private segmentRecorder: MediaRecorder | null = null;
+  private segmentTimer: ReturnType<typeof setTimeout> | null = null;
+
   private deviceId = '';
 
   setDevice(deviceId: string): void {
@@ -52,6 +64,29 @@ class AudioCaptureManager {
   onAudioChunk(cb: AudioChunkCallback): () => void {
     this.audioChunkCallbacks.push(cb);
     return () => { this.audioChunkCallbacks = this.audioChunkCallbacks.filter(c => c !== cb); };
+  }
+
+  /**
+   * Subscribe to complete, independently-decodable webm segments. Each
+   * callback fires once per `segmentDurationMs` window (the value passed
+   * to setSegmentMode). Returns an unsubscribe function.
+   *
+   * Requires setSegmentMode(ms) to be active; otherwise no segments are
+   * produced and the callback never fires.
+   */
+  onSegment(cb: AudioSegmentCallback): () => void {
+    this.segmentCallbacks.push(cb);
+    return () => { this.segmentCallbacks = this.segmentCallbacks.filter(c => c !== cb); };
+  }
+
+  /**
+   * Enable/disable segment mode. Pass a positive number to enable;
+   * `null` (or omitted) to disable. Must be called before `start()`.
+   * Mid-session changes are honored on the next segment boundary.
+   */
+  setSegmentMode(durationMs: number | null): void {
+    this.segmentDurationMs = durationMs && durationMs > 0 ? durationMs : null;
+    console.log(`[Audio] Segment mode: ${this.segmentDurationMs ? this.segmentDurationMs + 'ms' : 'off'}`);
   }
 
   private _state: CaptureState = {
@@ -168,6 +203,11 @@ class AudioCaptureManager {
       return;
     }
 
+    // Segment recorder (only if setSegmentMode was called before start())
+    if (this.segmentDurationMs) {
+      this.startSegmentRecorder();
+    }
+
     // Volume indicator
     this.volumeInterval = setInterval(() => {
       if (this.recorder?.state === 'recording') {
@@ -176,8 +216,64 @@ class AudioCaptureManager {
     }, 200);
   }
 
+  /**
+   * Internal: spawn a fresh MediaRecorder that records the same stream
+   * for exactly `segmentDurationMs`, then stops, packages its chunks
+   * into a complete webm Blob, fires segment callbacks, and recursively
+   * spawns the next segment. Two MediaRecorders on the same MediaStream
+   * is explicitly allowed by the Web spec and tested across browsers.
+   */
+  private startSegmentRecorder(): void {
+    if (!this.stream || !this.segmentDurationMs || !this._state.recording) return;
+
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : undefined;
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : {});
+    } catch (err) {
+      console.error('[Audio] Segment MediaRecorder creation failed:', err);
+      return;
+    }
+
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onstop = async () => {
+      if (chunks.length > 0 && this.segmentCallbacks.length > 0) {
+        try {
+          const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+          const buffer = await blob.arrayBuffer();
+          for (const cb of this.segmentCallbacks) cb(buffer);
+        } catch (err) {
+          console.error('[Audio] Segment delivery failed:', err);
+        }
+      }
+      // Schedule next segment if still recording in segment mode
+      if (this._state.recording && this.segmentDurationMs) {
+        this.startSegmentRecorder();
+      }
+    };
+
+    this.segmentRecorder = recorder;
+    recorder.start();
+    this.segmentTimer = setTimeout(() => {
+      try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* ignore */ }
+    }, this.segmentDurationMs);
+  }
+
   async stop(): Promise<string> {
     if (this.volumeInterval) { clearInterval(this.volumeInterval); this.volumeInterval = null; }
+
+    if (this.segmentTimer) { clearTimeout(this.segmentTimer); this.segmentTimer = null; }
+    if (this.segmentRecorder && this.segmentRecorder.state !== 'inactive') {
+      try { this.segmentRecorder.stop(); } catch { /* ignore */ }
+    }
+    this.segmentRecorder = null;
 
     if (this.recorder && this.recorder.state !== 'inactive') {
       this.recorder.stop();
@@ -187,6 +283,7 @@ class AudioCaptureManager {
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
 
     this.audioChunkCallbacks = [];
+    this.segmentCallbacks = [];
 
     const tempPath = await window.electronAPI?.audio.stopRecording() as string;
     this.emit({ recording: false, micActive: false, volume: 0, deviceLabel: '', filePath: tempPath || this._state.filePath });

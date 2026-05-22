@@ -30,13 +30,13 @@
 - **实时翻译** — 中英双向即时翻译
 - **@检测与智能回复建议** — 检测到有人叫你时，自动生成三种风格的回复建议
 - **实时摘要** — 每隔几分钟自动提取会议要点
-- **会后纪要导出** — 自动生成结构化会议纪要（当前导出为 Markdown；Word 导出在路线图中尚未发布）
+- **会后纪要导出** — 自动生成结构化会议纪要，可导出为 Markdown 或 Word (.docx)
 
 ### BYOK（自带 Key）模式
 
 MeetU 采用 **100% BYOK** 模式：
 - 你使用自己的 AI API Key（Claude / OpenAI / DeepSeek 等）
-- 你使用自己的语音转文字 API Key（当前仅 Deepgram；Whisper API / 讯飞 / Local Whisper 在路线图中）
+- 你使用自己的语音转文字 API Key（Deepgram 流式 / OpenAI Whisper API 5 秒分段，二选一；讯飞 / Local Whisper 在路线图中）
 - **所有数据存储在本地**，音频和文字不会发送到 MeetU 的服务器
 - AI 请求直接从你的设备发送到你选择的 AI 服务商
 
@@ -129,7 +129,7 @@ npm run build        # 构建发布版
 | 引擎 | 说明 | 状态 |
 |------|------|------|
 | Deepgram | 实时 WebSocket 流式转写，延迟低 | ✅ Stable |
-| Whisper API | OpenAI 的语音识别 API | 🔜 Planned — 引擎按 PCM 解析但生产音频为 webm/opus，UI 中已禁用 |
+| Whisper API | OpenAI 的语音识别 API (5 秒分段) | ✅ Stable |
 | 讯飞语音 | 国内实时语音识别 | 🔜 Planned — WebSocket HMAC 签名未实现，UI 中已禁用 |
 | 本地 Whisper | 离线运行，MIT 许可 | 🔜 Planned — whisper.cpp 集成尚未发布，UI 中已禁用 |
 
@@ -299,9 +299,12 @@ npm run build        # 构建发布版
 - 生成 `.md` 文件，包含完整的结构化会议纪要
 - 文件名格式：`minutes_YYYY-MM-DD_会议标题.md`
 
-### Word 格式（🔜 计划中，暂不可用）
+### Word 格式
 
-应用界面上的 **"导出 Word / Export Word"** 按钮目前是禁用状态，悬停会显示 "Word (.docx) export is not yet implemented." 的提示。曾装的 `docx` 依赖因生成器未实现已删除（避免形成幽灵 dep），真实现时会重新加回并启用按钮。**请先使用上方的 Markdown 导出**，需要 Word 格式时可在 Word/Pages/Google Docs 中打开 `.md` 文件转换。
+点击 **"导出 Word / Export Word"**：
+- 生成 `.docx` 文件，包含标题、执行摘要、讨论议题、Action Items 表格、未解决问题、下一步建议和底部免责声明
+- 文件名格式：`minutes_YYYY-MM-DD_会议标题.docx`
+- 由 `docx` 库在 Electron 主进程生成，可用 Word/Pages/Google Docs 直接打开
 
 **默认保存位置**：`~/MeetingAI/minutes/`
 
@@ -343,7 +346,7 @@ npm run build        # 构建发布版
 | 引擎 | 状态 | 获取 Key 地址 | 推荐场景 |
 |------|------|--------------|---------|
 | Deepgram | ✅ Stable | [console.deepgram.com](https://console.deepgram.com) | 海外首选，实时性好 |
-| Whisper API | 🔜 Planned — 引擎按 PCM 解析但生产音频为 webm/opus，UI 中已禁用 | [platform.openai.com](https://platform.openai.com) | 海外备选（待修复音频管线） |
+| Whisper API | ✅ Stable | [platform.openai.com](https://platform.openai.com) | 海外备选 (5 秒分段,精度高) |
 | 讯飞语音 | 🔜 Planned — WebSocket HMAC-SHA256 鉴权签名尚未实现，UI 中已禁用 | [console.xfyun.cn](https://console.xfyun.cn) | 国内（待补签名后转 Stable） |
 | 本地 Whisper | 🔜 Planned — 在设置面板中显示为禁用状态 | — | whisper.cpp 集成尚未发布 |
 
@@ -375,7 +378,7 @@ npm run build        # 构建发布版
 
 可以。**录音 + 语音转文字**只需要一个 Deepgram API Key，无需 AI Key。但翻译、摘要、发言建议等 AI 功能需要额外配置 AI Key。
 
-> Whisper API、讯飞、本地 Whisper 都在路线图中尚未发布；当前实时转写必须使用 Deepgram。
+> 讯飞、本地 Whisper 在路线图中尚未发布；当前实时转写可选 Deepgram（流式，延迟约 300ms）或 OpenAI Whisper API（5 秒分段，精度高但延迟约 5-7 秒）。
 
 ### Q: API 费用由谁承担？
 

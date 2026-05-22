@@ -1,83 +1,151 @@
 // ============================================================
 // OpenAI Whisper API STT Engine (BYOK)
-// Non-streaming: accumulates 5s audio segments, sends via REST
-// POST https://api.openai.com/v1/audio/transcriptions
+//
+// Whisper's `/v1/audio/transcriptions` endpoint is REST: each request
+// carries a single complete audio file. The capture layer therefore
+// drives this engine in **segment mode** — it spawns a fresh
+// MediaRecorder per `segmentDurationMs` window and hands us one
+// independently-decodable webm/opus file per window via `feedAudio`.
+// We POST that file as-is (Whisper accepts webm) and emit a transcript
+// once OpenAI responds.
+//
+// The 5-second default is a balance: long enough for word/phrase
+// context to land on the same segment (better accuracy than 3s), short
+// enough to keep end-to-end latency in the 5–7s range. Pricing is per
+// audio second so segment length does not affect cost.
 // ============================================================
 
-import type { STTEngine, STTEngineId, STTConfig, TranscriptResult } from './types';
+import type {
+  STTEngine, STTEngineId, STTConfig, TranscriptResult, AudioDeliveryMode,
+} from './types';
 
-const SEGMENT_DURATION_MS = 5000; // 5 second segments
+const SEGMENT_DURATION_MS = 5000;
+const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
 
 export class WhisperAPIEngine implements STTEngine {
   readonly id: STTEngineId = 'whisper_api';
   readonly name = 'Whisper API (OpenAI)';
   readonly region = 'global' as const;
-  readonly supportsRealtime = false; // Segment-based, not true real-time
+  readonly supportsRealtime = false; // segment-based, not streaming
+
+  readonly audioMode: AudioDeliveryMode = 'segment';
+  readonly segmentDurationMs = SEGMENT_DURATION_MS;
 
   private apiKey = '';
   private callback: ((result: TranscriptResult) => void) | null = null;
   private running = false;
-  private audioBuffer: Float32Array[] = [];
-  private segmentInterval: ReturnType<typeof setInterval> | null = null;
   private resultCounter = 0;
-  private sessionStartTime = 0;
-  private sampleRate = 16000;
+  // Tracks the running offset (in ms from session start) of the next
+  // segment we will receive, so each transcript carries a startMs that
+  // matches its real position in the meeting timeline.
+  private nextSegmentOffsetMs = 0;
+  // Override-able for tests; the runtime always feeds webm/opus.
+  private readonly mimeType = 'audio/webm';
 
-  setApiKey(key: string): void {
-    this.apiKey = key;
-  }
+  setApiKey(key: string): void { this.apiKey = key; }
 
   async testConnection(): Promise<{ ok: boolean; error?: string }> {
     if (!this.apiKey) return { ok: false, error: 'No API Key configured' };
     try {
+      // Cheap auth check: list models. The transcription endpoint has
+      // no no-op ping; /v1/models with the same bearer confirms the key
+      // is valid without spending audio-second credit.
       const res = await fetch('https://api.openai.com/v1/models', {
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
       });
-      return res.ok ? { ok: true } : { ok: false, error: `HTTP ${res.status}` };
+      if (res.ok) return { ok: true };
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, error: `Invalid API Key (HTTP ${res.status}) / API Key 无效` };
+      }
+      return { ok: false, error: `HTTP ${res.status}` };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : 'Network error' };
+      const msg = err instanceof Error ? err.message : 'Network error';
+      return { ok: false, error: `Network error: ${msg} / 网络错误，请检查 VPN` };
     }
   }
 
   async startSession(_config: STTConfig): Promise<void> {
-    // Defense in depth (mirrors xfyun-engine.startSession). The production
-    // audio pipeline emits webm/opus chunks via MediaRecorder, but this
-    // engine's feedAudio + processSegment assume PCM Float32 (see line 59),
-    // so any session that gets this far will silently send re-encoded
-    // garbage WAV to OpenAI and either receive nothing or hallucinated
-    // transcripts. Refuse to start until the engine is reworked to accept
-    // webm/opus segments directly.
-    //
-    // isSelectableSTTEngine already blocks whisper_api from being picked
-    // through SettingsModal, OnboardingWizard, sttRegistry.getConfiguredEngine
-    // and the store guards, but a future direct caller (a script, a test,
-    // a feature flag) must not be able to bypass that gate either.
-    throw new Error(
-      'Whisper API live transcription is not yet supported in this build: ' +
-      'the engine expects PCM Float32 input but the production capture ' +
-      'pipeline produces webm/opus, so transcripts would be invalid. ' +
-      '/ Whisper API 实时转写在当前版本暂不支持：引擎按 PCM Float32 解析' +
-      '但生产音频管线输出 webm/opus，会产生无效转写。'
-    );
-
-    // The original session-start logic is intentionally unreachable below
-    // until the audio-format mismatch is fixed. Preserved so the eventual
-    // fix is a removal of the throw above, not a rewrite.
-    /* istanbul ignore next */
     if (!this.apiKey) throw new Error('Whisper API Key not configured');
     this.running = true;
-    this.sessionStartTime = Date.now();
-    this.sampleRate = _config.sampleRate || 16000;
-    this.audioBuffer = [];
+    this.nextSegmentOffsetMs = 0;
     this.resultCounter = 0;
-    this.segmentInterval = setInterval(() => {
-      this.processSegment();
-    }, SEGMENT_DURATION_MS);
   }
 
+  /**
+   * Receives one complete webm/opus file per `segmentDurationMs` window.
+   * Fire-and-forget: we don't block capture on the network round-trip,
+   * but each transcript carries its own `startMs` so out-of-order
+   * arrivals (a slower OpenAI response after a faster one) still render
+   * in the correct meeting timeline.
+   */
   feedAudio(chunk: ArrayBuffer): void {
-    if (!this.running) return;
-    this.audioBuffer.push(new Float32Array(chunk));
+    if (!this.running || chunk.byteLength === 0) return;
+
+    // Snapshot the segment's position in the meeting BEFORE async work.
+    const startMs = this.nextSegmentOffsetMs;
+    const endMs = startMs + SEGMENT_DURATION_MS;
+    this.nextSegmentOffsetMs += SEGMENT_DURATION_MS;
+
+    this.transcribeSegment(chunk, startMs, endMs).catch((err) => {
+      console.error('[Whisper] segment transcription failed:', err);
+    });
+  }
+
+  private async transcribeSegment(buffer: ArrayBuffer, startMs: number, endMs: number): Promise<void> {
+    const blob = new Blob([buffer], { type: this.mimeType });
+    const formData = new FormData();
+    formData.append('file', blob, 'segment.webm');
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', 'verbose_json');
+
+    let res: Response;
+    try {
+      res = await fetch(TRANSCRIBE_URL, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        body: formData,
+      });
+    } catch (err) {
+      console.error('[Whisper] network error:', err);
+      return;
+    }
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      console.error(`[Whisper] HTTP ${res.status}: ${detail.substring(0, 200)}`);
+      return;
+    }
+
+    let data: { text?: string; language?: string };
+    try {
+      data = await res.json();
+    } catch {
+      console.warn('[Whisper] malformed JSON response');
+      return;
+    }
+
+    const text = (data.text || '').trim();
+    if (!text) return;
+
+    // Reject Whisper hallucinations on silent segments. The model has
+    // known "Thank you for watching" / "字幕组" failure modes when fed
+    // mostly-silence audio.
+    if (looksLikeHallucination(text)) {
+      console.log('[Whisper] dropping likely-hallucination text');
+      return;
+    }
+
+    if (!this.running) return; // session may have ended mid-flight
+
+    this.callback?.({
+      id: `whisper-${++this.resultCounter}`,
+      text,
+      isFinal: true,
+      language: data.language || undefined,
+      startMs,
+      endMs,
+      confidence: 0.9, // Whisper does not return per-segment confidence
+    });
   }
 
   onTranscript(callback: (result: TranscriptResult) => void): void {
@@ -86,111 +154,34 @@ export class WhisperAPIEngine implements STTEngine {
 
   async stopSession(): Promise<void> {
     this.running = false;
-    if (this.segmentInterval) {
-      clearInterval(this.segmentInterval);
-      this.segmentInterval = null;
-    }
-    // Process remaining audio
-    await this.processSegment();
-    this.audioBuffer = [];
   }
 
   isRunning(): boolean {
     return this.running;
   }
+}
 
-  /** Convert buffered audio to WAV and send to Whisper API */
-  private async processSegment(): Promise<void> {
-    if (this.audioBuffer.length === 0) return;
-
-    const chunks = this.audioBuffer.splice(0);
-    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-    if (totalLength < 100) return; // Skip very short segments
-
-    const merged = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    // Encode as WAV
-    const wavBlob = this.encodeWAV(merged);
-    const segmentStart = Date.now() - this.sessionStartTime - SEGMENT_DURATION_MS;
-
-    try {
-      const formData = new FormData();
-      formData.append('file', wavBlob, 'audio.wav');
-      formData.append('model', 'whisper-1');
-      formData.append('response_format', 'verbose_json');
-      formData.append('timestamp_granularities[]', 'segment');
-
-      const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${this.apiKey}` },
-        body: formData,
-      });
-
-      if (!res.ok) {
-        console.error('[Whisper] API error:', res.status);
-        return;
-      }
-
-      const data = await res.json();
-      if (data.text?.trim()) {
-        this.callback?.({
-          id: `whisper-${++this.resultCounter}`,
-          text: data.text.trim(),
-          isFinal: true,
-          language: data.language || undefined,
-          startMs: Math.max(0, segmentStart),
-          endMs: Date.now() - this.sessionStartTime,
-          confidence: 0.9, // Whisper doesn't return confidence
-        });
-      }
-    } catch (err) {
-      console.error('[Whisper] Request failed:', err);
-    }
-  }
-
-  /** Encode Float32 PCM data as WAV blob */
-  private encodeWAV(samples: Float32Array): Blob {
-    const numChannels = 1;
-    const bitsPerSample = 16;
-    const bytesPerSample = bitsPerSample / 8;
-    const dataLength = samples.length * bytesPerSample;
-    const buffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(buffer);
-
-    // RIFF header
-    this.writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + dataLength, true);
-    this.writeString(view, 8, 'WAVE');
-    this.writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, this.sampleRate, true);
-    view.setUint32(28, this.sampleRate * numChannels * bytesPerSample, true);
-    view.setUint16(32, numChannels * bytesPerSample, true);
-    view.setUint16(34, bitsPerSample, true);
-    this.writeString(view, 36, 'data');
-    view.setUint32(40, dataLength, true);
-
-    // PCM data
-    let offset = 44;
-    for (let i = 0; i < samples.length; i++) {
-      const s = Math.max(-1, Math.min(1, samples[i]));
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-      offset += 2;
-    }
-
-    return new Blob([buffer], { type: 'audio/wav' });
-  }
-
-  private writeString(view: DataView, offset: number, str: string): void {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
-    }
-  }
+/**
+ * Heuristic filter for Whisper hallucination patterns. Whisper is known
+ * to confidently transcribe silence as a small set of recurring strings
+ * (the "thank you for watching" failure mode and Chinese-subtitle
+ * variants). Exported for unit testing.
+ */
+export function looksLikeHallucination(text: string): boolean {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+  return (
+    lower === 'thank you.' ||
+    lower === 'thanks for watching!' ||
+    lower === 'thanks for watching.' ||
+    lower === '. .' ||
+    lower === '...' ||
+    trimmed === '。' ||
+    // Common Chinese-subtitle hallucinations Whisper emits on silence.
+    // The `\s*` is intentional: Whisper inserts spaces between Han and
+    // Latin in its output ("字幕 by ..."), and the bare `字幕组` form
+    // has no space.
+    /^字幕\s*(组|by|提供)/i.test(trimmed) ||
+    /^请订阅|^请关注/.test(trimmed)
+  );
 }

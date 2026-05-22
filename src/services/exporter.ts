@@ -1,7 +1,9 @@
 // ============================================================
-// Export Service — Markdown export today; Word (.docx) is planned but
-// not yet implemented (its dependency and exportWord function were
-// removed to avoid a ghost dep — see the note further down).
+// Export Service — Markdown and Word (.docx) export.
+// The renderer builds the payload here and hands it to the Electron
+// main process via IPC `file:export`. For docx, the main process
+// uses the `docx` library (Node-only) to generate a real Word
+// document; see electron/export/docx-generator.ts.
 // Output saves to ~/MeetingAI/minutes/.
 // ============================================================
 
@@ -98,11 +100,22 @@ export async function exportMarkdown(minutes: MeetingMinutes): Promise<string> {
   return (result as string) || filename;
 }
 
-// `exportWord` (Word/.docx export) was removed from this module along with
-// the unused `docx` dependency to keep the dependency surface honest. The
-// SummaryView still renders a disabled "Export Word (Coming soon)" button
-// so users see the planned feature; if/when the generator is implemented,
-// add `docx` back to package.json and reintroduce the export function here.
+/**
+ * Export meeting minutes as a Word (.docx) file. The structured minutes
+ * + disclaimer payload travels over IPC to the main process, which uses
+ * the `docx` library to produce a real Word document and writes it to
+ * `~/MeetingAI/minutes/`. The returned string is the absolute file path
+ * on success, the filename alone if the IPC layer returned nothing.
+ */
+export async function exportWord(minutes: MeetingMinutes): Promise<string> {
+  const filename = `minutes_${new Date().toISOString().slice(0, 10)}_${sanitizeFilename(minutes.title)}.docx`;
+  const result = await window.electronAPI?.file.export('docx', JSON.stringify({
+    filename,
+    minutes,
+    disclaimer: { en: EXPORT_DISCLAIMER_EN, zh: EXPORT_DISCLAIMER_ZH },
+  }));
+  return (result as string) || filename;
+}
 
 /**
  * Replace any character that is not ASCII alphanumeric, Han, underscore, or
