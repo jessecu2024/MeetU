@@ -224,7 +224,12 @@ class AudioCaptureManager {
       this.emit({ micActive: true, deviceLabel: trackLabel, error: null });
     } catch (err) {
       console.warn('[Audio] Failed with selected device:', (err as DOMException)?.name);
-      // Fallback to default
+      // Fallback to default device if we tried a specific one first.
+      // If even the default device fails, throw so meeting-store's
+      // mock-fallback catch runs. A previous version silently `return`ed
+      // on this branch, which made capture.start() resolve with no
+      // recorder configured — the session would then run with neither
+      // real nor mock audio.
       if (!isDefault) {
         try {
           console.log('[Audio] Falling back to default device...');
@@ -236,12 +241,14 @@ class AudioCaptureManager {
           this.emit({ micActive: true, deviceLabel: trackLabel, error: null });
         } catch (fallbackErr) {
           console.error('[Audio] Default also failed:', (fallbackErr as DOMException)?.name);
-          this.emit({ micActive: false, error: mapMicError(fallbackErr) });
-          return;
+          const msg = mapMicError(fallbackErr);
+          this.emit({ micActive: false, error: msg, recording: false });
+          throw new Error(msg);
         }
       } else {
-        this.emit({ micActive: false, error: mapMicError(err) });
-        return;
+        const msg = mapMicError(err);
+        this.emit({ micActive: false, error: msg, recording: false });
+        throw new Error(msg);
       }
     }
 
@@ -290,9 +297,15 @@ class AudioCaptureManager {
       this.recorder.start(250);
       console.log(`[Audio] MediaRecorder started (${mimeType || 'default'}, 250ms chunks)`);
     } catch (err) {
+      // Throw so meeting-store's mock-fallback catch runs. A previous
+      // version `return`ed silently which left capture.start() resolved
+      // with no recorder configured.
+      const msg = `MediaRecorder failed: ${err instanceof Error ? err.message : 'Unknown'} / 录音器创建失败`;
       console.error('[Audio] MediaRecorder creation failed:', err);
-      this.emit({ error: `MediaRecorder failed: ${err instanceof Error ? err.message : 'Unknown'} / 录音器创建失败` });
-      return;
+      try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      this.stream = null;
+      this.emit({ error: msg, recording: false, micActive: false });
+      throw new Error(msg);
     }
 
     // Segment recorder (only if setSegmentMode was called before start())
@@ -313,14 +326,25 @@ class AudioCaptureManager {
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown';
         console.error('[Audio] PCM stream setup failed:', err);
-        this.emit({ error: `PCM stream setup failed: ${msg} / PCM 流启动失败` });
-        // Tear down anything we already started before the PCM failure
-        // so we don't leave half-initialized recorders behind.
-        try { this.recorder?.stop(); } catch { /* ignore */ }
-        try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+        // Full cleanup symmetric with `stop()`: stop the recorder,
+        // drain its in-flight ondataavailable promises, close the
+        // main-process file writer, and release the MediaStream
+        // tracks. A previous version skipped the drain + writer-close
+        // here, so the fallback mock recording could race against
+        // stale final-chunk state — the .webm file on disk would be
+        // missing its trailing bytes and the IPC handle would still
+        // be open when the mock tried to write to it.
+        try { if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop(); } catch { /* ignore */ }
+        try { await this.mainRecorderDone; } catch { /* ignore */ }
         this.recorder = null;
+        try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
         this.stream = null;
-        this.emit({ recording: false, micActive: false });
+        try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
+        this.audioChunkCallbacks = [];
+        this.segmentCallbacks = [];
+        this.pcmFrameCallbacks = [];
+        this.pcmStreamEnabled = false;
+        this.emit({ error: `PCM stream setup failed: ${msg} / PCM 流启动失败`, recording: false, micActive: false });
         throw err;
       }
     }
@@ -460,6 +484,21 @@ class AudioCaptureManager {
     // long session does not accumulate phase error.
     let phase = 0;             // next source sample index we want to pick
     let carry = new Float32Array(0);
+    // Output batching. The worklet fires every render quantum (128
+    // frames; ~2.7ms at 48kHz). Forwarding to subscribers at that
+    // rate means hundreds of WebSocket sends per second to iFlytek
+    // — well above what they recommend and what the network can
+    // sustain cleanly. We accumulate ~40ms of post-resample audio
+    // (640 samples at 16kHz, iFlytek's recommended frame size) and
+    // emit one buffer per batch.
+    const BATCH_SAMPLES = Math.round(targetSampleRate * 0.04); // 640 @ 16kHz
+    let outBatch: number[] = [];
+    const flushBatch = () => {
+      if (outBatch.length === 0) return;
+      const buf = new Float32Array(outBatch).buffer;
+      for (const cb of this.pcmFrameCallbacks) cb(buf);
+      outBatch = [];
+    };
 
     this.pcmWorkletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
       if (!this._state.recording || this.pcmFrameCallbacks.length === 0) return;
@@ -471,14 +510,15 @@ class AudioCaptureManager {
       merged.set(carry, 0);
       merged.set(input, carry.length);
 
-      // How many output samples does this merged buffer cover?
-      // We pick at floor(phase + i*ratio) for i = 0, 1, 2, ...
-      const out: number[] = [];
+      // Pick on the fixed grid: floor(phase + i*ratio) for i = 0, 1, 2, …
       while (true) {
         const idx = Math.floor(phase);
         if (idx >= merged.length) break;
-        out.push(merged[idx]);
+        outBatch.push(merged[idx]);
         phase += ratio;
+        if (outBatch.length >= BATCH_SAMPLES) {
+          flushBatch();
+        }
       }
 
       // Carry any samples we haven't consumed yet. The new buffer
@@ -493,10 +533,6 @@ class AudioCaptureManager {
         phase -= merged.length;
         if (phase < 0) phase = 0; // numerical safety
       }
-
-      if (out.length === 0) return;
-      const buf = new Float32Array(out).buffer;
-      for (const cb of this.pcmFrameCallbacks) cb(buf);
     };
 
     // The Web Audio graph only runs nodes that are connected (directly
