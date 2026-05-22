@@ -50,10 +50,12 @@ export class XfyunEngine implements STTEngine {
   // We mint a new id at the start of each sentence and reuse it for
   // every partial until ls=true closes the sentence.
   private currentSentenceId = '';
-  // Text accumulated within the CURRENT sentence by 'apd' partials.
-  // 'rpl' partials reset it; 'ls=true' (final) freezes the sentence
-  // into a transcript row and clears this for the next sentence.
-  private currentSentenceBuffer = '';
+  // Segments of the current sentence keyed by iFlytek's `sn`
+  // (sequence number). 'apd' adds a new sn → text entry; 'rpl' with
+  // an `rg: [startSn, endSn]` range deletes those keys before adding
+  // the new sn. The rendered sentence text is the values joined in
+  // numeric sn order. Cleared on ls=true (final).
+  private currentSentenceSegments = new Map<number, string>();
 
   /**
    * iFlytek requires credentials in `AppID:APIKey:APISecret` form.
@@ -177,7 +179,7 @@ export class XfyunEngine implements STTEngine {
     this.sessionStartTime = Date.now();
     this.sentenceCounter = 0;
     this.currentSentenceId = '';
-    this.currentSentenceBuffer = '';
+    this.currentSentenceSegments.clear();
     this.firstFrame = true;
 
     // iFlytek's auth-reject is asynchronous: the server accepts the
@@ -314,8 +316,15 @@ export class XfyunEngine implements STTEngine {
       data?: {
         status?: number;
         result?: {
+          sn?: number;
           ls?: boolean;
           pgs?: 'apd' | 'rpl';
+          // `rg` is iFlytek's replacement range for pgs='rpl': it is
+          // a 2-element array [startSn, endSn] (inclusive) telling
+          // us which previous `sn` segments to drop before splicing
+          // in the new one. Treating every `rpl` as "replace the
+          // whole buffer" loses unrelated earlier segments.
+          rg?: [number, number];
           ws?: Array<{ cw: Array<{ w: string }> }>;
         };
       };
@@ -340,32 +349,60 @@ export class XfyunEngine implements STTEngine {
       .trim();
     if (!text) return;
 
-    // iFlytek result framing (when dwa=wpgs is enabled in business):
-    //   - `pgs: 'rpl'`  → text replaces the buffer for the current sentence
-    //   - `pgs: 'apd'`  → text appends to the buffer for the current sentence
-    //   - no pgs        → treat like 'rpl' (i.e. the buffer is just text)
-    //   - `ls: true`    → this is the final result for the current sentence
-    //                     and the next message starts a fresh sentence
+    // iFlytek wpgs framing (when dwa='wpgs' is enabled in business):
     //
-    // We keep one transcript row per sentence by reusing the same id
-    // across every partial within a sentence and only minting a new id
-    // when ls=true closes it. The buffer is per-sentence; final flips
-    // the transcript to isFinal=true and clears for the next sentence.
+    // Each result carries:
+    //   - sn: sequence number for THIS segment (1, 2, 3, …)
+    //   - pgs: 'apd' to append a new segment, 'rpl' to replace a range
+    //          of previously-emitted segments
+    //   - rg: when pgs='rpl', the inclusive [startSn, endSn] range of
+    //         segments to remove before adding this one
+    //   - ls: true when this segment closes the current sentence
+    //
+    // We maintain `segmentsBySn` keyed by sn for the current sentence
+    // and render the sentence as `Object.values(...).join('')` in sn
+    // order. That's the only way to honor mid-sentence corrections
+    // (rpl with rg=[2,3] means "drop segments 2 and 3, then add this
+    // as the new one") without losing unrelated earlier segments.
     const isFinal = result.ls === true;
-    if (result.pgs === 'apd') {
-      this.currentSentenceBuffer += text;
-    } else {
-      this.currentSentenceBuffer = text;
+    const sn = typeof result.sn === 'number' ? result.sn : -1;
+
+    if (result.pgs === 'rpl' && result.rg && result.rg.length === 2) {
+      const [startSn, endSn] = result.rg;
+      for (let s = startSn; s <= endSn; s++) {
+        this.currentSentenceSegments.delete(s);
+      }
+      if (sn >= 0) this.currentSentenceSegments.set(sn, text);
+    } else if (result.pgs === 'apd' || result.pgs === undefined) {
+      if (sn >= 0) {
+        this.currentSentenceSegments.set(sn, text);
+      } else {
+        // No sn available — degenerate case. Treat as a plain append
+        // by hashing under a synthetic monotonic key so we don't
+        // collide with sn-keyed entries.
+        this.currentSentenceSegments.set(-(this.currentSentenceSegments.size + 1), text);
+      }
+    } else if (result.pgs === 'rpl') {
+      // rpl without rg: iFlytek's docs say this shouldn't happen with
+      // wpgs, but if it does, treat as full-sentence replacement.
+      this.currentSentenceSegments.clear();
+      if (sn >= 0) this.currentSentenceSegments.set(sn, text);
     }
 
     if (!this.currentSentenceId) {
       this.currentSentenceId = `xf-${++this.sentenceCounter}`;
     }
     const id = this.currentSentenceId;
-    const sentenceText = this.currentSentenceBuffer;
+    // Render in sn order; the Map's iteration order matches insertion
+    // by default, but a 'rpl' that inserted a NEW sn out of order
+    // would otherwise render in the wrong place. Sort numerically.
+    const sentenceText = Array.from(this.currentSentenceSegments.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, t]) => t)
+      .join('');
     if (isFinal) {
       this.currentSentenceId = '';
-      this.currentSentenceBuffer = '';
+      this.currentSentenceSegments.clear();
     }
 
     const now = Date.now();

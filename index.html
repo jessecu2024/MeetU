@@ -4,8 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MeetU</title>
+    <!--
+      script-src adds `blob:` and `worker-src blob:` so the PCM
+      AudioWorklet (used by the iFlytek STT path) can be loaded from
+      an inline Blob URL. Without `blob:` here, audioWorklet.addModule
+      is blocked and iFlytek silently falls back to demo mode.
+      style-src adds `https://fonts.googleapis.com` for any optional
+      Google Fonts; img-src `data:` lets us inline icons.
+    -->
     <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+      content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
   </head>
   <body class="bg-white dark:bg-zinc-900">
     <div id="root"></div>
