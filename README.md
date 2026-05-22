@@ -31,7 +31,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 | 🔔 **@Mention Detection** | Instantly alerts you when someone calls your name or asks you a question |
 | 💡 **Smart Speech Suggestions** | AI generates 3 reply strategies (conservative / assertive / diplomatic) when you're @'d |
 | 📋 **Real-time Summary** | Key points, decisions, and action items extracted every few minutes |
-| 📄 **Meeting Minutes Export** | Structured minutes auto-generated on meeting end, exportable as Markdown (Word export coming soon) |
+| 📄 **Meeting Minutes Export** | Structured minutes auto-generated on meeting end, exportable as Markdown or Word (.docx) |
 
 ## How It Works
 
@@ -80,7 +80,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 | Engine | Region | Type | Status |
 |--------|--------|------|--------|
 | Deepgram | Global | Real-time WebSocket | ✅ Stable |
-| Whisper API (OpenAI) | Global | Segment-based REST | 🔜 Planned — engine expects PCM but production capture is webm/opus; disabled until reworked |
+| Whisper API (OpenAI) | Global | Segment-based REST (~5s) | ✅ Stable |
 | iFlytek | China | Real-time WebSocket | 🔜 Planned — WebSocket HMAC-SHA256 signing not yet implemented; disabled in UI |
 | Local Whisper | Offline | whisper.cpp (MIT) | 🔜 Planned — not yet shipped |
 
@@ -92,7 +92,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 
 - **macOS 13+** or **Windows 10+**
 - **Node.js 18+**
-- Deepgram API Key **required for live transcription** — currently the only selectable STT engine. Without one, the app falls back to a demo / mock transcript. Whisper API, iFlytek, and Local Whisper are all in the roadmap but not yet usable.
+- One STT engine API Key **required for live transcription** — choose Deepgram (streaming) or OpenAI Whisper API (5-second segments). Without one, the app falls back to a demo / mock transcript. iFlytek and Local Whisper are roadmap items.
 - At least one AI provider API Key (e.g., DeepSeek, OpenAI, Claude) — required for translation, summarization, and speech suggestions. Without one, only the raw recording + STT transcript will work.
 
 ### Installation
@@ -117,7 +117,7 @@ MeetU is designed with privacy as a core principle:
 
 - **Local storage on your device** — recordings (`.webm`), transcripts (SQLite), settings, and encrypted API keys are persisted on your machine only
 - **Outbound traffic, only to providers you choose**:
-  - Live transcription: audio frames stream directly from your device to the STT provider you configure (currently Deepgram; other engines are roadmap items)
+  - Live transcription: audio is sent directly from your device to the STT provider you configure — streamed (Deepgram) or in 5-second segments (OpenAI Whisper API). iFlytek and Local Whisper are roadmap items.
   - AI features: the relevant transcript text is sent to the AI provider you configure (Anthropic, OpenAI, DeepSeek, etc.)
 - **API keys are encrypted** at rest using your OS's secure storage (Electron safeStorage). They are never sent to MeetU (we run no servers); they are only sent directly to the provider you configured, attached as the auth credential on requests to that provider's API
 - **No MeetU servers** — we operate no backend, run no telemetry, no analytics, no tracking. Network traffic only ever goes between your device and the third-party providers you select.
@@ -177,7 +177,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 | 🔔 **@检测提醒** | 有人叫你名字或向你提问时立即提醒 |
 | 💡 **智能发言建议** | 被@时 AI 自动生成 3 种回复方案（保守/积极/外交） |
 | 📋 **实时摘要** | 每隔几分钟自动提取要点、决策和待办事项 |
-| 📄 **会后纪要导出** | 会议结束自动生成结构化纪要，可导出为 Markdown（Word 导出即将推出） |
+| 📄 **会后纪要导出** | 会议结束自动生成结构化纪要，可导出为 Markdown 或 Word (.docx) |
 
 ## 工作原理
 
@@ -226,7 +226,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 | 引擎 | 地区 | 类型 | 状态 |
 |------|------|------|------|
 | Deepgram | 海外 | 实时 WebSocket | ✅ 稳定 |
-| Whisper API (OpenAI) | 海外 | 分段 REST | 🔜 计划中 — 引擎按 PCM 解析但实际音频管线为 webm/opus，重构后再启用 |
+| Whisper API (OpenAI) | 海外 | 分段 REST（~5 秒） | ✅ 稳定 |
 | 讯飞语音 | 国内 | 实时 WebSocket | 🔜 计划中 — WebSocket HMAC-SHA256 签名尚未实现；UI 中已禁用 |
 | 本地 Whisper | 离线 | whisper.cpp (MIT) | 🔜 计划中 — 暂未发布 |
 
@@ -238,7 +238,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 
 - **macOS 13+** 或 **Windows 10+**
 - **Node.js 18+**
-- **必需**：Deepgram API Key 用于实时转写 — 当前唯一可选的 STT 引擎；未配置时应用会退回到 demo/mock 转写。Whisper API、讯飞、Local Whisper 均在路线图中尚未发布。
+- **必需**：一个 STT 引擎的 API Key —— 可选 Deepgram（流式）或 OpenAI Whisper API（5 秒分段）。未配置时应用会退回到 demo/mock 转写。讯飞、Local Whisper 仍在路线图中。
 - 至少一个 AI 提供商的 API Key（如 DeepSeek、OpenAI、Claude）— 用于翻译、摘要、发言建议；未配置时仅原始录音 + STT 转写可用。
 
 ### 安装
@@ -263,7 +263,7 @@ MeetU 以隐私为核心设计原则：
 
 - **本地设备存储** — 录音文件（`.webm`）、转写记录（SQLite）、设置和加密后的 API Key 都仅保存在你的本机
 - **外发流量，仅发往你自己选择的服务商**：
-  - 实时转写：音频帧从你的设备直接流式发送至你配置的 STT 服务商（当前为 Deepgram，其他引擎在路线图中）
+  - 实时转写：音频从你的设备直接发送至你配置的 STT 服务商 —— 流式（Deepgram）或 5 秒分段（OpenAI Whisper API）。讯飞和 Local Whisper 在路线图中
   - AI 功能：相关转写文本发送至你配置的 AI 服务商（Anthropic、OpenAI、DeepSeek 等）
 - **API Key 使用操作系统级加密** 存储（Electron safeStorage）。它们不会发送给 MeetU（我们没有任何服务器），仅作为请求认证凭据直接发送给你所配置的对应服务商
 - **没有 MeetU 服务器** — 我们不运行任何后端，没有遥测、分析或追踪；所有网络流量只发生在你的设备与你选择的第三方服务商之间

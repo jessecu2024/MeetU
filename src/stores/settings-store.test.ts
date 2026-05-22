@@ -81,16 +81,16 @@ describe('useSettingsStore.setSTTEngine', () => {
     });
   });
 
-  it('accepts a selectable engine (deepgram itself, the only stable engine today)', () => {
-    useSettingsStore.setState({ sttEngine: 'deepgram' });
-    // Sanity: setting it to the stable id is a no-op pass-through.
+  it('accepts a selectable engine (deepgram)', () => {
+    useSettingsStore.setState({ sttEngine: 'whisper_api' });
     useSettingsStore.getState().setSTTEngine('deepgram');
     expect(useSettingsStore.getState().sttEngine).toBe('deepgram');
   });
 
-  it('refuses a planned engine (whisper_api — audio-format mismatch) and falls back to the region default', () => {
+  it('accepts the segment-mode engine (whisper_api) now that capture supports it', () => {
+    useSettingsStore.setState({ sttEngine: 'deepgram' });
     useSettingsStore.getState().setSTTEngine('whisper_api');
-    expect(useSettingsStore.getState().sttEngine).toBe('deepgram');
+    expect(useSettingsStore.getState().sttEngine).toBe('whisper_api');
   });
 
   it('refuses a planned engine (local_whisper) and falls back to the region default', () => {

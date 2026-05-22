@@ -255,11 +255,31 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     }
 
     try {
-      // Hook up audio chunks to STT engine via capture manager callback
+      // Hook up audio to STT engine via capture manager callbacks. Two
+      // delivery modes exist; the engine declares which one it wants:
+      // - 'stream' (default): the engine receives raw 250ms MediaRecorder
+      //   chunks. Used by Deepgram (streams audio over a WebSocket).
+      // - 'segment': capture spawns a parallel MediaRecorder per segment
+      //   window and each callback fires with one complete webm file.
+      //   Used by Whisper API (each REST request needs a self-contained
+      //   audio file). setSegmentMode must run BEFORE audioManager.start
+      //   so the segment recorder is wired up on the first window.
       if (useRealAudio && !activeSttIsMock) {
-        captureManager.onAudioChunk((data: ArrayBuffer) => {
-          activeSttEngine.feedAudio(data);
-        });
+        if (
+          activeSttEngine.audioMode === 'segment' &&
+          activeSttEngine.segmentDurationMs &&
+          activeSttEngine.segmentDurationMs > 0
+        ) {
+          captureManager.setSegmentMode(activeSttEngine.segmentDurationMs);
+          captureManager.onSegment((data: ArrayBuffer) => {
+            activeSttEngine.feedAudio(data);
+          });
+        } else {
+          captureManager.setSegmentMode(null);
+          captureManager.onAudioChunk((data: ArrayBuffer) => {
+            activeSttEngine.feedAudio(data);
+          });
+        }
       }
 
       // Start audio capture
@@ -306,14 +326,20 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
 
     if (_durationInterval) clearInterval(_durationInterval);
 
-    // Stop STT
+    // Stop audio FIRST so the final segment (segment-mode engines like
+    // Whisper) or the last 250ms chunk (streaming engines like Deepgram)
+    // is flushed through capture's `await this.segmentInflight` and fed
+    // to the STT engine before we tell that engine to shut down. The
+    // previous order (STT first, then audio) discarded the final segment
+    // because the engine's `running` flag was already false by the time
+    // capture delivered the blob.
+    const audioManager = useMock ? mockCaptureManager : captureManager;
+    const tempPath = await audioManager.stop();
+
+    // Now safe to stop the STT engine — no more audio is coming.
     if (_sttEngine) {
       await _sttEngine.stopSession().catch(() => {});
     }
-
-    // Stop audio — get temp file path
-    const audioManager = useMock ? mockCaptureManager : captureManager;
-    const tempPath = await audioManager.stop();
 
     // Update meeting in database with temp path for now
     if (meetingId && meetingId > 0 && tempPath) {

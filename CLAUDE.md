@@ -10,13 +10,13 @@
 | macOS ScreenCaptureKit 原生捕获 | 🔜 Planned | `native/macos/` 有 Swift 草稿与 binding.gyp，但 `audio_tap.mm` 的 N-API 绑定仍是 placeholder，未参与构建 |
 | Windows WASAPI Loopback 原生捕获 | 🔜 Planned | `native/windows/` 尚未创建 |
 | Deepgram STT | ✅ Stable | WebSocket 经主进程 IPC，已可用 |
-| OpenAI Whisper API STT | 🔜 Planned | 引擎实现按 PCM Float32 解析音频，但生产 capture pipeline 输出 webm/opus，会产生无效转写；需要改写 engine 接受 webm 段后再启用 |
+| OpenAI Whisper API STT | ✅ Stable | 引擎以 segment 模式 (`audioMode='segment'`, `segmentDurationMs=5000`) 工作;capture.ts 用并行 MediaRecorder 每 5 秒产出一个完整 webm 文件直接 POST `/v1/audio/transcriptions`;内置 hallucination 过滤丢弃 silence 时的 "Thank you for watching" / 字幕组 类幻觉 |
 | 讯飞 STT | 🔜 Planned | WebSocket auth 签名为 placeholder，运行时鉴权一定失败；engine 已降为 `status: 'planned'`，UI 与 fallback 全部跳过，待 WebCrypto 补全 HMAC-SHA256 后再升级为 Stable |
 | 阿里语音 STT | ❌ Removed | 之前列在文档/类型中，但代码从未实现，已从 `STTEngineId` 移除 |
 | Local Whisper (whisper.cpp) | 🔜 Planned | `local-whisper.ts` 为 stub，`feedAudio`/`stopSession` 是 TODO |
 | 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
 | Markdown 纪要导出 | ✅ Stable | 主进程写 `~/MeetingAI/minutes/*.md` |
-| Word (.docx) 纪要导出 | 🔜 Planned | 之前装的 `docx@^8` 依赖已删除（生成器未实现，留着会形成幽灵 dep）；UI 上 "Export Word" 按钮仍渲染为禁用状态以反映路线图；真实现时重新 `npm install docx` 并加回生成代码 |
+| Word (.docx) 纪要导出 | ✅ Stable | `electron/export/docx-generator.ts` 使用 `docx@^8` 在主进程生成 Word 文档（标题/摘要/讨论议题/Action Items 表格/未解决问题/下一步/免责声明），renderer 通过 `file:export` IPC 传 minutes payload，主进程写到 `~/MeetingAI/minutes/*.docx` |
 | PDF 纪要导出 | ❌ Not planned right now | 此前装的 `pdfkit` 依赖已删除（曾在 `package.json` 但全代码 0 引用）；如未来需要 PDF 导出，请再添加依赖并真实现 |
 | i18n 多语言 | ❌ 未引入框架 | 渲染层用硬编码 `"English / 中文"` 双语字符串，扩展到日韩需要先引入 i18n 框架 |
 | GPL/AGPL 许可证审计 | ✅ Stable | `npm run check-licenses` 已实现 |
@@ -40,7 +40,7 @@
 2. **实时翻译** — 中英双向翻译（可扩展更多语言）
 3. **@检测与发言准备** — 检测用户被点名/提问，自动生成回复建议
 4. **实时摘要** — 每5分钟提取会议要点
-5. **会后纪要** — 结构化文档自动生成（当前仅 Markdown；Word 导出在路线图中尚未发布；PDF 目前不打算实现）
+5. **会后纪要** — 结构化文档自动生成（Markdown + Word/.docx 均已可用；PDF 目前不打算实现）
 
 ## 核心架构原则
 
@@ -68,7 +68,7 @@ macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；�
 - **通用**：DeepSeek（国内外均可）
 - **国内**：通义千问(Qwen) / MiniMax / 智谱(GLM)
 
-**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写必须配置 Deepgram API Key** — 是当前唯一可选的 STT 引擎；只有原始音频录制可以完全无 Key 工作。Whisper API、讯飞、Local Whisper 都在路线图中尚未发布。
+**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写需要配置 Deepgram(流式) 或 OpenAI Whisper API(5 秒分段) 之一**;只有原始音频录制可以完全无 Key 工作。讯飞、Local Whisper 仍在路线图中。
 
 **收费模式：** 软件本身收费（一次性购买或订阅），AI 和 STT 费用由用户直接向对应服务商支付。
 
@@ -77,7 +77,7 @@ macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；�
 | 引擎 | 许可证 | 商用合规 | 实现状态 |
 |------|--------|---------|---------|
 | Deepgram | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable |
-| OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | 🔜 Planned — 引擎按 PCM Float32 解析但生产 capture 输出 webm/opus；需先重构 engine 接受 webm 段 |
+| OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable — segment 模式 (5 秒分段) |
 | 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | 🔜 Planned — `xfyun-engine.ts` 的 HMAC 签名仍为 placeholder；`status: 'planned'`，UI / fallback / 迁移全部跳过；补全 WebCrypto HMAC-SHA256 后升级为 Stable |
 | 阿里语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ❌ 尚未实现，已暂时从 `STTEngineId` 类型中移除 |
 | whisper.cpp (本地) | **MIT 许可** | ✅ 可安全嵌入分发 | 🔜 Planned — `local-whisper.ts` 是 stub，`feedAudio` / `stopSession` 仍是 TODO |
@@ -151,9 +151,10 @@ WASAPI Loopback 在路线图中尚未发布。
 | whisper.cpp | MIT | ✅ 安全 |
 | libopus | BSD-3-Clause | ✅ 安全 |
 | ws (WebSocket) | MIT | ✅ 安全 |
+| docx (docx-js) | MIT | ✅ 安全 |
 | lucide-react | ISC | ✅ 安全 |
 
-> `docx` (docx-js, MIT) 和 `pdfkit` (MIT) 之前列在此表中。两者都被记入"暂时移除"清单：在生成器代码真正落地前不保留依赖，避免幽灵 dep。Word/PDF 导出真正实现时再加回依赖与许可证条目。
+> `pdfkit` (MIT) 之前列在此表中,但因 PDF 导出未实现已删除,避免幽灵 dep。`docx` (docx-js, MIT) 已在 Word 导出真实实现后重新加回(见 `electron/export/docx-generator.ts`)。
 
 > **禁止清单：** BlackHole(GPL-3.0)、Soundflower(GPL)、ffmpeg CLI(GPL)、任何 GPL/AGPL 库。引入新依赖前必须运行 `npm run check-licenses`。
 

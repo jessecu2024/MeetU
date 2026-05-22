@@ -18,6 +18,7 @@ export interface CaptureState {
 
 export type CaptureListener = (state: Partial<CaptureState>) => void;
 export type AudioChunkCallback = (data: ArrayBuffer) => void;
+export type AudioSegmentCallback = (data: ArrayBuffer) => void;
 
 function mapMicError(err: unknown): string {
   const name = (err as DOMException)?.name;
@@ -41,6 +42,38 @@ class AudioCaptureManager {
   private listeners: CaptureListener[] = [];
   private audioChunkCallbacks: AudioChunkCallback[] = [];
   private volumeInterval: ReturnType<typeof setInterval> | null = null;
+  // Promises for every in-flight `ondataavailable` handler on the
+  // primary recorder. The handler converts a Blob to ArrayBuffer
+  // (async), fans out to all callbacks, and appends to the main-
+  // process file writer; if `stop()` clears callbacks or closes the
+  // file writer before the final chunk's async work finishes, we
+  // silently drop the last 250ms of audio. stop() awaits this set
+  // before tearing down.
+  private mainChunkDeliveries = new Set<Promise<void>>();
+  // Resolves when the primary recorder's `onstop` fires AND every
+  // queued `ondataavailable` promise has settled. stop() awaits this
+  // before clearing callbacks / closing the file writer.
+  private mainRecorderDone: Promise<void> = Promise.resolve();
+
+  // Segment-mode state. Set via setSegmentMode() before start().
+  // When non-null, capture spawns a second, parallel MediaRecorder for each
+  // window of `segmentDurationMs` and emits one complete webm file at the
+  // end of each window via segmentCallbacks. The primary `recorder` above
+  // is unaffected and continues to stream 250ms chunks to onAudioChunk
+  // for streaming engines (Deepgram) and to the main-process file writer.
+  private segmentDurationMs: number | null = null;
+  private segmentCallbacks: AudioSegmentCallback[] = [];
+  private segmentRecorder: MediaRecorder | null = null;
+  private segmentTimer: ReturnType<typeof setTimeout> | null = null;
+  // Set of in-flight segment-delivery promises. Each entry resolves when
+  // a particular segment's blob has finished packaging and dispatching.
+  // stop() awaits Promise.allSettled over this set so EVERY pending
+  // segment (not just the last one) reaches subscribers before we tear
+  // segmentCallbacks down. A previous design tracked only the latest
+  // segment in a single `segmentInflight` field; on a boundary that
+  // overwrote the prior segment's still-pending packaging promise and
+  // dropped it.
+  private segmentDeliveries = new Set<Promise<void>>();
 
   private deviceId = '';
 
@@ -52,6 +85,29 @@ class AudioCaptureManager {
   onAudioChunk(cb: AudioChunkCallback): () => void {
     this.audioChunkCallbacks.push(cb);
     return () => { this.audioChunkCallbacks = this.audioChunkCallbacks.filter(c => c !== cb); };
+  }
+
+  /**
+   * Subscribe to complete, independently-decodable webm segments. Each
+   * callback fires once per `segmentDurationMs` window (the value passed
+   * to setSegmentMode). Returns an unsubscribe function.
+   *
+   * Requires setSegmentMode(ms) to be active; otherwise no segments are
+   * produced and the callback never fires.
+   */
+  onSegment(cb: AudioSegmentCallback): () => void {
+    this.segmentCallbacks.push(cb);
+    return () => { this.segmentCallbacks = this.segmentCallbacks.filter(c => c !== cb); };
+  }
+
+  /**
+   * Enable/disable segment mode. Pass a positive number to enable;
+   * `null` (or omitted) to disable. Must be called before `start()`.
+   * Mid-session changes are honored on the next segment boundary.
+   */
+  setSegmentMode(durationMs: number | null): void {
+    this.segmentDurationMs = durationMs && durationMs > 0 ? durationMs : null;
+    console.log(`[Audio] Segment mode: ${this.segmentDurationMs ? this.segmentDurationMs + 'ms' : 'off'}`);
   }
 
   private _state: CaptureState = {
@@ -149,15 +205,37 @@ class AudioCaptureManager {
           : undefined;
       this.recorder = new MediaRecorder(this.stream!, mimeType ? { mimeType } : {});
 
-      this.recorder.ondataavailable = async (event) => {
-        if (event.data.size > 0) {
+      // ondataavailable does async work (Blob→ArrayBuffer, IPC append).
+      // We track each invocation as its own promise in
+      // `mainChunkDeliveries` so `stop()` can drain them before clearing
+      // callbacks. Without this, the FINAL 250ms chunk (the one fired
+      // synchronously by MediaRecorder.stop()) races against teardown
+      // and its bytes never reach Deepgram or the .webm file.
+      this.recorder.ondataavailable = (event) => {
+        if (event.data.size === 0) return;
+        const work = (async () => {
           const buffer = await event.data.arrayBuffer();
           if (!this._state.micActive) {
             this.emit({ micActive: true, error: null });
           }
           for (const cb of this.audioChunkCallbacks) cb(buffer);
-          window.electronAPI?.audio.appendChunk(buffer);
-        }
+          try {
+            await window.electronAPI?.audio.appendChunk(buffer);
+          } catch (err) {
+            console.error('[Audio] appendChunk failed:', err);
+          }
+        })();
+        this.mainChunkDeliveries.add(work);
+        void work.finally(() => this.mainChunkDeliveries.delete(work));
+      };
+
+      // Resolves once `stop` event has fired AND every chunk delivery
+      // promise has settled. `stop()` awaits this before tearing down.
+      let resolveMainDone!: () => void;
+      this.mainRecorderDone = new Promise<void>((resolve) => { resolveMainDone = resolve; });
+      this.recorder.onstop = () => {
+        void Promise.allSettled(Array.from(this.mainChunkDeliveries))
+          .then(() => resolveMainDone());
       };
 
       this.recorder.start(250);
@@ -168,6 +246,11 @@ class AudioCaptureManager {
       return;
     }
 
+    // Segment recorder (only if setSegmentMode was called before start())
+    if (this.segmentDurationMs) {
+      this.startSegmentRecorder();
+    }
+
     // Volume indicator
     this.volumeInterval = setInterval(() => {
       if (this.recorder?.state === 'recording') {
@@ -176,17 +259,132 @@ class AudioCaptureManager {
     }, 200);
   }
 
+  /**
+   * Spawn a fresh MediaRecorder on the same MediaStream for one
+   * `segmentDurationMs` window. Two correctness guarantees this
+   * function provides:
+   *
+   * 1. **No boundary gap.** The next segment recorder starts in the
+   *    first synchronous step of `onstop`, BEFORE blob packaging and
+   *    callback dispatch. There is a brief overlap where both the
+   *    just-stopped and just-started recorders are alive — that's
+   *    allowed by the spec and is what keeps audio continuous.
+   * 2. **No lost final segment.** Each segment's delivery is tracked
+   *    via `segmentDeliveries` (a Set of per-segment Promises).
+   *    `stop()` awaits Promise.allSettled over the whole set so
+   *    EVERY in-flight blob (not just the latest) reaches
+   *    subscribers before we tear `segmentCallbacks` down.
+   */
+  private startSegmentRecorder(): void {
+    if (!this.stream || !this.segmentDurationMs || !this._state.recording) return;
+
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : undefined;
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : {});
+    } catch (err) {
+      console.error('[Audio] Segment MediaRecorder creation failed:', err);
+      return;
+    }
+
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+
+    // The promise that resolves when THIS segment's blob has been
+    // packaged and dispatched to subscribers. Tracked in a Set so
+    // `stop()` can await every in-flight delivery, not just the latest.
+    let resolveDelivery!: () => void;
+    const delivery = new Promise<void>((resolve) => { resolveDelivery = resolve; });
+    this.segmentDeliveries.add(delivery);
+    void delivery.finally(() => this.segmentDeliveries.delete(delivery));
+
+    // onstop only handles blob packaging + dispatch. The successor
+    // recorder is started BEFORE this one is stopped (see the timer
+    // below) so the boundary doesn't depend on the stop→onstop async
+    // gap that browsers leave between MediaRecorder.stop() and the
+    // event firing.
+    recorder.onstop = () => {
+      void (async () => {
+        try {
+          if (chunks.length > 0 && this.segmentCallbacks.length > 0) {
+            const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+            const buffer = await blob.arrayBuffer();
+            for (const cb of this.segmentCallbacks) cb(buffer);
+          }
+        } catch (err) {
+          console.error('[Audio] Segment delivery failed:', err);
+        } finally {
+          resolveDelivery();
+        }
+      })();
+    };
+
+    this.segmentRecorder = recorder;
+    recorder.start();
+    this.segmentTimer = setTimeout(() => {
+      // Start the successor FIRST so the new recorder is actively
+      // capturing before we tell the old one to stop. Without this
+      // ordering, MediaRecorder.stop() returns synchronously but the
+      // browser stops sampling immediately and the next recorder
+      // doesn't start sampling until after `start()` is called from
+      // onstop — a gap of tens of milliseconds where audio is lost,
+      // every 5 seconds. Two MediaRecorders briefly coexist on the
+      // same MediaStream, which the Web spec explicitly allows.
+      if (this._state.recording && this.segmentDurationMs) {
+        this.startSegmentRecorder();
+      }
+      try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* ignore */ }
+    }, this.segmentDurationMs);
+  }
+
   async stop(): Promise<string> {
     if (this.volumeInterval) { clearInterval(this.volumeInterval); this.volumeInterval = null; }
+
+    // Disable scheduling of further segments BEFORE we trigger the
+    // current one's stop. onstop checks segmentDurationMs before
+    // spawning a successor, so setting this to null first ensures
+    // tear-down doesn't restart segments mid-shutdown.
+    const wasSegmentMode = !!this.segmentDurationMs;
+    this.segmentDurationMs = null;
+    if (this.segmentTimer) { clearTimeout(this.segmentTimer); this.segmentTimer = null; }
+
+    if (this.segmentRecorder && this.segmentRecorder.state !== 'inactive') {
+      try { this.segmentRecorder.stop(); } catch { /* ignore */ }
+    }
+    // Wait for EVERY in-flight segment delivery to finish before we
+    // clear segmentCallbacks. Tracking only the latest promise (as a
+    // previous design did) was wrong: on a boundary, onstop spawns a
+    // new segment and immediately starts packaging the previous one,
+    // and `stop()` could end up awaiting only the just-spawned (still
+    // pending) recorder while the previous segment's blob delivery
+    // ran to completion against a torn-down callback list.
+    if (wasSegmentMode && this.segmentDeliveries.size > 0) {
+      await Promise.allSettled(Array.from(this.segmentDeliveries));
+    }
+    this.segmentRecorder = null;
 
     if (this.recorder && this.recorder.state !== 'inactive') {
       this.recorder.stop();
     }
+    // Wait for the primary recorder's final `ondataavailable` (fired
+    // synchronously by stop()) to finish: Blob→ArrayBuffer is async,
+    // and `appendChunk` IPC is async too. Clearing audioChunkCallbacks
+    // or calling `audio.stopRecording` (which closes the .webm file
+    // writer) before this drain would drop the last 250ms — both from
+    // Deepgram's WebSocket and from the saved recording on disk.
+    try { await this.mainRecorderDone; } catch { /* ignore */ }
     this.recorder = null;
 
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
 
     this.audioChunkCallbacks = [];
+    this.segmentCallbacks = [];
 
     const tempPath = await window.electronAPI?.audio.stopRecording() as string;
     this.emit({ recording: false, micActive: false, volume: 0, deviceLabel: '', filePath: tempPath || this._state.filePath });
