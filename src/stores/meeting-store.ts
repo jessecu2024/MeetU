@@ -200,8 +200,13 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     useSummaryStore.getState().setActive(true);
     useSummaryStore.getState().clear();
 
-    // Listen for audio capture state changes
-    const unsubscribe = audioManager.onChange((state) => {
+    // Listen for audio capture state changes. The subscriber is
+    // tracked through `unsubscribe` so the fallback path (real audio
+    // start fails → swap to mockCaptureManager) can re-subscribe
+    // against the right source; without that, the UI would keep
+    // reading state from the abandoned real `audioManager` and the
+    // mock's mic/volume/filePath updates would never reach the user.
+    const stateListener = (state: Partial<import('../services/audio/capture').CaptureState>) => {
       set({
         micActive: state.micActive ?? get().micActive,
         currentVolume: state.volume ?? get().currentVolume,
@@ -210,7 +215,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         bluetoothDetected: state.bluetoothDetected ?? get().bluetoothDetected,
         deviceLabel: state.deviceLabel ?? get().deviceLabel,
       });
-    });
+    };
+    let unsubscribe = audioManager.onChange(stateListener);
 
     // Start STT session — fallback to mock if it fails
     let activeSttEngine = sttEngine;
@@ -329,6 +335,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         await mockEngine.startSession({ sampleRate: 16000 });
         activeSttEngine = mockEngine;
         activeSttIsMock = true;
+        // Re-route the audio-state subscription from the failed real
+        // manager onto the mock so the UI continues to see mic
+        // active / volume / filePath updates during demo mode.
+        try { unsubscribe(); } catch { /* ignore */ }
+        unsubscribe = mockCaptureManager.onChange(stateListener);
         await mockCaptureManager.start();
         transcriptStore.startSession(meetingId, 'mock', true);
       }
