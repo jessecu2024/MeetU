@@ -49,6 +49,11 @@ export class WhisperAPIEngine implements STTEngine {
   // segments so the cursor still advances past them.
   private nextEmitMs = 0;
   private pending = new Map<number, TranscriptResult | null>();
+  // Promises for every transcribeSegment call currently in flight.
+  // stopSession awaits Promise.allSettled over this set so the final
+  // segment's network round-trip completes and reaches deliverSegment
+  // BEFORE running=false makes fireResult swallow it.
+  private inflightTranscriptions = new Set<Promise<void>>();
   // Override-able for tests; the runtime always feeds webm/opus.
   private readonly mimeType = 'audio/webm';
 
@@ -98,9 +103,16 @@ export class WhisperAPIEngine implements STTEngine {
     const endMs = startMs + SEGMENT_DURATION_MS;
     this.nextSegmentOffsetMs += SEGMENT_DURATION_MS;
 
-    this.transcribeSegment(chunk, startMs, endMs).catch((err) => {
+    const p = this.transcribeSegment(chunk, startMs, endMs).catch((err) => {
       console.error('[Whisper] segment transcription failed:', err);
+      // Even on uncaught throw, advance the cursor so subsequent
+      // segments can flush. transcribeSegment already calls
+      // markSegmentEmpty on its own error paths, but this catch
+      // protects against unexpected throws.
+      this.markSegmentEmpty(startMs);
     });
+    this.inflightTranscriptions.add(p);
+    void p.finally(() => this.inflightTranscriptions.delete(p));
   }
 
   private async transcribeSegment(buffer: ArrayBuffer, startMs: number, endMs: number): Promise<void> {
@@ -216,6 +228,15 @@ export class WhisperAPIEngine implements STTEngine {
   }
 
   async stopSession(): Promise<void> {
+    // Drain every transcription request that is still in flight BEFORE
+    // flipping `running` to false. Without this drain, fireResult would
+    // see `running=false` for any segment whose fetch had not yet
+    // returned and silently skip emitting it — losing transcripts for
+    // both slow earlier segments and the final segment that came in
+    // during the stop sequence.
+    if (this.inflightTranscriptions.size > 0) {
+      await Promise.allSettled(Array.from(this.inflightTranscriptions));
+    }
     this.running = false;
   }
 

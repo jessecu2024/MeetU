@@ -53,10 +53,15 @@ class AudioCaptureManager {
   private segmentCallbacks: AudioSegmentCallback[] = [];
   private segmentRecorder: MediaRecorder | null = null;
   private segmentTimer: ReturnType<typeof setTimeout> | null = null;
-  // Promise that resolves when the currently-recording segment finishes
-  // delivering its blob to subscribers. stop() awaits this so the final
-  // segment is not lost. Replaced on every new segment.
-  private segmentInflight: Promise<void> = Promise.resolve();
+  // Set of in-flight segment-delivery promises. Each entry resolves when
+  // a particular segment's blob has finished packaging and dispatching.
+  // stop() awaits Promise.allSettled over this set so EVERY pending
+  // segment (not just the last one) reaches subscribers before we tear
+  // segmentCallbacks down. A previous design tracked only the latest
+  // segment in a single `segmentInflight` field; on a boundary that
+  // overwrote the prior segment's still-pending packaging promise and
+  // dropped it.
+  private segmentDeliveries = new Set<Promise<void>>();
 
   private deviceId = '';
 
@@ -256,11 +261,13 @@ class AudioCaptureManager {
       if (event.data.size > 0) chunks.push(event.data);
     };
 
-    // The promise that resolves when this segment's blob has been
-    // packaged and dispatched to subscribers. `stop()` awaits the
-    // most recent value before clearing callbacks.
+    // The promise that resolves when THIS segment's blob has been
+    // packaged and dispatched to subscribers. Tracked in a Set so
+    // `stop()` can await every in-flight delivery, not just the latest.
     let resolveDelivery!: () => void;
-    this.segmentInflight = new Promise<void>((resolve) => { resolveDelivery = resolve; });
+    const delivery = new Promise<void>((resolve) => { resolveDelivery = resolve; });
+    this.segmentDeliveries.add(delivery);
+    void delivery.finally(() => this.segmentDeliveries.delete(delivery));
 
     recorder.onstop = () => {
       // STEP 1 (sync, first): start the next segment so audio recording
@@ -310,12 +317,15 @@ class AudioCaptureManager {
     if (this.segmentRecorder && this.segmentRecorder.state !== 'inactive') {
       try { this.segmentRecorder.stop(); } catch { /* ignore */ }
     }
-    // Wait for the in-flight segment to finish delivering BEFORE we
-    // clear segmentCallbacks. Without this await, the final segment's
-    // onstop handler races against the callback teardown below and
-    // the last few seconds of audio never reach Whisper.
-    if (wasSegmentMode) {
-      try { await this.segmentInflight; } catch { /* ignore */ }
+    // Wait for EVERY in-flight segment delivery to finish before we
+    // clear segmentCallbacks. Tracking only the latest promise (as a
+    // previous design did) was wrong: on a boundary, onstop spawns a
+    // new segment and immediately starts packaging the previous one,
+    // and `stop()` could end up awaiting only the just-spawned (still
+    // pending) recorder while the previous segment's blob delivery
+    // ran to completion against a torn-down callback list.
+    if (wasSegmentMode && this.segmentDeliveries.size > 0) {
+      await Promise.allSettled(Array.from(this.segmentDeliveries));
     }
     this.segmentRecorder = null;
 
