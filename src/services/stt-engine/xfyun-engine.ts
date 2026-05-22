@@ -39,12 +39,19 @@ export class XfyunEngine implements STTEngine {
   private callback: ((result: TranscriptResult) => void) | null = null;
   private running = false;
   private firstFrame = true;
-  private resultCounter = 0;
+  private sentenceCounter = 0;
   private sessionStartTime = 0;
-  // iFlytek streams partial results that grow with each message; we
-  // keep the last final transcript so partials display incrementally
-  // without re-rendering "this is" → "this is the" → "this is the answer"
-  // as three separate lines.
+  // iFlytek streams partial results that grow inside a single sentence
+  // (pgs='rpl' means "replace the previous partial") and then emits a
+  // final (ls=true) at sentence end. To make the transcript store
+  // overwrite the partial in place instead of accumulating duplicate
+  // rows, every partial for the same sentence must carry the SAME id.
+  // We bump `sentenceCounter` only when we receive a final, so the
+  // current partial keeps the id assigned at sentence start.
+  private currentSentenceId = '';
+  // Text already finalized in earlier sentences of this session. Used
+  // so a new sentence's partial doesn't lose context already shown.
+  // Reset on session start.
   private accumulatedFinalText = '';
 
   /**
@@ -167,7 +174,8 @@ export class XfyunEngine implements STTEngine {
     });
 
     this.sessionStartTime = Date.now();
-    this.resultCounter = 0;
+    this.sentenceCounter = 0;
+    this.currentSentenceId = '';
     this.firstFrame = true;
     this.accumulatedFinalText = '';
 
@@ -284,19 +292,32 @@ export class XfyunEngine implements STTEngine {
       .trim();
     if (!text) return;
 
-    // `pgs: 'apd'` appends to previous output; `'rpl'` replaces it.
-    // Without dwa=wpgs, only final results come through and we emit
-    // each as a separate transcript.
+    // iFlytek result framing:
+    //   - `pgs: 'apd'` (or no pgs)  → text appends to the previous partial
+    //   - `pgs: 'rpl'`              → text replaces the previous partial
+    //   - `ls: true`                → this is the final result for the
+    //                                 current sentence; next message starts
+    //                                 a new sentence
+    // To make the transcript store overwrite partials in place we must
+    // keep the SAME id across every partial of a given sentence and
+    // only mint a new id when ls=true tells us the sentence is closed.
     const isFinal = result.ls === true;
     const isReplacement = result.pgs === 'rpl';
     const fullText = isReplacement ? text : (this.accumulatedFinalText + text);
+
+    if (!this.currentSentenceId) {
+      this.currentSentenceId = `xf-${++this.sentenceCounter}`;
+    }
+    const id = this.currentSentenceId;
     if (isFinal) {
+      // Sentence closed — next message will mint a fresh id.
+      this.currentSentenceId = '';
       this.accumulatedFinalText = '';
     }
 
     const now = Date.now();
     this.callback?.({
-      id: `xf-${++this.resultCounter}`,
+      id,
       text: fullText,
       isFinal,
       language: 'zh',

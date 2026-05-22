@@ -297,14 +297,27 @@ class AudioCaptureManager {
     }
 
     // PCM stream (only if setPcmStreamMode(true) was called before start()).
-    // Awaited because the AudioWorklet's addModule is async; we want
-    // setup errors surfaced through the same path as MediaRecorder errors.
+    // Awaited because the AudioWorklet's addModule is async; setup
+    // failures MUST propagate out of `start()` so the caller can fall
+    // back (e.g. meeting-store can swap in the mock STT engine).
+    // Swallowing the error here was a previous bug: capture appeared
+    // to start successfully, the STT engine thought it was active, but
+    // no PCM frames ever arrived — leaving iFlytek silently dead.
     if (this.pcmStreamEnabled) {
       try {
         await this.startPcmStream();
       } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown';
         console.error('[Audio] PCM stream setup failed:', err);
-        this.emit({ error: `PCM stream setup failed: ${err instanceof Error ? err.message : 'Unknown'} / PCM 流启动失败` });
+        this.emit({ error: `PCM stream setup failed: ${msg} / PCM 流启动失败` });
+        // Tear down anything we already started before the PCM failure
+        // so we don't leave half-initialized recorders behind.
+        try { this.recorder?.stop(); } catch { /* ignore */ }
+        try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+        this.recorder = null;
+        this.stream = null;
+        this.emit({ recording: false, micActive: false });
+        throw err;
       }
     }
 
@@ -430,31 +443,55 @@ class AudioCaptureManager {
     const sourceSampleRate = this.pcmAudioContext.sampleRate; // usually 48000
     const targetSampleRate = 16000;
     const ratio = sourceSampleRate / targetSampleRate;
-    // Tracks the fractional offset across frames so the decimator
-    // doesn't drift over time. Linear decimation is simple but loses
-    // some quality vs polyphase; OK for STT, much smaller code than
-    // pulling in a resampler library.
-    let frac = 0;
+    // Sample-accurate decimation needs a CARRY buffer across worklet
+    // frames. The previous implementation read `input[srcIdx]` directly
+    // and substituted 0 whenever the computed index exceeded the
+    // current frame — i.e. it injected silence at every frame boundary
+    // (~every 128 samples), audibly corrupting the 16k PCM stream.
+    //
+    // The carry-based variant below appends each new worklet frame to
+    // a leftover buffer, picks output samples on the fixed `ratio`
+    // grid, and saves the unconsumed tail for the next callback. The
+    // global sample index advances monotonically across frames so a
+    // long session does not accumulate phase error.
+    let phase = 0;             // next source sample index we want to pick
+    let carry = new Float32Array(0);
 
     this.pcmWorkletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
       if (!this._state.recording || this.pcmFrameCallbacks.length === 0) return;
       const input = event.data;
       if (!input || input.length === 0) return;
 
-      // Estimate the output frame size for this input frame.
-      const outLen = Math.floor((input.length + frac) / ratio);
-      if (outLen <= 0) {
-        frac = (frac + input.length) % ratio;
-        return;
+      // Concatenate any leftover samples from the previous frame.
+      const merged = new Float32Array(carry.length + input.length);
+      merged.set(carry, 0);
+      merged.set(input, carry.length);
+
+      // How many output samples does this merged buffer cover?
+      // We pick at floor(phase + i*ratio) for i = 0, 1, 2, ...
+      const out: number[] = [];
+      while (true) {
+        const idx = Math.floor(phase);
+        if (idx >= merged.length) break;
+        out.push(merged[idx]);
+        phase += ratio;
       }
-      const out = new Float32Array(outLen);
-      for (let i = 0; i < outLen; i++) {
-        const srcIdx = Math.floor(i * ratio + frac);
-        out[i] = srcIdx < input.length ? input[srcIdx] : 0;
+
+      // Carry any samples we haven't consumed yet. The new buffer
+      // starts at the largest integer index we read from; shift phase
+      // accordingly so the next callback sees phase ∈ [0, 1).
+      const drop = Math.floor(phase);
+      if (drop < merged.length) {
+        carry = merged.slice(drop);
+        phase -= drop;
+      } else {
+        carry = new Float32Array(0);
+        phase -= merged.length;
+        if (phase < 0) phase = 0; // numerical safety
       }
-      // Advance the fractional offset using the source samples we just consumed.
-      frac = (input.length + frac) - outLen * ratio;
-      const buf = out.buffer;
+
+      if (out.length === 0) return;
+      const buf = new Float32Array(out).buffer;
       for (const cb of this.pcmFrameCallbacks) cb(buf);
     };
 

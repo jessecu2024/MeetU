@@ -378,7 +378,7 @@ npm run build        # 构建发布版
 
 可以。**录音 + 语音转文字**只需要一个 Deepgram API Key，无需 AI Key。但翻译、摘要、发言建议等 AI 功能需要额外配置 AI Key。
 
-> 讯飞、本地 Whisper 在路线图中尚未发布；当前实时转写可选 Deepgram（流式，延迟约 300ms）或 OpenAI Whisper API（5 秒分段，精度高但延迟约 5-7 秒）。
+> 本地 Whisper 在路线图中尚未发布；当前实时转写可选 Deepgram（流式，延迟约 300ms）、OpenAI Whisper API（5 秒分段，精度高但延迟约 5-7 秒）或讯飞（PCM 流式，中文识别最佳）。
 
 ### Q: API 费用由谁承担？
 

@@ -18,7 +18,7 @@ class STTEngineRegistry {
   constructor() {
     this.engines.set('deepgram', new DeepgramEngine());
     this.engines.set('whisper_api', new WhisperAPIEngine());
-    this.engines.set('xfyun', new XfyunEngine());          // planned — HMAC-SHA256 signing not yet implemented
+    this.engines.set('xfyun', new XfyunEngine());          // stable — HMAC-SHA256 signing + PCM stream
     this.engines.set('local_whisper', new LocalWhisperEngine()); // planned — whisper.cpp not yet integrated
   }
 
@@ -43,9 +43,10 @@ class STTEngineRegistry {
    * Falls back to mock if no engine is configured/available.
    *
    * Every path must respect isSelectableSTTEngine — a planned engine
-   * (currently `local_whisper`) or a removed-from-union engine must NEVER
-   * be returned with `isMock: false`, because at runtime its `startSession`
-   * / `feedAudio` are TODO and the user would silently get no transcripts.
+   * (currently only `local_whisper` remains in that bucket) or a
+   * removed-from-union engine must NEVER be returned with `isMock: false`,
+   * because at runtime its `startSession` / `feedAudio` are TODO and the
+   * user would silently get no transcripts.
    */
   async getConfiguredEngine(
     preferredId: STTEngineId,
