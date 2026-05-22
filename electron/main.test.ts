@@ -1,36 +1,15 @@
-// Tests for filename hardening in `file:export`. The function under
-// test lives in `electron/main.ts` and is not exported (it's wired up
-// only inside the IPC handler closure), so we re-implement the same
-// logic here as a black-box specification and assert against it.
+// Tests for filename hardening in `file:export`. Exercises the real
+// production helper (`electron/export/sanitize-filename.ts`) rather
+// than a re-implementation, so the test cannot pass when the
+// sanitizer silently drifts. The two-arg shape (path.basename + this
+// function) is the actual IPC call sequence in electron/main.ts.
 //
-// If this spec ever drifts from the production code, that's a real
-// regression: the codex review specifically flagged path-traversal
-// from renderer-provided filenames as a `[major]` issue and this
-// test is the guard against re-introducing it.
-//
-// Production code path:
-//   electron/main.ts ipcMain.handle('file:export', ...) calls
-//     path.basename(filename)  // strips dir components
-//     sanitizeFilenameForExport(name, format)  // this function
-//
-// We test sanitizeFilenameForExport's behavior contract.
+// Path-traversal from renderer-provided filenames was flagged as a
+// `[major]` finding by codex; this test is the guard against
+// re-introducing it.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-
-// Recreate the function under test from production code. Keep these
-// two implementations in lockstep.
-function sanitizeFilenameForExport(input: string, format: string): string {
-  const cleaned = input
-    .replace(/[^a-zA-Z0-9一-鿿_\-.]/g, '_')
-    .slice(0, 100);
-  if (!cleaned || cleaned === '.' || cleaned === '..') {
-    return `minutes_${Date.now()}.${format === 'docx' ? 'docx' : 'md'}`;
-  }
-  const expectedExt = format === 'docx' ? '.docx' : '.md';
-  return cleaned.toLowerCase().endsWith(expectedExt)
-    ? cleaned
-    : cleaned + expectedExt;
-}
+import { sanitizeFilenameForExport } from './export/sanitize-filename';
 
 function fullPath(unsafe: string, format: 'docx' | 'markdown'): string {
   const base = path.basename(unsafe);

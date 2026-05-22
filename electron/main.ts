@@ -13,6 +13,7 @@ import {
 } from './audio/file-manager';
 import { initDatabase, runQuery } from './database';
 import { renderMinutesDocx } from './export/docx-generator';
+import { sanitizeFilenameForExport } from './export/sanitize-filename';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -497,35 +498,3 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
 
-/**
- * Defense-in-depth filename sanitizer for `file:export`. The renderer
- * already runs `sanitizeFilename`, but the main process must not trust
- * that: a renderer bug, a feature flag that ships half-baked, or a
- * future import-from-elsewhere flow could feed `../../etc/passwd.docx`.
- *
- * - `path.basename` (applied at the call site) strips any directory
- *   component, so even if `../../foo` somehow reached us, this view
- *   sees only `foo`.
- * - This function additionally:
- *   - rejects empty / dot-only names with a fallback
- *   - replaces every char that is not ASCII alphanumeric, underscore,
- *     hyphen, Han, or dot with `_` (matches renderer-side
- *     sanitizeFilename plus dot for the extension)
- *   - caps at 100 bytes
- *   - re-attaches the expected extension if it was stripped
- */
-function sanitizeFilenameForExport(input: string, format: string): string {
-  const cleaned = input
-    .replace(/[^a-zA-Z0-9一-鿿_\-.]/g, '_')
-    .slice(0, 100);
-
-  // Drop bare "." / ".." that path.basename might leave behind
-  if (!cleaned || cleaned === '.' || cleaned === '..') {
-    return `minutes_${Date.now()}.${format === 'docx' ? 'docx' : 'md'}`;
-  }
-
-  const expectedExt = format === 'docx' ? '.docx' : '.md';
-  return cleaned.toLowerCase().endsWith(expectedExt)
-    ? cleaned
-    : cleaned + expectedExt;
-}

@@ -236,9 +236,10 @@ class AudioCaptureManager {
    *    just-stopped and just-started recorders are alive — that's
    *    allowed by the spec and is what keeps audio continuous.
    * 2. **No lost final segment.** Each segment's delivery is tracked
-   *    via `segmentInflight`. `stop()` awaits this so the last
-   *    in-flight blob still reaches subscribers before we tear
-   *    `segmentCallbacks` down.
+   *    via `segmentDeliveries` (a Set of per-segment Promises).
+   *    `stop()` awaits Promise.allSettled over the whole set so
+   *    EVERY in-flight blob (not just the latest) reaches
+   *    subscribers before we tear `segmentCallbacks` down.
    */
   private startSegmentRecorder(): void {
     if (!this.stream || !this.segmentDurationMs || !this._state.recording) return;

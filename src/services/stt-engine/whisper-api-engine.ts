@@ -21,6 +21,12 @@ import type {
 
 const SEGMENT_DURATION_MS = 5000;
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
+// Per-segment fetch timeout. OpenAI typically responds in ~1-3s for a 5s
+// segment; 30s is a generous ceiling that still bounds stopSession's
+// drain time. Without this, a stalled or rate-limited request would
+// hang `stopRecording` indefinitely because stopSession awaits every
+// in-flight transcription before returning.
+const SEGMENT_FETCH_TIMEOUT_MS = 30_000;
 
 export class WhisperAPIEngine implements STTEngine {
   readonly id: STTEngineId = 'whisper_api';
@@ -122,17 +128,24 @@ export class WhisperAPIEngine implements STTEngine {
     formData.append('model', 'whisper-1');
     formData.append('response_format', 'verbose_json');
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SEGMENT_FETCH_TIMEOUT_MS);
     let res: Response;
     try {
       res = await fetch(TRANSCRIBE_URL, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
         body: formData,
+        signal: controller.signal,
       });
     } catch (err) {
-      console.error('[Whisper] network error:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      const aborted = controller.signal.aborted;
+      console.error(`[Whisper] ${aborted ? 'segment timeout' : 'network error'}: ${msg}`);
       this.markSegmentEmpty(startMs);
       return;
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!res.ok) {
