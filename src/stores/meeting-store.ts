@@ -297,6 +297,14 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         }
       }
 
+      // Tracks the audio source actually in use, independent of the
+      // STT engine. Stays in sync with `audioManager` so stopRecording
+      // can `audioManager.stop()` against the right manager. The
+      // previous `useMock` field conflated audio-mock with stt-mock
+      // and would tell stopRecording to stop the wrong manager (e.g.
+      // STT-only fallback would stop the mock capture and leave the
+      // real mic running indefinitely).
+      let useMockAudio = !useRealAudio;
       // Start audio capture
       try {
         await audioManager.start();
@@ -335,6 +343,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         await mockEngine.startSession({ sampleRate: 16000 });
         activeSttEngine = mockEngine;
         activeSttIsMock = true;
+        // Audio source is now the mock too — reflect that in the
+        // dedicated flag so stopRecording calls mockCaptureManager.stop()
+        // (and not the abandoned real captureManager).
+        useMockAudio = true;
         // Re-route the audio-state subscription from the failed real
         // manager onto the mock so the UI continues to see mic
         // active / volume / filePath updates during demo mode.
@@ -353,7 +365,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         isRecording: true,
         recordingStartTime: startTime,
         meetingId,
-        useMock: !useRealAudio || activeSttIsMock,
+        // useMock used to mean "show demo banner" AND "stopRecording
+        // picks mockCaptureManager". Conflating audio mock with STT
+        // mock leaks the real mic when only STT falls back to mock.
+        // Now: useMock follows audio source only; sttMock follows STT.
+        useMock: useMockAudio,
         sttActive: true,
         sttMock: activeSttIsMock,
         sttEngineId: activeSttIsMock ? 'mock' : activeSttEngine.id,

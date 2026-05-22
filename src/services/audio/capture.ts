@@ -255,12 +255,17 @@ class AudioCaptureManager {
         } catch (fallbackErr) {
           console.error('[Audio] Default also failed:', (fallbackErr as DOMException)?.name);
           const msg = mapMicError(fallbackErr);
+          // We already opened the main-process file writer above
+          // (audio.startRecording IPC). Close it before throwing so
+          // the fallback session does not race a leaked file handle.
+          try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
           this.clearAudioSubscribers();
           this.emit({ micActive: false, error: msg, recording: false });
           throw new Error(msg);
         }
       } else {
         const msg = mapMicError(err);
+        try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
         this.clearAudioSubscribers();
         this.emit({ micActive: false, error: msg, recording: false });
         throw new Error(msg);
@@ -319,6 +324,9 @@ class AudioCaptureManager {
       console.error('[Audio] MediaRecorder creation failed:', err);
       try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
       this.stream = null;
+      // Same as the getUserMedia throw paths: the main-process file
+      // writer was opened earlier; close it before throwing.
+      try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
       this.clearAudioSubscribers();
       this.emit({ error: msg, recording: false, micActive: false });
       throw new Error(msg);
