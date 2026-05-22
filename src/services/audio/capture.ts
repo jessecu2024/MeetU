@@ -42,6 +42,18 @@ class AudioCaptureManager {
   private listeners: CaptureListener[] = [];
   private audioChunkCallbacks: AudioChunkCallback[] = [];
   private volumeInterval: ReturnType<typeof setInterval> | null = null;
+  // Promises for every in-flight `ondataavailable` handler on the
+  // primary recorder. The handler converts a Blob to ArrayBuffer
+  // (async), fans out to all callbacks, and appends to the main-
+  // process file writer; if `stop()` clears callbacks or closes the
+  // file writer before the final chunk's async work finishes, we
+  // silently drop the last 250ms of audio. stop() awaits this set
+  // before tearing down.
+  private mainChunkDeliveries = new Set<Promise<void>>();
+  // Resolves when the primary recorder's `onstop` fires AND every
+  // queued `ondataavailable` promise has settled. stop() awaits this
+  // before clearing callbacks / closing the file writer.
+  private mainRecorderDone: Promise<void> = Promise.resolve();
 
   // Segment-mode state. Set via setSegmentMode() before start().
   // When non-null, capture spawns a second, parallel MediaRecorder for each
@@ -193,15 +205,37 @@ class AudioCaptureManager {
           : undefined;
       this.recorder = new MediaRecorder(this.stream!, mimeType ? { mimeType } : {});
 
-      this.recorder.ondataavailable = async (event) => {
-        if (event.data.size > 0) {
+      // ondataavailable does async work (Blob→ArrayBuffer, IPC append).
+      // We track each invocation as its own promise in
+      // `mainChunkDeliveries` so `stop()` can drain them before clearing
+      // callbacks. Without this, the FINAL 250ms chunk (the one fired
+      // synchronously by MediaRecorder.stop()) races against teardown
+      // and its bytes never reach Deepgram or the .webm file.
+      this.recorder.ondataavailable = (event) => {
+        if (event.data.size === 0) return;
+        const work = (async () => {
           const buffer = await event.data.arrayBuffer();
           if (!this._state.micActive) {
             this.emit({ micActive: true, error: null });
           }
           for (const cb of this.audioChunkCallbacks) cb(buffer);
-          window.electronAPI?.audio.appendChunk(buffer);
-        }
+          try {
+            await window.electronAPI?.audio.appendChunk(buffer);
+          } catch (err) {
+            console.error('[Audio] appendChunk failed:', err);
+          }
+        })();
+        this.mainChunkDeliveries.add(work);
+        void work.finally(() => this.mainChunkDeliveries.delete(work));
+      };
+
+      // Resolves once `stop` event has fired AND every chunk delivery
+      // promise has settled. `stop()` awaits this before tearing down.
+      let resolveMainDone!: () => void;
+      this.mainRecorderDone = new Promise<void>((resolve) => { resolveMainDone = resolve; });
+      this.recorder.onstop = () => {
+        void Promise.allSettled(Array.from(this.mainChunkDeliveries))
+          .then(() => resolveMainDone());
       };
 
       this.recorder.start(250);
@@ -338,6 +372,13 @@ class AudioCaptureManager {
     if (this.recorder && this.recorder.state !== 'inactive') {
       this.recorder.stop();
     }
+    // Wait for the primary recorder's final `ondataavailable` (fired
+    // synchronously by stop()) to finish: Blob→ArrayBuffer is async,
+    // and `appendChunk` IPC is async too. Clearing audioChunkCallbacks
+    // or calling `audio.stopRecording` (which closes the .webm file
+    // writer) before this drain would drop the last 250ms — both from
+    // Deepgram's WebSocket and from the saved recording on disk.
+    try { await this.mainRecorderDone; } catch { /* ignore */ }
     this.recorder = null;
 
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
