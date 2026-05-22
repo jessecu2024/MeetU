@@ -81,7 +81,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 |--------|--------|------|--------|
 | Deepgram | Global | Real-time WebSocket | ✅ Stable |
 | Whisper API (OpenAI) | Global | Segment-based REST (~5s) | ✅ Stable |
-| iFlytek | China | Real-time WebSocket | 🔜 Planned — WebSocket HMAC-SHA256 signing not yet implemented; disabled in UI |
+| iFlytek | China | PCM streaming WebSocket | ✅ Stable |
 | Local Whisper | Offline | whisper.cpp (MIT) | 🔜 Planned — not yet shipped |
 
 > Alibaba Speech (Paraformer) was previously listed but has been removed from the codebase until a real implementation lands.
@@ -92,7 +92,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 
 - **macOS 13+** or **Windows 10+**
 - **Node.js 18+**
-- One STT engine API Key **required for live transcription** — choose Deepgram (streaming) or OpenAI Whisper API (5-second segments). Without one, the app falls back to a demo / mock transcript. iFlytek and Local Whisper are roadmap items.
+- One STT engine API Key **required for live transcription** — choose Deepgram (streaming, best for English), OpenAI Whisper API (5-second segments, 99 languages), or iFlytek (PCM streaming, best for Mandarin and Chinese dialects). Without one, the app falls back to a demo / mock transcript. Local Whisper is a roadmap item.
 - At least one AI provider API Key (e.g., DeepSeek, OpenAI, Claude) — required for translation, summarization, and speech suggestions. Without one, only the raw recording + STT transcript will work.
 
 ### Installation
@@ -117,7 +117,7 @@ MeetU is designed with privacy as a core principle:
 
 - **Local storage on your device** — recordings (`.webm`), transcripts (SQLite), settings, and encrypted API keys are persisted on your machine only
 - **Outbound traffic, only to providers you choose**:
-  - Live transcription: audio is sent directly from your device to the STT provider you configure — streamed (Deepgram) or in 5-second segments (OpenAI Whisper API). iFlytek and Local Whisper are roadmap items.
+  - Live transcription: audio is sent directly from your device to the STT provider you configure — streamed (Deepgram), in 5-second segments (OpenAI Whisper API), or PCM-streamed (iFlytek). Local Whisper is a roadmap item.
   - AI features: the relevant transcript text is sent to the AI provider you configure (Anthropic, OpenAI, DeepSeek, etc.)
 - **API keys are encrypted** at rest using your OS's secure storage (Electron safeStorage). They are never sent to MeetU (we run no servers); they are only sent directly to the provider you configured, attached as the auth credential on requests to that provider's API
 - **No MeetU servers** — we operate no backend, run no telemetry, no analytics, no tracking. Network traffic only ever goes between your device and the third-party providers you select.
@@ -227,7 +227,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 |------|------|------|------|
 | Deepgram | 海外 | 实时 WebSocket | ✅ 稳定 |
 | Whisper API (OpenAI) | 海外 | 分段 REST（~5 秒） | ✅ 稳定 |
-| 讯飞语音 | 国内 | 实时 WebSocket | 🔜 计划中 — WebSocket HMAC-SHA256 签名尚未实现；UI 中已禁用 |
+| 讯飞语音 | 国内 | PCM 流式 WebSocket | ✅ 稳定 |
 | 本地 Whisper | 离线 | whisper.cpp (MIT) | 🔜 计划中 — 暂未发布 |
 
 > 阿里语音 (Paraformer) 之前列在此处但尚未实现，已从代码中暂时移除，待真正集成后再加回。
@@ -238,7 +238,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 
 - **macOS 13+** 或 **Windows 10+**
 - **Node.js 18+**
-- **必需**：一个 STT 引擎的 API Key —— 可选 Deepgram（流式）或 OpenAI Whisper API（5 秒分段）。未配置时应用会退回到 demo/mock 转写。讯飞、Local Whisper 仍在路线图中。
+- **必需**：一个 STT 引擎的 API Key —— 可选 Deepgram（流式、英文最佳）、OpenAI Whisper API（5 秒分段、99 种语言）或讯飞（PCM 流式、中文最佳）。未配置时应用会退回到 demo/mock 转写。Local Whisper 仍在路线图中。
 - 至少一个 AI 提供商的 API Key（如 DeepSeek、OpenAI、Claude）— 用于翻译、摘要、发言建议；未配置时仅原始录音 + STT 转写可用。
 
 ### 安装

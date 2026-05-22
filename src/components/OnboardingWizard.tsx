@@ -433,10 +433,10 @@ export default function OnboardingWizard() {
             <div className="mt-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/50
               border border-zinc-200 dark:border-zinc-700">
               <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                Two stable STT engines today: Deepgram (streaming, low-latency) and OpenAI Whisper API (5-second segments, high accuracy). iFlytek and Local Whisper are on the roadmap but not yet usable. Audio is streamed (Deepgram) or sent in 5-second chunks (Whisper) directly to the provider you choose. Recordings, transcripts, and your encrypted API Keys are stored on your local device; MeetU operates no servers and never receives, stores, or proxies any of this data.
+                Three stable STT engines today: Deepgram (streaming, low-latency, best for English), OpenAI Whisper API (5-second segments, 99 languages), and iFlytek (PCM streaming, best for Mandarin and Chinese dialects). Local Whisper is on the roadmap but not yet usable. Audio is sent directly to the provider you choose. Recordings, transcripts, and your encrypted API Keys are stored on your local device; MeetU operates no servers and never receives, stores, or proxies any of this data.
               </p>
               <p className="text-xs text-zinc-500 mt-1">
-                当前有两个稳定的 STT 引擎可选：Deepgram（流式、低延迟）和 OpenAI Whisper API（5 秒分段、精度高）。讯飞和 Local Whisper 都在路线图中尚未发布。音频会以流式（Deepgram）或 5 秒分段（Whisper）的方式直接发送到你选择的服务商。本地设备上会保存录音、转写文本与加密后的 API Key；MeetU 服务器不接收、不存储、不代理这些内容。
+                当前有三个稳定的 STT 引擎可选：Deepgram（流式、低延迟、英文最佳）、OpenAI Whisper API（5 秒分段、99 种语言）和讯飞（PCM 流式、普通话和方言识别最佳）。Local Whisper 在路线图中尚未发布。音频直接发送到你选择的服务商。本地设备上会保存录音、转写文本与加密后的 API Key；MeetU 服务器不接收、不存储、不代理这些内容。
               </p>
             </div>
 

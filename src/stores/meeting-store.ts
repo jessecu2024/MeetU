@@ -255,27 +255,36 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     }
 
     try {
-      // Hook up audio to STT engine via capture manager callbacks. Two
-      // delivery modes exist; the engine declares which one it wants:
-      // - 'stream' (default): the engine receives raw 250ms MediaRecorder
-      //   chunks. Used by Deepgram (streams audio over a WebSocket).
-      // - 'segment': capture spawns a parallel MediaRecorder per segment
-      //   window and each callback fires with one complete webm file.
-      //   Used by Whisper API (each REST request needs a self-contained
-      //   audio file). setSegmentMode must run BEFORE audioManager.start
-      //   so the segment recorder is wired up on the first window.
+      // Hook up audio to the STT engine via capture-manager callbacks.
+      // Three delivery modes exist; the engine declares which it wants:
+      // - 'stream' (default): raw 250ms MediaRecorder chunks (webm/opus).
+      //   Deepgram streams these straight over its WebSocket.
+      // - 'segment': capture spawns a parallel MediaRecorder per window;
+      //   each callback fires with one complete webm file. Whisper API
+      //   needs this because every REST request carries one audio file.
+      // - 'pcm-stream': capture attaches an AudioWorklet + resampler
+      //   and emits 16-kHz mono Float32 frames. iFlytek needs this
+      //   because IAT only accepts audio/L16;rate=16000.
+      //
+      // Mode setters MUST be called BEFORE audioManager.start so the
+      // corresponding pipeline is wired on the first frame/window.
       if (useRealAudio && !activeSttIsMock) {
-        if (
-          activeSttEngine.audioMode === 'segment' &&
-          activeSttEngine.segmentDurationMs &&
-          activeSttEngine.segmentDurationMs > 0
-        ) {
+        const mode = activeSttEngine.audioMode ?? 'stream';
+        if (mode === 'segment' && activeSttEngine.segmentDurationMs && activeSttEngine.segmentDurationMs > 0) {
           captureManager.setSegmentMode(activeSttEngine.segmentDurationMs);
+          captureManager.setPcmStreamMode(false);
           captureManager.onSegment((data: ArrayBuffer) => {
+            activeSttEngine.feedAudio(data);
+          });
+        } else if (mode === 'pcm-stream') {
+          captureManager.setSegmentMode(null);
+          captureManager.setPcmStreamMode(true);
+          captureManager.onPcmFrame((data: ArrayBuffer) => {
             activeSttEngine.feedAudio(data);
           });
         } else {
           captureManager.setSegmentMode(null);
+          captureManager.setPcmStreamMode(false);
           captureManager.onAudioChunk((data: ArrayBuffer) => {
             activeSttEngine.feedAudio(data);
           });

@@ -36,7 +36,7 @@
 
 MeetU 采用 **100% BYOK** 模式：
 - 你使用自己的 AI API Key（Claude / OpenAI / DeepSeek 等）
-- 你使用自己的语音转文字 API Key（Deepgram 流式 / OpenAI Whisper API 5 秒分段，二选一；讯飞 / Local Whisper 在路线图中）
+- 你使用自己的语音转文字 API Key（Deepgram 流式 / OpenAI Whisper API 5 秒分段 / 讯飞 PCM 流式，三选一；Local Whisper 在路线图中）
 - **所有数据存储在本地**，音频和文字不会发送到 MeetU 的服务器
 - AI 请求直接从你的设备发送到你选择的 AI 服务商
 
@@ -130,7 +130,7 @@ npm run build        # 构建发布版
 |------|------|------|
 | Deepgram | 实时 WebSocket 流式转写，延迟低 | ✅ Stable |
 | Whisper API | OpenAI 的语音识别 API (5 秒分段) | ✅ Stable |
-| 讯飞语音 | 国内实时语音识别 | 🔜 Planned — WebSocket HMAC 签名未实现，UI 中已禁用 |
+| 讯飞语音 | 国内 PCM 流式语音识别（最佳中文识别） | ✅ Stable |
 | 本地 Whisper | 离线运行，MIT 许可 | 🔜 Planned — whisper.cpp 集成尚未发布，UI 中已禁用 |
 
 > 阿里语音 (Paraformer) 之前列在此处但尚未实现，已暂时从代码中移除。
@@ -347,7 +347,7 @@ npm run build        # 构建发布版
 |------|------|--------------|---------|
 | Deepgram | ✅ Stable | [console.deepgram.com](https://console.deepgram.com) | 海外首选，实时性好 |
 | Whisper API | ✅ Stable | [platform.openai.com](https://platform.openai.com) | 海外备选 (5 秒分段,精度高) |
-| 讯飞语音 | 🔜 Planned — WebSocket HMAC-SHA256 鉴权签名尚未实现，UI 中已禁用 | [console.xfyun.cn](https://console.xfyun.cn) | 国内（待补签名后转 Stable） |
+| 讯飞语音 | ✅ Stable | [console.xfyun.cn](https://console.xfyun.cn) | 国内首选（中文识别率最高，需 AppID:APIKey:APISecret 三段拼接） |
 | 本地 Whisper | 🔜 Planned — 在设置面板中显示为禁用状态 | — | whisper.cpp 集成尚未发布 |
 
 > 阿里语音 (Paraformer) 曾列在此处，但代码从未实现，已暂时从应用中移除。后续真正集成后会重新出现。

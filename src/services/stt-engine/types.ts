@@ -1,19 +1,18 @@
 // ============================================================
 // STT (Speech-to-Text) Engine Interface / 语音识别引擎统一接口
-// Currently shipped: Deepgram (streaming WebSocket) and OpenAI Whisper
-// API (segment-based REST, ~5s segments). iFlytek and Local Whisper are
-// planned but not yet selectable:
-//   - iFlytek:    WebSocket HMAC-SHA256 signing is still a placeholder.
-//   - Local Whisper: whisper.cpp integration is TODO.
-// Alibaba Speech (Paraformer) was previously listed but is removed
-// until a real implementation lands.
+// Currently shipped: Deepgram (streaming WebSocket, webm/opus),
+// OpenAI Whisper API (segment-based REST, ~5s segments), iFlytek
+// (PCM streaming WebSocket, audio/L16;rate=16000). Local Whisper
+// is planned — whisper.cpp integration is TODO. Alibaba Speech
+// (Paraformer) was previously listed but is removed until a real
+// implementation lands.
 // ============================================================
 
 /** Supported STT engine IDs */
 export type STTEngineId =
   | 'deepgram'        // Deepgram (global) — stable, streaming WebSocket
   | 'whisper_api'     // OpenAI Whisper API — stable, segment-based REST
-  | 'xfyun'           // iFlytek (China) — planned (HMAC-SHA256 signing not yet implemented)
+  | 'xfyun'           // iFlytek (China) — stable, PCM streaming WebSocket
   | 'local_whisper';  // Local Whisper.cpp (offline) — planned, not yet usable
 
 /**
@@ -66,18 +65,25 @@ export interface STTEngineInfo {
 /**
  * How audio bytes arrive at `feedAudio`.
  *
- * - `stream` (default): the capture layer pushes raw MediaRecorder chunks
- *   roughly every 250 ms. Chunks share a webm container — only the first
- *   one has the header — so each individual chunk is NOT a self-contained
- *   audio file. Engines using a streaming WebSocket protocol (Deepgram,
- *   iFlytek) accept this form directly.
- * - `segment`: the capture layer spawns a parallel MediaRecorder for each
+ * - `stream` (default): the capture layer pushes raw MediaRecorder
+ *   chunks roughly every 250 ms. Chunks share a webm container — only
+ *   the first one has the header — so each individual chunk is NOT a
+ *   self-contained audio file. Engines using a streaming WebSocket
+ *   protocol that accepts webm/opus (Deepgram) take this form
+ *   directly.
+ * - `segment`: capture spawns a parallel MediaRecorder for each
  *   `segmentDurationMs` window and `feedAudio` receives one complete,
- *   independently-decodable webm file per window. Engines using a REST
- *   transcription API (Whisper API) need this form because each request
- *   must carry a standalone audio file.
+ *   independently-decodable webm file per window. Engines using a
+ *   REST transcription API (Whisper API) need this form because each
+ *   request must carry a standalone audio file.
+ * - `pcm-stream`: capture attaches an AudioWorklet to the MediaStream
+ *   and pushes raw 16-kHz mono PCM Float32 frames every ~250 ms.
+ *   Engines that require uncompressed PCM (iFlytek IAT, with its
+ *   audio/L16;rate=16000 frame format) take this form. The engine is
+ *   responsible for re-encoding Float32 → Int16 + base64 as required
+ *   by its wire format.
  */
-export type AudioDeliveryMode = 'stream' | 'segment';
+export type AudioDeliveryMode = 'stream' | 'segment' | 'pcm-stream';
 
 /** STT Engine interface */
 export interface STTEngine {
@@ -137,20 +143,13 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     name: '讯飞语音',
     nameEn: 'iFlytek Speech',
     region: 'china',
-    description: '中文识别率最高，支持方言',
-    descriptionEn: 'Best Chinese recognition, dialect support',
+    description: '中文识别率最高，支持方言，16-kHz PCM 实时流',
+    descriptionEn: 'Best Chinese recognition, dialect support, 16-kHz PCM streaming',
     requiresApiKey: true,
     apiKeyGuideUrl: 'https://console.xfyun.cn/services/iat',
     pricing: 'Free 500h/year',
     strengths: ['Best Chinese accuracy', 'Dialect support', 'Large free tier', 'Real-time streaming'],
-    // Promoted from 'beta' to 'planned' after a deeper review confirmed the
-    // WebSocket auth signer in xfyun-engine.ts emits `signature="placeholder"`,
-    // so live sessions are guaranteed to fail at iFlytek's auth step. Marking
-    // it 'planned' makes isSelectableSTTEngine return false everywhere — UI
-    // gating, the engine-registry fallback, and the settings-store migration
-    // — so users cannot land on it until real HMAC-SHA256 signing ships.
-    status: 'planned',
-    statusNote: 'WebSocket HMAC-SHA256 signing is still a placeholder — sessions cannot authenticate yet / WebSocket HMAC-SHA256 鉴权签名尚未实现，目前无法建立会话',
+    status: 'stable',
   },
   {
     id: 'local_whisper',

@@ -11,7 +11,7 @@
 | Windows WASAPI Loopback 原生捕获 | 🔜 Planned | `native/windows/` 尚未创建 |
 | Deepgram STT | ✅ Stable | WebSocket 经主进程 IPC，已可用 |
 | OpenAI Whisper API STT | ✅ Stable | 引擎以 segment 模式 (`audioMode='segment'`, `segmentDurationMs=5000`) 工作;capture.ts 用并行 MediaRecorder 每 5 秒产出一个完整 webm 文件直接 POST `/v1/audio/transcriptions`;内置 hallucination 过滤丢弃 silence 时的 "Thank you for watching" / 字幕组 类幻觉 |
-| 讯飞 STT | 🔜 Planned | WebSocket auth 签名为 placeholder，运行时鉴权一定失败；engine 已降为 `status: 'planned'`，UI 与 fallback 全部跳过，待 WebCrypto 补全 HMAC-SHA256 后再升级为 Stable |
+| 讯飞 STT | ✅ Stable | WebSocket 鉴权:`xfyun-signature.ts` 用 WebCrypto API 计算 HMAC-SHA256;音频管线:`audioMode='pcm-stream'`,capture.ts 启 AudioWorklet 输出 16-kHz 单声道 Float32 PCM,engine 内部转 Int16 + base64 发 `audio/L16;rate=16000` 帧 |
 | 阿里语音 STT | ❌ Removed | 之前列在文档/类型中，但代码从未实现，已从 `STTEngineId` 移除 |
 | Local Whisper (whisper.cpp) | 🔜 Planned | `local-whisper.ts` 为 stub，`feedAudio`/`stopSession` 是 TODO |
 | 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
@@ -68,7 +68,7 @@ macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；�
 - **通用**：DeepSeek（国内外均可）
 - **国内**：通义千问(Qwen) / MiniMax / 智谱(GLM)
 
-**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写需要配置 Deepgram(流式) 或 OpenAI Whisper API(5 秒分段) 之一**;只有原始音频录制可以完全无 Key 工作。讯飞、Local Whisper 仍在路线图中。
+**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写需要配置 Deepgram(流式)、OpenAI Whisper API(5 秒分段) 或讯飞(PCM 流式) 之一**;只有原始音频录制可以完全无 Key 工作。Local Whisper 仍在路线图中。
 
 **收费模式：** 软件本身收费（一次性购买或订阅），AI 和 STT 费用由用户直接向对应服务商支付。
 
@@ -78,7 +78,7 @@ macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；�
 |------|--------|---------|---------|
 | Deepgram | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable |
 | OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable — segment 模式 (5 秒分段) |
-| 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | 🔜 Planned — `xfyun-engine.ts` 的 HMAC 签名仍为 placeholder；`status: 'planned'`，UI / fallback / 迁移全部跳过；补全 WebCrypto HMAC-SHA256 后升级为 Stable |
+| 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable — `xfyun-signature.ts` 实现 HMAC-SHA256 (WebCrypto),`audioMode='pcm-stream'` 走 AudioWorklet PCM 管线 |
 | 阿里语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ❌ 尚未实现，已暂时从 `STTEngineId` 类型中移除 |
 | whisper.cpp (本地) | **MIT 许可** | ✅ 可安全嵌入分发 | 🔜 Planned — `local-whisper.ts` 是 stub，`feedAudio` / `stopSession` 仍是 TODO |
 

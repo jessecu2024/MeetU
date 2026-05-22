@@ -25,14 +25,13 @@ describe('useSettingsStore.setUserRegion', () => {
     });
   });
 
-  it('picks a selectable STT engine for China users instead of hard-coding xfyun', () => {
-    // Regression guard: previously this set sttEngine to 'xfyun' which is
-    // currently planned (HMAC signer is a placeholder). The store now
-    // delegates to getDefaultSTTEngineForRegion, which walks a fallback
-    // chain and only returns selectable engines.
+  it('picks xfyun for China users now that the engine is stable', () => {
+    // For a long while this had to fall back to deepgram because xfyun
+    // was planned. Now that xfyun ships with real HMAC + PCM streaming,
+    // China users land on the region-native engine.
     useSettingsStore.getState().setUserRegion('china');
     const { sttEngine } = useSettingsStore.getState();
-    expect(sttEngine).toBe('deepgram');
+    expect(sttEngine).toBe('xfyun');
   });
 
   it('picks deepgram for global users', () => {
@@ -67,9 +66,9 @@ describe('useSettingsStore.setSTTApiKey', () => {
     expect(useSettingsStore.getState().sttApiKeys.local_whisper).toBeUndefined();
   });
 
-  it('refuses to persist a key for a planned engine (xfyun)', () => {
+  it('accepts a key for xfyun now that it is selectable', () => {
     useSettingsStore.getState().setSTTApiKey('xfyun', 'app:key:secret');
-    expect(useSettingsStore.getState().sttApiKeys.xfyun).toBeUndefined();
+    expect(useSettingsStore.getState().sttApiKeys.xfyun).toBe('app:key:secret');
   });
 });
 
@@ -102,16 +101,14 @@ describe('useSettingsStore.setSTTEngine', () => {
     expect(useSettingsStore.getState().sttEngine).toBe('deepgram');
   });
 
-  it('refuses a planned engine (xfyun) and falls back to the region default', () => {
+  it('accepts xfyun (now stable) without rewriting', () => {
     useSettingsStore.getState().setSTTEngine('xfyun');
-    expect(useSettingsStore.getState().sttEngine).toBe('deepgram');
+    expect(useSettingsStore.getState().sttEngine).toBe('xfyun');
   });
 
-  it('uses the China region default when a planned engine is rejected for a China user', () => {
+  it('uses the China region default (xfyun today) when a planned engine is rejected for a China user', () => {
     useSettingsStore.setState({ userRegion: 'china' });
-    // China region also walks the fallback list — today this still lands
-    // on deepgram because xfyun is planned.
     useSettingsStore.getState().setSTTEngine('local_whisper');
-    expect(useSettingsStore.getState().sttEngine).toBe('deepgram');
+    expect(useSettingsStore.getState().sttEngine).toBe('xfyun');
   });
 });

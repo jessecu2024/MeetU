@@ -1,50 +1,75 @@
 import { describe, it, expect } from 'vitest';
 import { XfyunEngine } from './xfyun-engine';
 
-describe('XfyunEngine.testConnection', () => {
-  it('reports "no key" when nothing has been configured', async () => {
+describe('XfyunEngine descriptor', () => {
+  it('declares pcm-stream delivery mode', () => {
     const engine = new XfyunEngine();
-    const r = await engine.testConnection();
-    expect(r.ok).toBe(false);
-    expect(r.error || '').toMatch(/No API Key|appId:apiKey:apiSecret/);
+    expect(engine.audioMode).toBe('pcm-stream');
   });
 
-  it('reports "invalid format" when the credential is not appId:apiKey:apiSecret', async () => {
-    const engine = new XfyunEngine();
-    engine.setApiKey('just-a-bare-key');
-    const r = await engine.testConnection();
-    expect(r.ok).toBe(false);
-    expect(r.error || '').toMatch(/Invalid key format|appId:apiKey:apiSecret/);
+  it('declares supportsRealtime = true (streaming WebSocket protocol)', () => {
+    expect(new XfyunEngine().supportsRealtime).toBe(true);
   });
 
-  it('does NOT claim success when format is valid — the WebSocket auth signer is still a placeholder', async () => {
-    // Regression guard: previously this returned ok=true after a format-only
-    // check, which told users "connection works" while startSession would
-    // then be rejected by the server because generateAuthUrl emits
-    // `signature="placeholder"`. The honest answer is failure with a clear
-    // explanation until the HMAC-SHA256 signing is implemented.
-    const engine = new XfyunEngine();
-    engine.setApiKey('test_app_id:test_api_key:test_api_secret');
-    const r = await engine.testConnection();
-    expect(r.ok).toBe(false);
-    expect(r.error || '').toMatch(/HMAC|signing|签名|Beta/i);
+  it('region is "china"', () => {
+    expect(new XfyunEngine().region).toBe('china');
   });
 });
 
-describe('XfyunEngine.startSession (defense-in-depth)', () => {
-  it('refuses to start a session — the WebSocket would open and then be auth-rejected', async () => {
-    // If a caller somehow bypasses isSelectableSTTEngine and the
-    // engine-registry fallback, the engine itself still refuses. Without
-    // this, the WS opens, the caller sees "session started", then the
-    // server closes with an auth error a moment later — at which point
-    // the mock fallback can't take over.
+describe('XfyunEngine.setApiKey + testConnection format checks', () => {
+  it('rejects an empty key with a "missing credentials" message', async () => {
     const engine = new XfyunEngine();
-    engine.setApiKey('test_app_id:test_api_key:test_api_secret');
-    await expect(engine.startSession({ sampleRate: 16000 })).rejects.toThrow(/placeholder|HMAC|signing|签名/i);
+    engine.setApiKey('');
+    const r = await engine.testConnection();
+    expect(r.ok).toBe(false);
+    expect(r.error || '').toMatch(/Missing credentials|凭据/);
   });
 
-  it('still rejects with a credentials error when no key is configured (precedence over the placeholder error)', async () => {
+  it('rejects the one-part legacy form (just a single token)', async () => {
     const engine = new XfyunEngine();
-    await expect(engine.startSession({ sampleRate: 16000 })).rejects.toThrow(/credentials|appId/i);
+    engine.setApiKey('just-one-token');
+    const r = await engine.testConnection();
+    expect(r.ok).toBe(false);
+    expect(r.error || '').toMatch(/Missing credentials|凭据/);
+  });
+
+  // We do not exercise live iFlytek auth from CI. The signature
+  // module's tests (xfyun-signature.test.ts) pin the deterministic
+  // signature format; the engine's own use of buildXfyunAuthUrl in
+  // testConnection / startSession is exercised by the same code path.
+});
+
+describe('XfyunEngine.startSession (no real credentials)', () => {
+  it('rejects when no credentials are configured', async () => {
+    const engine = new XfyunEngine();
+    await expect(
+      engine.startSession({ sampleRate: 16000 })
+    ).rejects.toThrow(/credentials|AppID/);
+  });
+
+  it('rejects the legacy one-part form', async () => {
+    const engine = new XfyunEngine();
+    engine.setApiKey('just-one-token');
+    await expect(
+      engine.startSession({ sampleRate: 16000 })
+    ).rejects.toThrow(/credentials|AppID/);
+  });
+});
+
+describe('XfyunEngine.feedAudio (pre-session)', () => {
+  it('silently drops feed calls before startSession', () => {
+    const engine = new XfyunEngine();
+    expect(() => engine.feedAudio(new ArrayBuffer(8))).not.toThrow();
+  });
+
+  it('drops empty buffers without crashing', () => {
+    const engine = new XfyunEngine();
+    expect(() => engine.feedAudio(new ArrayBuffer(0))).not.toThrow();
+  });
+});
+
+describe('XfyunEngine.isRunning', () => {
+  it('is false until a session opens', () => {
+    expect(new XfyunEngine().isRunning()).toBe(false);
   });
 });
