@@ -266,10 +266,14 @@ function registerIPC(): void {
 
   // ── System audio loopback: support probe ──
   // The renderer calls this before offering the "System Audio" device
-  // option, so users on macOS 12 / Linux see an explanation instead of
-  // a silent failure when they try to record. Backed by Electron's
-  // getDisplayMedia + setDisplayMediaRequestHandler path which wraps
-  // ScreenCaptureKit (macOS 13+) and WASAPI loopback (Windows 10+).
+  // option, so users on unsupported platforms (everything except
+  // Windows 10+ today) see an explanation instead of a silent failure
+  // when they try to record. Backed by Electron's getDisplayMedia +
+  // setDisplayMediaRequestHandler path. Per Electron 30's typedef,
+  // audio:'loopback' is "currently only supported on Windows" (it
+  // wraps WASAPI loopback). macOS native system-audio capture via
+  // ScreenCaptureKit is on the roadmap and ships through a native
+  // N-API module (PR #4b) rather than this Electron wrapper path.
   ipcMain.handle('system-audio:probe', async () => {
     // On darwin we additionally surface the Screen Recording permission
     // status — macOS will not deliver loopback audio without it. The

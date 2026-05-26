@@ -37,14 +37,18 @@ function domException(name: string, message = ''): DOMException {
 }
 
 describe('mapSystemAudioError', () => {
-  it('maps NotAllowedError to a Screen Recording permission walkthrough', () => {
+  it('maps NotAllowedError without mis-directing users to macOS Screen Recording settings', () => {
+    // This code path is Windows-only per Electron 30's typedef.
+    // Telling a macOS user to grant macOS Screen Recording permission
+    // for THIS path is a bad bug: granting it won't help (Electron's
+    // wrapper doesn't use ScreenCaptureKit yet), and the user wastes
+    // time + might disclose more than they intended. The error must
+    // route macOS users elsewhere (virtual cable / PR #4b) instead.
     const msg = mapSystemAudioError(domException('NotAllowedError'));
-    expect(msg).toMatch(/Screen Recording/);
-    expect(msg).toMatch(/System Settings/);
-    // Bilingual: must mention macOS-specific UI in English AND give a
-    // Chinese translation in the same string (matches the UI's pattern
-    // elsewhere).
-    expect(msg).toMatch(/系统设置/);
+    expect(msg).toMatch(/denied/i);
+    expect(msg).not.toMatch(/Screen Recording permission/);
+    expect(msg).toMatch(/Windows-only|PR #4b/);
+    expect(msg).toMatch(/路线图|PR #4b/);
   });
 
   it('maps NotFoundError to a "no source available" hint', () => {
@@ -53,10 +57,15 @@ describe('mapSystemAudioError', () => {
     expect(msg).toMatch(/未找到/);
   });
 
-  it('maps NotSupportedError to an OS-version requirement', () => {
+  it('maps NotSupportedError to "Windows 10+ only on this path; macOS users use cable / PR #4b"', () => {
     const msg = mapSystemAudioError(domException('NotSupportedError'));
-    expect(msg).toMatch(/macOS 13\+ or Windows 10\+/);
-    expect(msg).toMatch(/不支持/);
+    // Must NOT echo the old (incorrect) "macOS 13+ OR Windows 10+"
+    // claim — Electron 30's typedef declares loopback Windows-only.
+    expect(msg).not.toMatch(/macOS 13\+ or Windows 10\+/);
+    expect(msg).toMatch(/Windows 10\+ only/);
+    expect(msg).toMatch(/virtual audio cable|virtual cable/i);
+    expect(msg).toMatch(/PR #4b|ScreenCaptureKit/);
+    expect(msg).toMatch(/虚拟音频线缆/);
   });
 
   it('maps AbortError to "main process rejected" (the setDisplayMediaRequestHandler returned {})', () => {

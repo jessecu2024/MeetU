@@ -8,13 +8,16 @@
 //      or any virtual audio cable the user has installed.
 //
 //   2. getDisplayMedia + audio:'loopback' — captures the system
-//      output bus. On macOS 13+ Electron wraps ScreenCaptureKit and on
-//      Windows 10+ it wraps WASAPI loopback. Requires the main process
-//      to register a `setDisplayMediaRequestHandler` (see
-//      electron/main.ts) and, on macOS, the user must grant Screen
-//      Recording permission in System Settings. This path is
-//      triggered by setting `deviceId` to the sentinel
-//      SYSTEM_AUDIO_DEVICE_ID.
+//      output bus. Per Electron 30's typedef, audio:'loopback' is
+//      "currently only supported on Windows" (it wraps WASAPI
+//      loopback). macOS native system-audio capture (via
+//      ScreenCaptureKit) is on the roadmap (PR #4b) and ships via
+//      a native N-API module rather than this Electron path. The
+//      main-process setDisplayMediaRequestHandler in
+//      electron/main.ts enforces win32 + main-frame + audio-only
+//      to keep the screen from leaking on platforms / requesters
+//      where this path doesn't apply. Triggered by setting
+//      `deviceId` to the sentinel SYSTEM_AUDIO_DEVICE_ID.
 //
 // The rest of the pipeline (MediaRecorder, segment recorder, PCM
 // resampler) is identical for both paths because both yield a normal
@@ -81,10 +84,14 @@ export function mapSystemAudioError(err: unknown): string {
   const message = (err as Error)?.message || '';
   switch (name) {
     case 'NotAllowedError':
-      // The most common failure on macOS: Screen Recording permission
-      // not granted (or revoked) for this app. Chrome / Electron raise
-      // NotAllowedError in this case, identical to a denied prompt.
-      return 'System audio access denied. macOS 13+: grant Screen Recording permission in System Settings → Privacy & Security → Screen & System Audio Recording, then restart the app. / 系统音频权限被拒绝，请到 系统设置 → 隐私与安全 → 屏幕与系统录制 中授权后重启应用';
+      // Permission denied at the OS / Electron layer. On Windows
+      // this is rare (loopback does not normally require a prompt);
+      // it usually indicates a session/permission policy bug. Note:
+      // we do NOT direct users to macOS Screen Recording settings
+      // here — this code path is Windows-only per Electron 30, and
+      // mis-directing macOS users to grant a permission that won't
+      // help is worse than the generic phrasing.
+      return 'System audio access denied at the OS / session layer. This Electron loopback path is Windows-only; macOS native loopback is on the roadmap (PR #4b). / 系统音频权限在 OS / 会话层被拒绝;此 Electron loopback 路径仅 Windows 支持,macOS 原生 loopback 在路线图中(PR #4b)';
     case 'NotFoundError':
       return 'No system audio source available. Make sure something is playing through the system output. / 未找到系统音频源';
     case 'NotReadableError':
@@ -119,7 +126,7 @@ export function mapSystemAudioError(err: unknown): string {
       // getDisplayMedia is called without any constraints at all.
       return 'System audio call rejected by the browser (bad constraints). This is likely a MeetU bug — please report it. / 系统音频调用参数被浏览器拒绝，可能是应用 bug，请反馈';
     case 'NotSupportedError':
-      return 'System audio capture is not supported on this OS version (requires macOS 13+ or Windows 10+). / 当前系统版本不支持系统音频捕获，需要 macOS 13+ 或 Windows 10+';
+      return 'System audio capture via the Electron loopback path is supported on Windows 10+ only at this time. On macOS, route through a virtual audio cable or wait for PR #4b (native ScreenCaptureKit module). / 此 Electron loopback 路径仅 Windows 10+ 支持。macOS 用户请用虚拟音频线缆,或等待 PR #4b 上线原生 ScreenCaptureKit 模块';
     case 'AbortError':
       return 'System audio request was rejected by the main process (no screen sources). / 主进程未返回有效的屏幕源';
     default:

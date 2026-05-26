@@ -639,10 +639,12 @@ export default function SettingsModal() {
                 </div>
               </div>
 
-              {/* System Audio (loopback) — native ScreenCaptureKit on
-                  macOS 13+ / WASAPI loopback on Windows 10+. Driverless;
-                  no Stereo Mix needed; requires Screen Recording permission
-                  on macOS. */}
+              {/* System Audio (loopback) — Electron-wrapped WASAPI
+                  loopback on Windows 10+. Driverless; no Stereo Mix
+                  needed. macOS native loopback (ScreenCaptureKit) is
+                  on the roadmap (PR #4b) and is NOT available through
+                  this Electron path; the probe returns supported:false
+                  on darwin so the button below is greyed out. */}
               {systemAudioProbe && (
                 <div className={`rounded-lg border p-2.5 ${
                   systemAudioProbe.supported
