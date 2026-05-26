@@ -118,6 +118,23 @@ export async function exportWord(minutes: MeetingMinutes): Promise<string> {
 }
 
 /**
+ * Export meeting minutes as a PDF file. Same structured payload as the
+ * Word export; the main process renders it with Electron's Chromium
+ * print engine (electron/export/pdf-generator.ts) so Chinese renders
+ * via system fonts. Returns the absolute path on success, the filename
+ * alone if the IPC layer returned nothing.
+ */
+export async function exportPDF(minutes: MeetingMinutes): Promise<string> {
+  const filename = `minutes_${new Date().toISOString().slice(0, 10)}_${sanitizeFilename(minutes.title)}.pdf`;
+  const result = await window.electronAPI?.file.export('pdf', JSON.stringify({
+    filename,
+    minutes,
+    disclaimer: { en: EXPORT_DISCLAIMER_EN, zh: EXPORT_DISCLAIMER_ZH },
+  }));
+  return (result as string) || filename;
+}
+
+/**
  * Replace any character that is not ASCII alphanumeric, Han, underscore, or
  * hyphen with an underscore, and cap to 50 characters. Exported for testing.
  */

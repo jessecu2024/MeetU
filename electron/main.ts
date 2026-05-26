@@ -14,6 +14,7 @@ import {
 } from './audio/file-manager';
 import { initDatabase, runQuery } from './database';
 import { renderMinutesDocx } from './export/docx-generator';
+import { renderMinutesPdf } from './export/pdf-generator';
 import { sanitizeFilenameForExport } from './export/sanitize-filename';
 import { probeSystemAudioSupport } from './system-audio-probe';
 import { getMacOSNativeCapture, makeMacOSNativeCaptureIpc } from './audio/macos-native-capture';
@@ -494,6 +495,16 @@ function registerIPC(): void {
         const buf = await renderMinutesDocx(data.minutes, data.disclaimer);
         fs.writeFileSync(filePath, buf);
         console.log('[Export] DOCX saved:', filePath, `(${buf.length} bytes)`);
+        return filePath;
+      }
+
+      if (format === 'pdf') {
+        // Same `{ filename, minutes, disclaimer }` payload. The PDF is
+        // rendered by Electron's own Chromium engine (printToPDF) so
+        // CJK renders via system fonts with no bundled font.
+        const buf = await renderMinutesPdf(data.minutes, data.disclaimer);
+        fs.writeFileSync(filePath, buf);
+        console.log('[Export] PDF saved:', filePath, `(${buf.length} bytes)`);
         return filePath;
       }
 

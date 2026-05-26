@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { sanitizeFilenameForExport } from './export/sanitize-filename';
 
-function fullPath(unsafe: string, format: 'docx' | 'markdown'): string {
+function fullPath(unsafe: string, format: 'docx' | 'markdown' | 'pdf'): string {
   const base = path.basename(unsafe);
   return sanitizeFilenameForExport(base, format);
 }
@@ -72,6 +72,14 @@ describe('export filename hardening', () => {
     expect(fullPath('foo.txt', 'markdown')).toBe('foo.txt.md');
     expect(fullPath('foo.docx', 'docx')).toBe('foo.docx');
     expect(fullPath('foo.md', 'markdown')).toBe('foo.md');
+  });
+
+  it('handles the pdf format (extension + traversal + dot-only fallback)', () => {
+    expect(fullPath('minutes_2026-06-01_Q2.pdf', 'pdf')).toBe('minutes_2026-06-01_Q2.pdf');
+    expect(fullPath('foo.txt', 'pdf')).toBe('foo.txt.pdf');           // ext appended
+    expect(fullPath('../../etc/passwd.pdf', 'pdf')).toBe('passwd.pdf'); // traversal stripped
+    expect(fullPath('.', 'pdf')).toMatch(/^minutes_\d+\.pdf$/);        // dot-only fallback
+    expect(fullPath('产品评审', 'pdf')).toMatch(/^产品评审\.pdf$/);      // Han preserved
   });
 
   it('caps overly-long input to keep the filename writable', () => {

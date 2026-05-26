@@ -6,7 +6,7 @@
 import { useSummaryStore } from '../stores/summary-store';
 import { useSettingsStore } from '../stores/settings-store';
 import { useMeetingStore } from '../stores/meeting-store';
-import { exportMarkdown, exportWord } from '../services/exporter';
+import { exportMarkdown, exportWord, exportPDF } from '../services/exporter';
 import type { RealtimeSummary } from '../services/summarizer';
 import type { MeetingMinutes } from '../services/post-meeting';
 
@@ -171,6 +171,14 @@ function MinutesPreview({ minutes }: { minutes: MeetingMinutes }) {
     }
   };
 
+  const handleExportPdf = async () => {
+    try {
+      await exportPDF(minutes);
+    } catch (err) {
+      console.error('Export PDF failed:', err);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
       {/* Export buttons */}
@@ -178,12 +186,17 @@ function MinutesPreview({ minutes }: { minutes: MeetingMinutes }) {
         <button onClick={handleExportMd}
           className="flex-1 py-2 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700
             text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
-          Export Markdown / 导出 MD
+          Markdown / MD
         </button>
         <button onClick={handleExportDocx}
           className="flex-1 py-2 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700
             text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
-          Export Word / 导出 Word
+          Word
+        </button>
+        <button onClick={handleExportPdf}
+          className="flex-1 py-2 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700
+            text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
+          PDF
         </button>
       </div>
 

@@ -31,7 +31,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 | 🔔 **@Mention Detection** | Instantly alerts you when someone calls your name or asks you a question |
 | 💡 **Smart Speech Suggestions** | AI generates 3 reply strategies (conservative / assertive / diplomatic) when you're @'d |
 | 📋 **Real-time Summary** | Key points, decisions, and action items extracted every few minutes |
-| 📄 **Meeting Minutes Export** | Structured minutes auto-generated on meeting end, exportable as Markdown or Word (.docx) |
+| 📄 **Meeting Minutes Export** | Structured minutes auto-generated on meeting end, exportable as Markdown, Word (.docx), or PDF (rendered via Electron/Chromium — CJK included) |
 
 ## How It Works
 
@@ -178,7 +178,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 | 🔔 **@检测提醒** | 有人叫你名字或向你提问时立即提醒 |
 | 💡 **智能发言建议** | 被@时 AI 自动生成 3 种回复方案（保守/积极/外交） |
 | 📋 **实时摘要** | 每隔几分钟自动提取要点、决策和待办事项 |
-| 📄 **会后纪要导出** | 会议结束自动生成结构化纪要，可导出为 Markdown 或 Word (.docx) |
+| 📄 **会后纪要导出** | 会议结束自动生成结构化纪要，可导出为 Markdown、Word (.docx) 或 PDF（经 Electron/Chromium 渲染，中文正常显示） |
 
 ## 工作原理
 
