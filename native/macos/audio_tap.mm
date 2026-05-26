@@ -72,6 +72,14 @@ struct Session {
   MeetUAudioCapture* capture API_AVAILABLE(macos(13.0)) = nil;
   SCStream* stream API_AVAILABLE(macos(13.0)) = nil;
 
+  // Monotonic capture generation. Bumped on every teardown so a stale
+  // SCStream that delivers a late audio callback AFTER teardown (and
+  // possibly after a NEW start replaced tsfnAudio) can detect it is
+  // no longer the active capture and drop the frame, instead of
+  // delivering old audio into the new session's JS callback. Atomic
+  // so the audio callback can read it lock-free.
+  std::atomic<uint64_t> generation{0};
+
   // Long-lived streaming TSFNs. Released exactly once via
   // releaseStreamTsfnsLocked() (idempotent through tsfnReleased).
   Napi::ThreadSafeFunction tsfnAudio;
@@ -96,6 +104,10 @@ struct Session {
       stream = nil;
     }
     cancelRequested = false;
+    // Invalidate the generation so any late callback from the
+    // just-torn-down capture (whose stamped generation now differs)
+    // drops its frame instead of using a possibly-reassigned TSFN.
+    generation.fetch_add(1);
   }
 };
 
@@ -117,6 +129,9 @@ API_AVAILABLE(macos(13.0))
 @property (nonatomic, assign) double targetSampleRate; // 16000
 @property (nonatomic, assign) double resamplePhase;
 @property (nonatomic, strong) NSMutableData* carryBuffer; // leftover mono Float32 samples
+// Generation stamp assigned at start; the callback drops frames once
+// session().generation has moved past this value (i.e. after teardown).
+@property (nonatomic, assign) uint64_t generation;
 // Per-capture SERIAL queue for audio sample delivery. ScreenCaptureKit
 // is handed this queue via addStreamOutput; using a serial queue (not
 // the global concurrent queue) guarantees didOutputSampleBuffer never
@@ -142,6 +157,11 @@ API_AVAILABLE(macos(13.0))
 - (void)stream:(SCStream*)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type {
   if (type != SCStreamOutputTypeAudio) return;
   if (!CMSampleBufferIsValid(sampleBuffer)) return;
+  // Drop frames from a stale capture: once teardown bumped
+  // session().generation past our stamp, this stream is no longer the
+  // active one (a new start may have replaced tsfnAudio). Lock-free
+  // read; teardown's BlockingCall safety still backstops us.
+  if (self.generation != meetu::session().generation.load()) return;
 
   CMFormatDescriptionRef fmt = CMSampleBufferGetFormatDescription(sampleBuffer);
   if (!fmt) return;
@@ -420,6 +440,13 @@ static Napi::Value StartCapture(const Napi::CallbackInfo& info) {
     config.minimumFrameInterval = CMTimeMake(1, 1);
 
     MeetUAudioCapture* capture = [[MeetUAudioCapture alloc] init];
+    // Stamp the capture with the current generation at CREATION (not at
+    // run-success) so its very first audio callbacks are accepted. No
+    // teardown can bump the generation between here and Running: we're
+    // in Starting (which blocks a new start), and the only mid-Starting
+    // teardown is the cancel path, which diverges before this capture
+    // ever streams.
+    capture.generation = session().generation.load();
     SCStream* stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:capture];
     NSError* addErr = nil;
     // Deliver samples on the capture's own SERIAL queue so the
@@ -481,6 +508,9 @@ static Napi::Value StartCapture(const Napi::CallbackInfo& info) {
       }
       {
         std::lock_guard<std::mutex> lock(session().mutex);
+        // capture.generation was stamped at creation (see above); it
+        // remains valid because no teardown bumped the generation
+        // during Starting.
         session().capture = capture;
         session().stream = stream;
         session().state = State::Running;

@@ -213,6 +213,15 @@ class AudioCaptureManager {
   private nativePcmUnsub: (() => void) | null = null;
   private nativeErrorUnsub: (() => void) | null = null;
   private nativeActive = false;
+  // Monotonic token bumped SYNCHRONOUSLY the moment a stop is
+  // initiated (top of doStop) and at the top of stopNativeMacOSSource.
+  // startNativeMacOSSource captures the token at entry and re-checks
+  // it at every await boundary; a mismatch means a stop raced in and
+  // the start must abort WITHOUT issuing macos.start(). This is more
+  // robust than the `nativeActive` flag alone, because nativeActive is
+  // only cleared late in stopNativeMacOSSource (after its own awaits),
+  // leaving a window where an in-flight start could still see it true.
+  private nativeStartToken = 0;
 
   private deviceId = '';
 
@@ -810,6 +819,10 @@ class AudioCaptureManager {
     // teardown path (doStop, MediaRecorder failure, PCM failure, this
     // method's own throw) cleans up the native session.
     this.nativeActive = true;
+    // Capture the cancellation token at entry. Any stop() (or nested
+    // stopNativeMacOSSource) bumps this synchronously, so a mismatch at
+    // any await boundary below means "a stop raced in — abort".
+    const token = ++this.nativeStartToken;
 
     // 16 kHz context so the worklet replays the native PCM 1:1.
     const ctx = new AudioContext({ sampleRate: 16000 });
@@ -854,14 +867,13 @@ class AudioCaptureManager {
     });
 
     // Pre-start cancellation check. The AudioContext / worklet setup
-    // above contains awaits; if stop() ran during them, doStop() will
-    // have called stopNativeMacOSSource() and cleared nativeActive.
-    // We must NOT issue macos.start() after a stop — otherwise
-    // ScreenCaptureKit starts (and possibly stalls on a permission
-    // prompt) AFTER the session was torn down. This check is
-    // synchronous and immediately precedes the start call, so no
-    // stop() can interleave between the check and the call.
-    if (!this.nativeActive) {
+    // above contains awaits; if a stop raced in during them, the token
+    // was bumped synchronously. We must NOT issue macos.start() after a
+    // stop — otherwise ScreenCaptureKit starts (and may stall on a
+    // permission prompt) AFTER the session was torn down. This check is
+    // synchronous and immediately precedes the start call, so no stop()
+    // can interleave between the check and the call.
+    if (this.nativeStartToken !== token) {
       throw new Error('macOS native capture was stopped during setup');
     }
 
@@ -874,11 +886,11 @@ class AudioCaptureManager {
     }
 
     // Post-start cancellation check. If stop() ran while we were
-    // awaiting macos.start(), it sent macos.stop() (the native state
-    // machine turns that into a cancel) and cleared nativeActive.
-    // Don't hand a now-dead stream back to start() for MediaRecorder
-    // wiring; throw so start()'s catch cleans up the rest.
-    if (!this.nativeActive) {
+    // awaiting macos.start(), the token changed and stopNativeMacOSSource
+    // already sent macos.stop() (the native state machine turns that
+    // into a cancel). Don't hand a now-dead stream back to start() for
+    // MediaRecorder wiring; throw so start()'s catch cleans up the rest.
+    if (this.nativeStartToken !== token) {
       throw new Error('macOS native capture was stopped during start');
     }
 
@@ -894,6 +906,15 @@ class AudioCaptureManager {
    * playback AudioContext.
    */
   private async stopNativeMacOSSource(): Promise<void> {
+    // Invalidate any in-flight start SYNCHRONOUSLY (before the awaits
+    // below), and clear nativeActive up-front, so a startNativeMacOSSource()
+    // suspended on its setup awaits aborts at its next checkpoint
+    // rather than racing macos.start() against this teardown. (doStop
+    // also bumps the token, but stopNativeMacOSSource is called
+    // directly from start()'s own failure paths too, so it must be
+    // self-sufficient.)
+    this.nativeStartToken++;
+    this.nativeActive = false;
     try { this.nativePcmUnsub?.(); } catch { /* ignore */ }
     try { this.nativeErrorUnsub?.(); } catch { /* ignore */ }
     this.nativePcmUnsub = null;
@@ -951,6 +972,11 @@ class AudioCaptureManager {
   }
 
   private async doStop(): Promise<string> {
+    // Invalidate any in-flight native start SYNCHRONOUSLY, before any
+    // await below. A startNativeMacOSSource() suspended on its setup
+    // awaits will see the bumped token at its next checkpoint and abort
+    // instead of issuing macos.start() after we've torn down.
+    this.nativeStartToken++;
     if (this.volumeInterval) { clearInterval(this.volumeInterval); this.volumeInterval = null; }
 
     // Disable scheduling of further segments BEFORE we trigger the

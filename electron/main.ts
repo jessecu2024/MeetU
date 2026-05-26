@@ -23,6 +23,18 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 
+// The origin the renderer is allowed to run at: the dev server in dev,
+// file:// in production. Set in createWindow and consulted by both the
+// navigation lockdown and the trusted-IPC frame check, so a top frame
+// navigated off-origin (shouldn't happen — we block it — but defense
+// in depth) cannot invoke privileged native-audio IPC.
+let trustedAppOrigin = 'file://';
+function isTrustedAppUrl(url: string): boolean {
+  if (!url) return false;
+  if (trustedAppOrigin === 'file://') return url.startsWith('file://');
+  try { return new URL(url).origin === trustedAppOrigin; } catch { return false; }
+}
+
 /** Create main window (floating mode) */
 function createWindow(): void {
   const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
@@ -58,6 +70,26 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
+
+  // ── Navigation lockdown (security hardening) ──
+  // The macOS native + Windows loopback IPC handlers trust the
+  // mainWindow's top frame. That trust is only safe if the top frame
+  // can never be navigated to attacker-controlled content. So:
+  //   1. Deny all window.open / target=_blank popups (open externally).
+  //   2. Block in-page navigation away from our own app origin; any
+  //      external link goes to the user's browser via shell.openExternal.
+  // The trusted origin is the dev server URL in dev, or file:// in prod.
+  trustedAppOrigin = VITE_DEV_SERVER_URL ? new URL(VITE_DEV_SERVER_URL).origin : 'file://';
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) { void shell.openExternal(url); }
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedAppUrl(url)) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(url)) { void shell.openExternal(url); }
+    }
+  });
 
   // Forward renderer console logs to main process terminal for debugging
   mainWindow.webContents.on('console-message', (_event, _level, message) => {
@@ -322,9 +354,17 @@ function registerIPC(): void {
     const win = mainWindow;
     if (!win || win.isDestroyed()) return false;
     const trusted = win.webContents.mainFrame;
-    // event.senderFrame is the WebFrameMain that issued the IPC.
-    return !!event.senderFrame
-      && event.senderFrame.frameTreeNodeId === trusted.frameTreeNodeId;
+    const sender = event.senderFrame;
+    if (!sender) return false;
+    // (1) Must be the top-level frame of our window (not an iframe/
+    //     webview/popup), AND (2) that frame must be on our own app
+    //     origin. (2) is belt-and-suspenders: will-navigate already
+    //     blocks the top frame from leaving the app origin, but we
+    //     re-check here so privileged native-audio IPC can never be
+    //     reached from off-origin content even if navigation lockdown
+    //     regresses.
+    return sender.frameTreeNodeId === trusted.frameTreeNodeId
+      && isTrustedAppUrl(sender.url);
   };
   ipcMain.handle('macos-system-audio:list-apps', (event) => {
     if (!isTrustedMacRequest(event)) {
