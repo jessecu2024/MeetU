@@ -160,13 +160,22 @@ API_AVAILABLE(macos(13.0))
   const UInt32 channels = asbd->mChannelsPerFrame > 0 ? asbd->mChannelsPerFrame : 1;
   if (asbd->mSampleRate > 0) self.sourceSampleRate = asbd->mSampleRate;
 
-  size_t blockSize = 0;
-  AudioBufferList abl;
+  // Two-pass sizing: a stack `AudioBufferList` only has room for ONE
+  // AudioBuffer, which is insufficient for non-interleaved
+  // multichannel (one buffer per channel). First call with a null
+  // list to learn the required byte size, then heap-allocate.
+  size_t ablSizeNeeded = 0;
+  OSStatus sizeSt = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+    sampleBuffer, &ablSizeNeeded, nullptr, 0, nullptr, nullptr, 0, nullptr);
+  if (sizeSt != noErr || ablSizeNeeded == 0) return;
+
+  std::vector<uint8_t> ablStorage(ablSizeNeeded);
+  AudioBufferList* abl = reinterpret_cast<AudioBufferList*>(ablStorage.data());
   CMBlockBufferRef block = nullptr;
   OSStatus st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-    sampleBuffer, &blockSize, &abl, sizeof(abl),
+    sampleBuffer, nullptr, abl, ablSizeNeeded,
     nullptr, nullptr, 0, &block);
-  if (st != noErr || abl.mNumberBuffers == 0) {
+  if (st != noErr || abl->mNumberBuffers == 0) {
     if (block) CFRelease(block);
     return;
   }
@@ -176,23 +185,23 @@ API_AVAILABLE(macos(13.0))
   std::vector<float> mono;
   if (isNonInterleaved) {
     // Each channel is a separate AudioBuffer. Average across channels.
-    const UInt32 nbuf = abl.mNumberBuffers;
-    const float* ch0 = static_cast<const float*>(abl.mBuffers[0].mData);
+    const UInt32 nbuf = abl->mNumberBuffers;
+    const float* ch0 = static_cast<const float*>(abl->mBuffers[0].mData);
     if (!ch0) { if (block) CFRelease(block); return; }
-    const size_t frames = abl.mBuffers[0].mDataByteSize / sizeof(float);
+    const size_t frames = abl->mBuffers[0].mDataByteSize / sizeof(float);
     mono.resize(frames, 0.0f);
     for (UInt32 b = 0; b < nbuf; ++b) {
-      const float* ch = static_cast<const float*>(abl.mBuffers[b].mData);
+      const float* ch = static_cast<const float*>(abl->mBuffers[b].mData);
       if (!ch) continue;
-      const size_t n = std::min<size_t>(frames, abl.mBuffers[b].mDataByteSize / sizeof(float));
+      const size_t n = std::min<size_t>(frames, abl->mBuffers[b].mDataByteSize / sizeof(float));
       for (size_t i = 0; i < n; ++i) mono[i] += ch[i];
     }
     if (nbuf > 1) { for (auto& s : mono) s /= static_cast<float>(nbuf); }
   } else {
     // Single interleaved buffer with `channels` samples per frame.
-    const float* src = static_cast<const float*>(abl.mBuffers[0].mData);
+    const float* src = static_cast<const float*>(abl->mBuffers[0].mData);
     if (!src) { if (block) CFRelease(block); return; }
-    const size_t totalSamples = abl.mBuffers[0].mDataByteSize / sizeof(float);
+    const size_t totalSamples = abl->mBuffers[0].mDataByteSize / sizeof(float);
     const size_t frames = channels > 0 ? totalSamples / channels : totalSamples;
     mono.resize(frames, 0.0f);
     for (size_t f = 0; f < frames; ++f) {
@@ -357,20 +366,22 @@ static Napi::Value StartCapture(const Napi::CallbackInfo& info) {
       settleStart(deferredPtr, tsfnStart, false, msg);
     };
 
-    // Honor a stop() that arrived while we were fetching content.
+    // Honor a stop() that arrived while we were fetching content. No
+    // stream exists yet, so teardown here is safe (no late callbacks).
+    bool cancelledEarly = false;
     {
       std::lock_guard<std::mutex> lock(session().mutex);
       if (session().cancelRequested) {
         session().teardownLocked();
         session().state = State::Idle;
+        cancelledEarly = true;
       }
     }
-    {
-      std::lock_guard<std::mutex> lock(session().mutex);
-      if (session().state == State::Idle) { // was cancelled above
-        settleStart(deferredPtr, tsfnStart, false, "capture cancelled before start");
-        return;
-      }
+    if (cancelledEarly) {
+      // settleStart performs a TSFN BlockingCall — call it OUTSIDE the
+      // session mutex (no TSFN calls while holding the lock).
+      settleStart(deferredPtr, tsfnStart, false, "capture cancelled before start");
+      return;
     }
 
     if (err || !content) {
@@ -411,23 +422,33 @@ static Napi::Value StartCapture(const Napi::CallbackInfo& info) {
     }
 
     [stream startCaptureWithCompletionHandler:^(NSError* _Nullable startErr) {
-      // stop() during start → cancel: stop the stream we just created.
+      // stop() during start → cancel. The stream is now LIVE and may
+      // fire audio callbacks until it actually stops, so we must NOT
+      // release the TSFNs or go Idle yet — doing so would (a) drop
+      // late callbacks onto a released TSFN and (b) let a fresh
+      // start() create new TSFNs that an old-stream callback could
+      // alias. Instead: go Stopping (which blocks a new start), keep
+      // the stream/capture retained by this block, and only
+      // teardown + Idle + settle from inside the stop completion.
       bool cancelled = false;
       {
         std::lock_guard<std::mutex> lock(session().mutex);
         cancelled = session().cancelRequested;
+        if (cancelled) session().state = State::Stopping;
       }
       if (cancelled) {
-        [stream stopCaptureWithCompletionHandler:^(NSError* _Nullable) {}];
-        {
-          std::lock_guard<std::mutex> lock(session().mutex);
-          session().teardownLocked();
-          session().state = State::Idle;
-        }
-        settleStart(deferredPtr, tsfnStart, false, "capture cancelled during start");
+        [stream stopCaptureWithCompletionHandler:^(NSError* _Nullable) {
+          {
+            std::lock_guard<std::mutex> lock(session().mutex);
+            session().teardownLocked();
+            session().state = State::Idle;
+          }
+          settleStart(deferredPtr, tsfnStart, false, "capture cancelled during start");
+        }];
         return;
       }
       if (startErr) {
+        // start failed → no live stream, safe to teardown immediately.
         {
           std::lock_guard<std::mutex> lock(session().mutex);
           session().teardownLocked();
