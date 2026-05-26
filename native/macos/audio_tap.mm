@@ -434,7 +434,17 @@ static Napi::Value StartCapture(const Napi::CallbackInfo& info) {
       {
         std::lock_guard<std::mutex> lock(session().mutex);
         cancelled = session().cancelRequested;
-        if (cancelled) session().state = State::Stopping;
+        if (cancelled) {
+          session().state = State::Stopping;
+          // Park strong references in the session so the stream/capture
+          // stay alive across the async stopCaptureWithCompletionHandler.
+          // The inner stop block does NOT reference them, so under ARC
+          // nothing else would retain them once this outer block
+          // returns — relying on SCStream retaining itself during async
+          // stop is fragile. teardownLocked() nils these on completion.
+          session().stream = stream;
+          session().capture = capture;
+        }
       }
       if (cancelled) {
         [stream stopCaptureWithCompletionHandler:^(NSError* _Nullable) {
