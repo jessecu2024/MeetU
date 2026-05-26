@@ -433,10 +433,10 @@ export default function OnboardingWizard() {
             <div className="mt-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/50
               border border-zinc-200 dark:border-zinc-700">
               <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                Three stable STT engines today: Deepgram (streaming, low-latency, best for English), OpenAI Whisper API (5-second segments, 99 languages), and iFlytek (PCM streaming, best for Mandarin and Chinese dialects). Local Whisper is on the roadmap but not yet usable. Audio is sent directly to the provider you choose. Recordings, transcripts, and your encrypted API Keys are stored on your local device; MeetU operates no servers and never receives, stores, or proxies any of this data.
+                Four STT engines: Deepgram (streaming, low-latency, best for English), OpenAI Whisper API (5-second segments, 99 languages), and iFlytek (PCM streaming, best for Mandarin and Chinese dialects) — three cloud engines that use your own key — plus Local Whisper (offline, no key, beta), which transcribes on your device after a one-time model download in Settings. With a cloud engine, audio is sent directly to the provider you choose; with Local Whisper it never leaves your device. Recordings, transcripts, and your encrypted API Keys are stored on your local device; MeetU operates no servers and never receives, stores, or proxies any of this data.
               </p>
               <p className="text-xs text-zinc-500 mt-1">
-                当前有三个稳定的 STT 引擎可选：Deepgram（流式、低延迟、英文最佳）、OpenAI Whisper API（5 秒分段、99 种语言）和讯飞（PCM 流式、普通话和方言识别最佳）。Local Whisper 在路线图中尚未发布。音频直接发送到你选择的服务商。本地设备上会保存录音、转写文本与加密后的 API Key；MeetU 服务器不接收、不存储、不代理这些内容。
+                四个 STT 引擎可选：Deepgram（流式、低延迟、英文最佳）、OpenAI Whisper API（5 秒分段、99 种语言）、讯飞（PCM 流式、普通话和方言识别最佳）这三个云端引擎使用你自己的 Key，外加 Local Whisper（离线、无需 Key、beta）——在设置中一次性下载模型后完全在本机转写。使用云端引擎时音频直接发送到你选择的服务商；使用 Local Whisper 时音频不出设备。本地设备上会保存录音、转写文本与加密后的 API Key；MeetU 服务器不接收、不存储、不代理这些内容。
               </p>
             </div>
 
