@@ -113,34 +113,87 @@ function createWindow(): void {
  * receive system-audio loopback. Without this, Electron rejects every
  * such call with `NotSupportedError`.
  *
- * Lives in its own function (not inside `createWindow`) because it
- * mutates the default Session — global state that should be configured
- * exactly once during `app.whenReady`, not re-applied each time a
- * window is rebuilt. Setting it inside `createWindow` would not leak
- * memory (Electron's API replaces the handler rather than stacking
- * listeners), but it would muddle the lifecycle semantics and risk
- * subtle bugs if a future change ever shipped multi-window or
- * window-reopen flows.
+ * Defense-in-depth:
  *
- * Always picks the primary screen for the video source; the renderer
- * immediately discards the video track because we only need the audio.
+ *   - Reject every request that does not originate from the trusted
+ *     main frame of the mainWindow. Embedded iframes, popup windows,
+ *     and any future webview content must not be able to silently
+ *     receive a screen capture by issuing `getDisplayMedia`.
+ *   - Reject requests that do not ask for audio (the renderer's
+ *     only legitimate use of this API is the system-audio loopback
+ *     path; a stray request that wants only video should not be
+ *     handed the primary screen on the user's behalf).
+ *   - Only return `audio:'loopback'` on platforms where Electron
+ *     supports it (Windows). On other platforms we still reject so
+ *     a future MeetU UI bug that calls `getDisplayMedia` outside of
+ *     the system-audio button cannot silently leak the screen.
+ *
+ * Lives in its own function (not inside `createWindow`) because it
+ * mutates the default Session — global state configured exactly once
+ * during `app.whenReady`.
  */
 function registerDisplayMediaHandler(): void {
+  // Bypass-shape for `callback({})` — the typedef expects a Streams
+  // object with optional `video`/`audio`, and passing `{}` tells
+  // Electron to reject the request. The signature parameter typing
+  // here is a workaround for the strict overload.
+  const denyShape = {} as { video?: never; audio?: never };
+
   session.defaultSession.setDisplayMediaRequestHandler(
-    async (_request, callback) => {
+    async (request, callback) => {
+      // 1) Authenticate the requester. Only the trusted main frame
+      //    (top-level WebFrameMain of the BrowserWindow we created)
+      //    is allowed to ask for system audio. A future iframe /
+      //    webview / popup would have a different `frame` and
+      //    different `securityOrigin`, so we reject the request
+      //    rather than handing out the primary screen.
+      const win = mainWindow;
+      const requestFrameId = request.frame?.frameTreeNodeId;
+      const trustedFrameId = win?.webContents?.mainFrame?.frameTreeNodeId;
+      const isMainFrame = !!win && !win.isDestroyed() && requestFrameId !== undefined && requestFrameId === trustedFrameId;
+      if (!isMainFrame) {
+        console.warn(
+          `[Display] Rejected getDisplayMedia from non-main-frame request`,
+          { origin: request.securityOrigin, audioRequested: request.audioRequested, videoRequested: request.videoRequested },
+        );
+        callback(denyShape);
+        return;
+      }
+
+      // 2) We only serve loopback audio requests. A request that
+      //    wants only video has no legitimate use case in MeetU and
+      //    is more likely a bug or an attempt to bypass the device
+      //    selector. Reject so the screen does not leak.
+      if (!request.audioRequested) {
+        console.warn('[Display] Rejected getDisplayMedia: audio not requested');
+        callback(denyShape);
+        return;
+      }
+
+      // 3) Only return loopback on platforms where Electron's typedef
+      //    documents support. On macOS/Linux Electron 30 returns
+      //    Windows-only support; allowing it here would either be a
+      //    no-op (Electron rejects internally) or, worse, hand out
+      //    the primary screen with a silent audio track.
+      if (process.platform !== 'win32') {
+        console.warn(
+          `[Display] Rejected getDisplayMedia: audio:'loopback' is Windows-only on Electron ${process.versions.electron}; platform=${process.platform}`,
+        );
+        callback(denyShape);
+        return;
+      }
+
       try {
         const sources = await desktopCapturer.getSources({ types: ['screen'] });
         if (sources.length === 0) {
           console.error('[Display] No screen sources available for loopback');
-          // Cast to satisfy the callback shape — passing {} (or any falsy
-          // video/audio) tells Electron the request was rejected.
-          (callback as (s: { video?: never; audio?: never }) => void)({});
+          callback(denyShape);
           return;
         }
         callback({ video: sources[0], audio: 'loopback' });
       } catch (err) {
         console.error('[Display] setDisplayMediaRequestHandler failed:', err);
-        (callback as (s: { video?: never; audio?: never }) => void)({});
+        callback(denyShape);
       }
     },
   );

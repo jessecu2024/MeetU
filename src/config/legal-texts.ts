@@ -9,10 +9,8 @@ export const LEGAL_SECTIONS = [
     titleZh: '1. 录音合规责任',
     bodyEn: `This application records audio from the input device you select via your operating system — by default, your microphone. To capture other meeting participants' voices (not only your own) you have two options:
 
-1. Driverless system-audio loopback (recommended on macOS 13+ and Windows 10+): the app uses the OS-native screen-capture API (Apple ScreenCaptureKit on macOS, WASAPI loopback on Windows) to record everything playing through your system output. On macOS this requires granting Screen & System Audio Recording permission in System Settings → Privacy & Security.
+1. Driverless system-audio loopback (Windows 10+ only at this time): the app uses Electron's native screen-capture API which wraps WASAPI loopback to record everything playing through your system output. macOS support is on the roadmap (PR #4b will add a native ScreenCaptureKit module covering both full-system and per-application capture); the same Settings button is greyed out on macOS today because Electron's wrapper path is currently Windows-only per its typedef.
 2. A loopback audio device: route the meeting application's output through Windows Stereo Mix or a non-GPL virtual audio cable on macOS, then select that device as the input.
-
-Per-application audio capture (e.g. recording only Zoom's audio while leaving other apps untouched) is on the roadmap and requires a native module that ships in a later release.
 
 Before using this feature, you are responsible for ensuring:
 • You comply with all applicable laws and regulations regarding audio recording in your jurisdiction
@@ -22,10 +20,8 @@ Before using this feature, you are responsible for ensuring:
 Recording laws vary significantly across jurisdictions. In some regions, all participants must consent to be legally recorded; in others, only one party's consent is required. Violating recording laws may constitute a criminal or civil offense. Please familiarize yourself with the specific regulations in your jurisdiction.`,
     bodyZh: `本应用通过您在操作系统中选择的音频输入设备进行录制 — 默认为麦克风。如需同时录制其他会议参与者的声音（而不仅是您自己的），有两种方式：
 
-1. 免驱动的系统音频 loopback（推荐：macOS 13+ 和 Windows 10+）：应用通过操作系统原生的屏幕捕获 API（macOS 上为 Apple ScreenCaptureKit；Windows 上为 WASAPI loopback）录制系统输出端正在播放的所有内容。在 macOS 上需要您在 "系统设置 → 隐私与安全 → 屏幕与系统录制" 中授予权限。
+1. 免驱动的系统音频 loopback（目前仅 Windows 10+）：应用通过 Electron 原生屏幕捕获 API 包装 Windows 的 WASAPI loopback，录制系统输出端正在播放的所有内容。macOS 支持在路线图中（PR #4b 将上线原生 ScreenCaptureKit 模块，同时覆盖整机与按应用捕获）；当前 macOS 上该按钮 grey out，因为 Electron 的包装路径仅 Windows 支持（per 官方 typedef）。
 2. 第三方 loopback 音频设备：通过 Windows 立体声混音或 macOS 上的非 GPL 虚拟音频线缆将会议应用的输出重路由后，将该设备作为输入选中。
-
-按应用捕获音频（例如只录制 Zoom 而不影响其他应用）在路线图中，需要后续版本的原生模块支持。
 
 使用本功能前，您有责任确保：
 • 已遵守您所在地区关于录音的法律法规

@@ -61,26 +61,6 @@ function parseMajor(version: string): number {
 export function probeSystemAudioSupport(inputs: SystemAudioProbeInputs): SystemAudioProbeResult {
   const { platform, macOsVersion, winRelease, screenPermission } = inputs;
 
-  if (platform === 'darwin') {
-    const versionStr = macOsVersion ?? '';
-    const major = parseMajor(versionStr);
-    // Number.isFinite is the only safe predicate here: `NaN >= 13`,
-    // `NaN < 13`, and `NaN === NaN` are all false. We must explicitly
-    // reject the unparseable case so a malformed `process.getSystemVersion()`
-    // does not slip past as "supported".
-    if (!Number.isFinite(major) || major < 13) {
-      return {
-        supported: false,
-        reason: `macOS 13 (Ventura) or newer required for ScreenCaptureKit; detected ${versionStr || '(unknown)'}. / 需要 macOS 13 或更新版本，当前 ${versionStr || '未知'}`,
-      };
-    }
-    return {
-      supported: true,
-      permission: screenPermission || 'unknown',
-      version: versionStr,
-    };
-  }
-
   if (platform === 'win32') {
     const releaseStr = winRelease ?? '';
     const major = parseMajor(releaseStr);
@@ -93,8 +73,32 @@ export function probeSystemAudioSupport(inputs: SystemAudioProbeInputs): SystemA
     return { supported: true, version: releaseStr };
   }
 
+  if (platform === 'darwin') {
+    // macOS gating intentionally returns unsupported even though
+    // ScreenCaptureKit itself shipped in macOS 13.
+    //
+    // Per the bundled Electron typedef (node_modules/electron/electron.d.ts):
+    //   "Specifying a loopback device will capture system audio, and is
+    //    currently only supported on Windows."
+    //
+    // Electron 30 does NOT expose ScreenCaptureKit's loopback path to
+    // the renderer's `getDisplayMedia({audio:'loopback'})` call on
+    // macOS. Returning supported:true here would let the renderer race
+    // a request that either silently returns a dead audio track or
+    // rejects with NotAllowedError, and the user has no actionable
+    // recovery. Honest gating: this path is Windows-only today;
+    // macOS will land via the native N-API module (PR #4b).
+    const versionStr = macOsVersion ?? '';
+    return {
+      supported: false,
+      reason: `Native system-audio loopback on macOS is not yet enabled in MeetU. Electron 30's getDisplayMedia path supports loopback on Windows only; macOS support ships via the per-app ScreenCaptureKit native module (roadmap). For now, route system audio through a non-GPL virtual audio cable and pick it in the device list. / macOS 原生系统音频 loopback 暂未启用,Electron 30 的 getDisplayMedia 路径目前仅 Windows 支持;macOS 将通过原生 ScreenCaptureKit 模块上线(路线图)。请用非 GPL 虚拟音频线缆作为替代${versionStr ? `(detected ${versionStr})` : ''}`,
+      permission: screenPermission || 'unknown',
+      version: versionStr,
+    };
+  }
+
   return {
     supported: false,
-    reason: 'System audio capture is supported on macOS 13+ and Windows 10+ only. / 系统音频捕获仅支持 macOS 13+ 与 Windows 10+',
+    reason: 'System audio capture (driverless loopback) is supported on Windows 10+ only at this time. macOS native loopback is on the roadmap. / 驱动免安装的系统音频 loopback 目前仅支持 Windows 10+,macOS 原生 loopback 在路线图中',
   };
 }

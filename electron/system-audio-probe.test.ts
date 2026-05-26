@@ -9,115 +9,61 @@ import { describe, it, expect } from 'vitest';
 import { probeSystemAudioSupport } from './system-audio-probe';
 
 describe('probeSystemAudioSupport', () => {
-  it('marks macOS 13.0.0 as supported (ScreenCaptureKit cutoff)', () => {
+  // ── darwin gating ──
+  // Electron 30's `setDisplayMediaRequestHandler` typedef explicitly
+  // says `audio:'loopback'` is supported on Windows only. Even though
+  // ScreenCaptureKit itself ships in macOS 13+, the Electron renderer
+  // path is not wired to use it. Returning `supported:true` on darwin
+  // would let the renderer race a request that silently produces dead
+  // audio or rejects with NotAllowedError — no actionable recovery.
+  // The probe MUST return `supported:false` on every darwin version
+  // until either (a) Electron exposes the macOS path or (b) the
+  // native N-API module (PR #4b) replaces this code path entirely.
+
+  it('rejects darwin 13.0.0 because Electron getDisplayMedia loopback is Windows-only', () => {
     const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.0.0' });
-    expect(r.supported).toBe(true);
-    expect(r.version).toBe('13.0.0');
+    expect(r.supported).toBe(false);
+    expect(r.reason).toMatch(/macOS/);
+    expect(r.reason).toMatch(/Windows only|仅 Windows/);
   });
 
-  it('marks macOS 14.4 (no patch) as supported', () => {
+  it('rejects darwin 14.4 (current macOS) — version is not the gating reason; the wrapper path is', () => {
     const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '14.4' });
-    expect(r.supported).toBe(true);
+    expect(r.supported).toBe(false);
+    expect(r.reason).toMatch(/roadmap|路线图/);
   });
 
-  it('rejects macOS 12.7.4 with an actionable reason', () => {
+  it('rejects darwin 12.7.4 (also unsupported on this wrapper path)', () => {
     const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '12.7.4' });
     expect(r.supported).toBe(false);
-    expect(r.reason).toMatch(/macOS 13/);
-    expect(r.reason).toMatch(/12\.7\.4/);
   });
 
-  it('rejects macOS 11.x', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '11.6.0' });
-    expect(r.supported).toBe(false);
+  it('rejects darwin with empty / garbage version (unsupported regardless)', () => {
+    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '' }).supported).toBe(false);
+    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'unknown' }).supported).toBe(false);
+    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'v13.0.0' }).supported).toBe(false);
   });
 
-  it('rejects darwin with an empty version string (cannot confirm)', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '' });
-    expect(r.supported).toBe(false);
-    expect(r.reason).toMatch(/macOS 13/);
-  });
-
-  it('rejects darwin with "13-beta" (lenient parseInt would have allowed it)', () => {
-    // parseInt('13-beta') === 13, which the previous implementation
-    // would have accepted. The strict regex must reject it because
-    // "-beta" is neither a dot nor end-of-string after the digit run.
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13-beta' });
-    expect(r.supported).toBe(false);
-    expect(r.reason).toMatch(/macOS 13/);
-    expect(r.reason).toMatch(/13-beta/);
-  });
-
-  it('rejects darwin with "v13.0.0" leading non-digit', () => {
-    // parseInt('v13.0.0') === NaN; lenient `NaN < 13` is false, so the
-    // previous implementation mis-marked this as supported. The strict
-    // parser must reject.
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'v13.0.0' });
-    expect(r.supported).toBe(false);
-  });
-
-  it('rejects darwin with garbage version (only non-digits)', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'unknown' });
-    expect(r.supported).toBe(false);
-  });
-
-  it('rejects darwin with "13.beta" (non-digit second component)', () => {
-    // The previous regex /^(\d+)(?:\.|$)/ matched the leading "13."
-    // and accepted this as major=13. The stricter /^(\d+)(?:\.\d+)*$/
-    // requires every component to be a digit run.
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.beta' });
-    expect(r.supported).toBe(false);
-  });
-
-  it('rejects darwin with "13." (dangling dot)', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.' });
-    expect(r.supported).toBe(false);
-  });
-
-  it('rejects darwin with "13..0" (empty component)', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13..0' });
-    expect(r.supported).toBe(false);
-  });
-
-  it('accepts darwin with single-digit major "13" (no dotted components)', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13' });
-    expect(r.supported).toBe(true);
-  });
-
-  it('rejects win32 with "10-rc" suffix (parseInt would silently accept)', () => {
-    const r = probeSystemAudioSupport({ platform: 'win32', winRelease: '10-rc' });
-    expect(r.supported).toBe(false);
-    expect(r.reason).toMatch(/Windows 10/);
-  });
-
-  it('surfaces the screen-recording permission status verbatim when granted', () => {
+  it('echoes the screen-recording permission status on darwin (UI may still want to display it)', () => {
     const r = probeSystemAudioSupport({
       platform: 'darwin',
       macOsVersion: '14.0.0',
       screenPermission: 'granted',
     });
-    expect(r.supported).toBe(true);
     expect(r.permission).toBe('granted');
   });
 
-  it('surfaces a denied screen-recording permission so the UI can warn the user', () => {
-    const r = probeSystemAudioSupport({
-      platform: 'darwin',
-      macOsVersion: '13.6.0',
-      screenPermission: 'denied',
-    });
-    // Permission denied is intentionally NOT a hard `supported:false` —
-    // the renderer still offers the option and shows a guidance banner
-    // so the user can grant access in System Settings without leaving
-    // the app first to find out the option exists. The probe surfaces
-    // the raw status; the UI decides the messaging.
-    expect(r.supported).toBe(true);
-    expect(r.permission).toBe('denied');
-  });
-
-  it('defaults permission to "unknown" when not provided on darwin', () => {
+  it('defaults permission to "unknown" on darwin when not provided', () => {
     const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.0.0' });
     expect(r.permission).toBe('unknown');
+  });
+
+  // ── win32 gating: the only platform actually supported today ──
+
+  it('rejects win32 with "10-rc" suffix (parseInt would silently accept)', () => {
+    const r = probeSystemAudioSupport({ platform: 'win32', winRelease: '10-rc' });
+    expect(r.supported).toBe(false);
+    expect(r.reason).toMatch(/Windows 10/);
   });
 
   it('marks Windows 10 (release 10.0.19042) as supported (WASAPI loopback cutoff)', () => {
@@ -151,7 +97,7 @@ describe('probeSystemAudioSupport', () => {
   it('rejects Linux outright with a clear platform message', () => {
     const r = probeSystemAudioSupport({ platform: 'linux' });
     expect(r.supported).toBe(false);
-    expect(r.reason).toMatch(/macOS 13\+ and Windows 10\+/);
+    expect(r.reason).toMatch(/Windows 10\+ only/);
   });
 
   it('rejects freebsd / other unix platforms', () => {

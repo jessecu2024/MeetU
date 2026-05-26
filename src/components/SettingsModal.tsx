@@ -69,17 +69,30 @@ export default function SettingsModal() {
       // machine, etc.), auto-reset to the default microphone so the
       // user does not have to deduce that the persisted-but-disabled
       // sentinel is the reason their next recording fails.
+      // Both branches (success-but-unsupported AND probe IPC rejection)
+      // must auto-reset a persisted SYSTEM_AUDIO_DEVICE_ID — otherwise
+      // a user who previously selected system audio on a supported OS
+      // and is now on an unsupported one (downgrade, new machine, dev
+      // mismatch) sees a disabled card AND a hidden sentinel still
+      // active, with no path forward except to figure out the
+      // mismatch unaided.
+      const resetSentinelIfUnsupported = () => {
+        if (useSettingsStore.getState().appSettings.micDeviceId === SYSTEM_AUDIO_DEVICE_ID) {
+          useSettingsStore.getState().updateAppSettings({
+            micDeviceId: 'default',
+            micDeviceLabel: 'Default Microphone',
+          });
+        }
+      };
       window.electronAPI?.audio.probeSystemAudio()
         .then((probe) => {
           setSystemAudioProbe(probe);
-          if (!probe.supported && useSettingsStore.getState().appSettings.micDeviceId === SYSTEM_AUDIO_DEVICE_ID) {
-            useSettingsStore.getState().updateAppSettings({
-              micDeviceId: 'default',
-              micDeviceLabel: 'Default Microphone',
-            });
-          }
+          if (!probe.supported) resetSentinelIfUnsupported();
         })
-        .catch(() => setSystemAudioProbe({ supported: false, reason: 'Probe failed' }));
+        .catch(() => {
+          setSystemAudioProbe({ supported: false, reason: 'Probe failed' });
+          resetSentinelIfUnsupported();
+        });
     }
   }, [activeTab]);
 
@@ -656,14 +669,9 @@ export default function SettingsModal() {
                     </div>
                     <p className="text-zinc-500 dark:text-zinc-400 mt-0.5">
                       {systemAudioProbe.supported
-                        ? 'macOS 13+ uses ScreenCaptureKit · Windows 10+ uses WASAPI loopback · no driver needed / macOS 13+ 使用 ScreenCaptureKit，Windows 10+ 使用 WASAPI loopback，无需安装驱动'
+                        ? 'Windows 10+ uses WASAPI loopback · no driver needed. macOS native loopback is on the roadmap (PR #4b). / Windows 10+ 使用 WASAPI loopback，无需安装驱动。macOS 原生 loopback 在路线图中(PR #4b)'
                         : systemAudioProbe.reason || 'Not supported on this OS'}
                     </p>
-                    {systemAudioProbe.supported && systemAudioProbe.permission === 'denied' && (
-                      <p className="mt-1 text-amber-700 dark:text-amber-400">
-                        ⚠ macOS Screen Recording permission is denied. Open System Settings → Privacy & Security → Screen & System Audio Recording. / 系统录屏权限被拒绝
-                      </p>
-                    )}
                   </button>
                 </div>
               )}
