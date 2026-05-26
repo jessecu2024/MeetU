@@ -166,21 +166,25 @@ export async function renderMinutesPdf(
   const tmpPath = path.join(os.tmpdir(), `meetu-minutes-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
   fs.writeFileSync(tmpPath, html, 'utf-8');
 
-  const win = new BrowserWindow({
-    show: false,
-    width: 800,
-    height: 1130,
-    webPreferences: {
-      // Print-only window: no JS, sandboxed, isolated. It loads only
-      // our generated local HTML file.
-      javascript: false,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
+  // `win` is declared before the try so the finally can clean up the
+  // temp file AND destroy the window even if `new BrowserWindow(...)`
+  // itself throws (otherwise the temp HTML would leak, contradicting
+  // the "always cleaned up" guarantee).
+  let win: import('electron').BrowserWindow | undefined;
   try {
+    win = new BrowserWindow({
+      show: false,
+      width: 800,
+      height: 1130,
+      webPreferences: {
+        // Print-only window: no JS, sandboxed, isolated. It loads only
+        // our generated local HTML file.
+        javascript: false,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
     await win.loadFile(tmpPath);
     const pdf = await win.webContents.printToPDF({
       printBackground: true,
@@ -189,7 +193,7 @@ export async function renderMinutesPdf(
     });
     return pdf;
   } finally {
-    if (!win.isDestroyed()) win.destroy();
+    if (win && !win.isDestroyed()) win.destroy();
     try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
   }
 }
