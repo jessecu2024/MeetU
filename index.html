@@ -4,8 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MeetU</title>
+    <!--
+      script-src + worker-src include `blob:` so the PCM AudioWorklet
+      (used by the iFlytek STT path) can be loaded from an inline
+      Blob URL. Without `blob:` here, audioWorklet.addModule throws
+      and iFlytek silently falls back to demo mode.
+
+      connect-src allows wss:/https: so the renderer can speak directly
+      to BYOK STT and AI providers (e.g. wss://iat-api.xfyun.cn for
+      iFlytek; https://api.openai.com for Whisper). Without this,
+      default-src 'self' forbids every outbound network call from
+      the renderer and only Deepgram (which is proxied through the
+      Electron main process) would work. We intentionally do not
+      enumerate provider hosts: users configure their own STT/AI
+      endpoints, and an allow-list would have to be updated every
+      time we add a provider.
+
+      img-src `data:` lets us inline icons; style-src `'unsafe-inline'`
+      is required by Tailwind's runtime injection.
+    -->
     <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+      content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https: wss:" />
   </head>
   <body class="bg-white dark:bg-zinc-900">
     <div id="root"></div>

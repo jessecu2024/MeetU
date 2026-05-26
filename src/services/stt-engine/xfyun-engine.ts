@@ -1,9 +1,26 @@
 // ============================================================
-// iFlytek (讯飞) STT Engine — WebSocket real-time streaming (BYOK)
-// Best Chinese speech recognition, supports dialects
+// iFlytek (讯飞) IAT STT Engine — WebSocket real-time streaming (BYOK)
+//
+// Wire protocol: wss://iat-api.xfyun.cn/v2/iat
+//   - Auth: HMAC-SHA256 signature in query string (see xfyun-signature.ts)
+//   - Audio: 16-kHz mono PCM Int16 frames, base64-encoded, sent as
+//            { data: { status: 0|1|2, format, encoding, audio } }
+//   - First frame: status=0 (start) with optional common+business params
+//   - Subsequent frames: status=1 (continue)
+//   - Final frame: status=2 (end)
+//   - Response: { code, message, data: { result: { ws: [{cw:[{w}]}] }, status } }
+//
+// Best Chinese speech recognition vendor; supports dialects.
 // ============================================================
 
-import type { STTEngine, STTEngineId, STTConfig, TranscriptResult } from './types';
+import type {
+  STTEngine, STTEngineId, STTConfig, TranscriptResult, AudioDeliveryMode,
+} from './types';
+import { buildXfyunAuthUrl } from './xfyun-signature';
+
+const XFYUN_HOST = 'iat-api.xfyun.cn';
+const XFYUN_PATH = '/v2/iat';
+const SAMPLE_RATE = 16000;
 
 export class XfyunEngine implements STTEngine {
   readonly id: STTEngineId = 'xfyun';
@@ -11,161 +28,393 @@ export class XfyunEngine implements STTEngine {
   readonly region = 'china' as const;
   readonly supportsRealtime = true;
 
+  // PCM stream because IAT only accepts audio/L16;rate=16000;
+  // webm/opus is rejected.
+  readonly audioMode: AudioDeliveryMode = 'pcm-stream';
+
   private appId = '';
   private apiKey = '';
   private apiSecret = '';
   private ws: WebSocket | null = null;
   private callback: ((result: TranscriptResult) => void) | null = null;
   private running = false;
-  private resultCounter = 0;
+  private firstFrame = true;
+  private sentenceCounter = 0;
   private sessionStartTime = 0;
+  // iFlytek streams partial results that grow inside a single sentence
+  // (pgs='rpl' means "replace the previous partial", 'apd' means
+  // "append to the previous partial") and then emits a final
+  // (ls=true) at sentence end. To make the transcript store overwrite
+  // the partial in place instead of accumulating duplicate rows,
+  // every partial for the same sentence must carry the SAME id.
+  // We mint a new id at the start of each sentence and reuse it for
+  // every partial until ls=true closes the sentence.
+  private currentSentenceId = '';
+  // Segments of the current sentence keyed by iFlytek's `sn`
+  // (sequence number). 'apd' adds a new sn → text entry; 'rpl' with
+  // an `rg: [startSn, endSn]` range deletes those keys before adding
+  // the new sn. The rendered sentence text is the values joined in
+  // numeric sn order. Cleared on ls=true (final).
+  private currentSentenceSegments = new Map<number, string>();
 
   /**
-   * iFlytek requires appId:apiKey:apiSecret format
-   * e.g., "abc123:def456:ghi789"
+   * iFlytek requires credentials in `AppID:APIKey:APISecret` form.
+   * The console shows the three pieces separately; users paste them
+   * concatenated with `:` because we don't have three fields in the
+   * settings UI for them.
    */
   setApiKey(key: string): void {
-    const parts = key.split(':');
+    const parts = (key || '').split(':');
     if (parts.length >= 3) {
-      this.appId = parts[0];
-      this.apiKey = parts[1];
-      this.apiSecret = parts[2];
+      this.appId = parts[0].trim();
+      this.apiKey = parts[1].trim();
+      this.apiSecret = parts[2].trim();
     } else {
-      this.apiKey = key;
+      // One-token form (legacy). It cannot pass authentication, but
+      // we keep it set so the format-check error is meaningful.
+      this.apiKey = key.trim();
+      this.appId = '';
+      this.apiSecret = '';
     }
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string }> {
-    if (!this.apiKey) {
-      return { ok: false, error: 'No API Key configured. Format: appId:apiKey:apiSecret' };
+    if (!this.apiKey || !this.appId || !this.apiSecret) {
+      return {
+        ok: false,
+        error:
+          'Missing credentials. Use the AppID:APIKey:APISecret form from console.xfyun.cn. ' +
+          '/ 缺少凭据。请使用 console.xfyun.cn 上的 AppID:APIKey:APISecret 三段拼接形式。',
+      };
     }
-    if (!this.appId || !this.apiSecret) {
-      return { ok: false, error: 'Invalid key format. Use: appId:apiKey:apiSecret' };
+    // We actually try to open a WebSocket: if the signature is wrong
+    // or the credentials are invalid, iFlytek closes the connection
+    // with a non-1000 code shortly after `open`. Anything that
+    // resolves on open() and stays connected for ~1s is a valid auth.
+    let url: string;
+    try {
+      url = await buildXfyunAuthUrl({
+        apiKey: this.apiKey,
+        apiSecret: this.apiSecret,
+        host: XFYUN_HOST,
+        path: XFYUN_PATH,
+      });
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    // Format validation passes, but the WebSocket auth signing in
-    // generateAuthUrl() is still a hard-coded placeholder. Returning ok=true
-    // here would tell the user the connection works while startSession would
-    // then be rejected by the server. Report the real state instead.
-    return {
-      ok: false,
-      error:
-        'iFlytek (Planned — not yet shipped): credentials look well-formed, but WebSocket HMAC-SHA256 ' +
-        'signing is not yet implemented, so live sessions will fail at the auth step. ' +
-        '/ 讯飞引擎在路线图中尚未发布：凭据格式正确，但 WebSocket HMAC-SHA256 鉴权签名尚未实现，实际开启会话会被服务端拒绝。',
-    };
-  }
+    return await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      let probe: WebSocket | null = null;
+      try {
+        probe = new WebSocket(url);
+      } catch (err) {
+        resolve({ ok: false, error: err instanceof Error ? err.message : 'WebSocket construct failed' });
+        return;
+      }
+      const TIMEOUT_MS = 8000;
+      const cleanup = () => {
+        try { probe?.close(); } catch { /* ignore */ }
+        probe = null;
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve({ ok: false, error: 'Timeout waiting for iFlytek auth response. Check network / VPN / 等待讯飞鉴权响应超时。' });
+      }, TIMEOUT_MS);
 
-  async startSession(_config: STTConfig): Promise<void> {
-    if (!this.apiKey || !this.appId) {
-      throw new Error('iFlytek credentials not configured (appId:apiKey:apiSecret)');
-    }
-
-    // Defense in depth: even if some caller bypasses isSelectableSTTEngine
-    // and reaches this engine directly, refuse to "start" a session whose
-    // WebSocket would only get auth-rejected after `open`. Without this,
-    // the WS would resolve on open() and the caller would think the session
-    // is live for ~100ms before the server closes the connection with an
-    // auth error, leaving a window where the mock fallback wouldn't trigger.
-    throw new Error(
-      'iFlytek live transcription is not yet supported in this build: ' +
-      'WebSocket HMAC-SHA256 signing is still a placeholder so the server ' +
-      'will reject the session at the auth step. ' +
-      '/ 讯飞实时转写在当前版本暂不支持：WebSocket HMAC-SHA256 鉴权签名尚未实现。'
-    );
-
-    // The original session-start logic is intentionally unreachable below
-    // until generateAuthUrl emits a real HMAC signature. It is preserved
-    // so the eventual fix is a removal of the throw above, not a rewrite.
-    /* istanbul ignore next */
-    this.sessionStartTime = Date.now();
-    this.resultCounter = 0;
-
-    // Generate auth URL
-    const url = this.generateAuthUrl();
-
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(url);
-
-      this.ws.onopen = () => {
-        this.running = true;
-        console.log('[iFlytek] WebSocket connected');
-        resolve();
+      probe.onopen = () => {
+        // The socket opened — but iFlytek may still close immediately
+        // with an auth error. Give it ~1s to confirm.
+        setTimeout(() => {
+          if (probe && probe.readyState === WebSocket.OPEN) {
+            clearTimeout(timer);
+            cleanup();
+            resolve({ ok: true });
+          }
+        }, 1000);
       };
 
-      this.ws.onmessage = (event) => {
+      probe.onmessage = (event) => {
+        // iFlytek closes the socket on auth failure before the open
+        // ack; if we see a message with code !== 0 it's an early error.
         try {
           const data = JSON.parse(event.data);
-          if (data.code !== 0) {
-            console.error('[iFlytek] Error:', data.message);
-            return;
+          if (data.code && data.code !== 0) {
+            clearTimeout(timer);
+            cleanup();
+            resolve({ ok: false, error: `iFlytek error code ${data.code}: ${data.message || 'unknown'}` });
           }
+        } catch { /* skip malformed */ }
+      };
 
-          const result = data.data?.result;
-          if (!result) return;
+      probe.onerror = () => {
+        clearTimeout(timer);
+        cleanup();
+        resolve({ ok: false, error: 'iFlytek WebSocket error. Check VPN / API credentials / 讯飞 WebSocket 错误，请检查网络与凭据。' });
+      };
 
-          // Parse iFlytek result format
-          const ws = result.ws || [];
-          const text = ws.map((w: { cw: Array<{ w: string }> }) =>
-            w.cw.map((c: { w: string }) => c.w).join('')
-          ).join('');
-
-          if (!text.trim()) return;
-
-          const isFinal = result.ls === true; // ls=true means sentence end
-
-          this.callback?.({
-            id: `xf-${++this.resultCounter}`,
-            text: text.trim(),
-            isFinal,
-            language: 'zh',
-            startMs: Date.now() - this.sessionStartTime - 2000,
-            endMs: Date.now() - this.sessionStartTime,
-            confidence: 0.9,
-          });
-        } catch {
-          // Skip malformed messages
+      probe.onclose = (event) => {
+        // 1000 (normal closure) or 1006 (abnormal close after auth ok)
+        // can both happen if we close()d ourselves above; only treat
+        // policy-violation codes as failures.
+        if (event.code === 1008 || event.code === 1011) {
+          clearTimeout(timer);
+          cleanup();
+          resolve({ ok: false, error: `iFlytek closed with code ${event.code}: ${event.reason || 'auth rejected'}` });
         }
-      };
-
-      this.ws.onerror = () => {
-        if (!this.running) reject(new Error('iFlytek connection failed'));
-      };
-
-      this.ws.onclose = () => {
-        this.running = false;
       };
     });
   }
 
+  async startSession(_config: STTConfig): Promise<void> {
+    if (!this.apiKey || !this.appId || !this.apiSecret) {
+      throw new Error('iFlytek credentials not configured (AppID:APIKey:APISecret)');
+    }
+
+    const url = await buildXfyunAuthUrl({
+      apiKey: this.apiKey,
+      apiSecret: this.apiSecret,
+      host: XFYUN_HOST,
+      path: XFYUN_PATH,
+    });
+
+    this.sessionStartTime = Date.now();
+    this.sentenceCounter = 0;
+    this.currentSentenceId = '';
+    this.currentSentenceSegments.clear();
+    this.firstFrame = true;
+
+    // iFlytek's auth-reject is asynchronous: the server accepts the
+    // WebSocket OPEN handshake first, then closes (or sends a 401-ish
+    // JSON) within a few hundred milliseconds if the signature/host/
+    // date are wrong. If we resolve on `open` and the engine reports
+    // success, meeting-store wires audio in BEFORE the close arrives,
+    // misses its chance to fall back to the mock engine, and the user
+    // sees a permanently dead recording.
+    //
+    // To avoid that race, we wait `SETTLE_MS` after `open` before
+    // resolving. Any close/error/code!=0 message during that window
+    // turns into a reject; afterwards we hand off to the session's
+    // own onmessage / onclose handlers.
+    const SETTLE_MS = 800;
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url);
+      this.ws = ws;
+      let settled = false;     // either resolved or rejected
+      let opened = false;      // ws.onopen has fired
+
+      const openTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { ws.close(); } catch { /* ignore */ }
+        reject(new Error('iFlytek WebSocket open timeout (8s)'));
+      }, 8000);
+
+      let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const finishOk = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(openTimer);
+        if (settleTimer) clearTimeout(settleTimer);
+        this.running = true;
+        console.log('[iFlytek] WebSocket connected (auth settled)');
+        // After settling, the session's regular onmessage handles
+        // results and onclose flips `running`. Both are re-attached
+        // here as plain assignments.
+        ws.onmessage = (event) => this.handleMessage(event.data);
+        ws.onclose = () => { this.running = false; };
+        resolve();
+      };
+
+      const finishFail = (msg: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(openTimer);
+        if (settleTimer) clearTimeout(settleTimer);
+        try { ws.close(); } catch { /* ignore */ }
+        this.ws = null;
+        reject(new Error(msg));
+      };
+
+      ws.onopen = () => {
+        opened = true;
+        // Don't resolve yet — give iFlytek a window to reject.
+        settleTimer = setTimeout(finishOk, SETTLE_MS);
+      };
+
+      ws.onmessage = (event) => {
+        // During the settle window, an error JSON (code !== 0) means
+        // the session is dead — reject. After settling, the real
+        // handler takes over via finishOk's reassignment.
+        if (settled) return;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.code && data.code !== 0) {
+            finishFail(`iFlytek error code ${data.code}: ${data.message || 'unknown'}`);
+          }
+        } catch { /* skip malformed */ }
+      };
+
+      ws.onerror = () => {
+        finishFail(opened
+          ? 'iFlytek WebSocket error during auth settle'
+          : 'iFlytek WebSocket error before open');
+      };
+
+      ws.onclose = (event) => {
+        finishFail(`iFlytek WebSocket closed (code ${event.code}: ${event.reason || 'no reason given'})`);
+      };
+    });
+  }
+
+  /**
+   * Receives 16-kHz mono Float32 PCM frames from capture (via the
+   * AudioWorklet → resampler pipeline). Converts each frame to Int16
+   * + base64 and posts an iFlytek `data` frame. The first frame must
+   * carry `common` + `business` params; subsequent frames are
+   * `status: 1` continuations; `stopSession` sends `status: 2`.
+   */
   feedAudio(chunk: ArrayBuffer): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.running) return;
+    if (chunk.byteLength === 0) return;
 
-    // Convert Float32 to Int16 PCM
-    const float32 = new Float32Array(chunk);
-    const int16 = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-      const s = Math.max(-1, Math.min(1, float32[i]));
-      int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-
-    // Base64 encode for iFlytek
-    const bytes = new Uint8Array(int16.buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const audioBase64 = btoa(binary);
-
-    const frame = {
+    const audioBase64 = float32ToInt16Base64(new Float32Array(chunk));
+    const frame: Record<string, unknown> = {
       data: {
-        status: 1, // 1 = continue
-        format: 'audio/L16;rate=16000',
+        status: this.firstFrame ? 0 : 1,
+        format: `audio/L16;rate=${SAMPLE_RATE}`,
         encoding: 'raw',
         audio: audioBase64,
       },
     };
-
+    if (this.firstFrame) {
+      // common: app identification
+      frame.common = { app_id: this.appId };
+      // business: recognition behavior. `dwa: 'wpgs'` enables
+      // word-level streaming with overwrite semantics; that means
+      // result.pgs === 'rpl' tells us to replace the previous
+      // partial transcript with the new one (we use that in
+      // handleMessage to keep the UI from showing repeated growing
+      // partials).
+      frame.business = {
+        language: 'zh_cn',
+        domain: 'iat',
+        accent: 'mandarin',
+        vad_eos: 5000,
+        dwa: 'wpgs',
+        ptt: 1,
+      };
+      this.firstFrame = false;
+    }
     this.ws.send(JSON.stringify(frame));
+  }
+
+  private handleMessage(raw: string | ArrayBuffer | Blob): void {
+    if (typeof raw !== 'string') return; // iFlytek replies are JSON strings
+    let data: {
+      code?: number;
+      message?: string;
+      data?: {
+        status?: number;
+        result?: {
+          sn?: number;
+          ls?: boolean;
+          pgs?: 'apd' | 'rpl';
+          // `rg` is iFlytek's replacement range for pgs='rpl': it is
+          // a 2-element array [startSn, endSn] (inclusive) telling
+          // us which previous `sn` segments to drop before splicing
+          // in the new one. Treating every `rpl` as "replace the
+          // whole buffer" loses unrelated earlier segments.
+          rg?: [number, number];
+          ws?: Array<{ cw: Array<{ w: string }> }>;
+        };
+      };
+    };
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (data.code && data.code !== 0) {
+      console.error(`[iFlytek] Error code ${data.code}: ${data.message || 'unknown'}`);
+      return;
+    }
+
+    const result = data.data?.result;
+    if (!result || !result.ws) return;
+
+    const text = result.ws
+      .map((w) => w.cw.map((c) => c.w).join(''))
+      .join('')
+      .trim();
+    if (!text) return;
+
+    // iFlytek wpgs framing (when dwa='wpgs' is enabled in business):
+    //
+    // Each result carries:
+    //   - sn: sequence number for THIS segment (1, 2, 3, …)
+    //   - pgs: 'apd' to append a new segment, 'rpl' to replace a range
+    //          of previously-emitted segments
+    //   - rg: when pgs='rpl', the inclusive [startSn, endSn] range of
+    //         segments to remove before adding this one
+    //   - ls: true when this segment closes the current sentence
+    //
+    // We maintain `segmentsBySn` keyed by sn for the current sentence
+    // and render the sentence as `Object.values(...).join('')` in sn
+    // order. That's the only way to honor mid-sentence corrections
+    // (rpl with rg=[2,3] means "drop segments 2 and 3, then add this
+    // as the new one") without losing unrelated earlier segments.
+    const isFinal = result.ls === true;
+    const sn = typeof result.sn === 'number' ? result.sn : -1;
+
+    if (result.pgs === 'rpl' && result.rg && result.rg.length === 2) {
+      const [startSn, endSn] = result.rg;
+      for (let s = startSn; s <= endSn; s++) {
+        this.currentSentenceSegments.delete(s);
+      }
+      if (sn >= 0) this.currentSentenceSegments.set(sn, text);
+    } else if (result.pgs === 'apd' || result.pgs === undefined) {
+      if (sn >= 0) {
+        this.currentSentenceSegments.set(sn, text);
+      } else {
+        // No sn available — degenerate case. Treat as a plain append
+        // by hashing under a synthetic monotonic key so we don't
+        // collide with sn-keyed entries.
+        this.currentSentenceSegments.set(-(this.currentSentenceSegments.size + 1), text);
+      }
+    } else if (result.pgs === 'rpl') {
+      // rpl without rg: iFlytek's docs say this shouldn't happen with
+      // wpgs, but if it does, treat as full-sentence replacement.
+      this.currentSentenceSegments.clear();
+      if (sn >= 0) this.currentSentenceSegments.set(sn, text);
+    }
+
+    if (!this.currentSentenceId) {
+      this.currentSentenceId = `xf-${++this.sentenceCounter}`;
+    }
+    const id = this.currentSentenceId;
+    // Render in sn order; the Map's iteration order matches insertion
+    // by default, but a 'rpl' that inserted a NEW sn out of order
+    // would otherwise render in the wrong place. Sort numerically.
+    const sentenceText = Array.from(this.currentSentenceSegments.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, t]) => t)
+      .join('');
+    if (isFinal) {
+      this.currentSentenceId = '';
+      this.currentSentenceSegments.clear();
+    }
+
+    const now = Date.now();
+    this.callback?.({
+      id,
+      text: sentenceText,
+      isFinal,
+      language: 'zh',
+      startMs: Math.max(0, now - this.sessionStartTime - 2000),
+      endMs: now - this.sessionStartTime,
+      confidence: 0.9, // iFlytek does not return per-frame confidence
+    });
   }
 
   onTranscript(callback: (result: TranscriptResult) => void): void {
@@ -174,39 +423,62 @@ export class XfyunEngine implements STTEngine {
 
   async stopSession(): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      // Send end frame
-      this.ws.send(JSON.stringify({
-        data: { status: 2, format: 'audio/L16;rate=16000', encoding: 'raw', audio: '' },
-      }));
+      // status=2 tells iFlytek "no more audio, please return the
+      // final result and close". Without this they keep the socket
+      // open for vad_eos ms before reporting timeout.
+      try {
+        this.ws.send(JSON.stringify({
+          data: { status: 2, format: `audio/L16;rate=${SAMPLE_RATE}`, encoding: 'raw', audio: '' },
+        }));
+      } catch (err) {
+        console.warn('[iFlytek] failed to send end-frame:', err);
+      }
     }
     this.running = false;
-    setTimeout(() => {
-      this.ws?.close();
-      this.ws = null;
-    }, 1000);
+    // Give iFlytek up to 1.5s to deliver the final result frame
+    // before we close — they sometimes send it after the end-frame ack.
+    const ws = this.ws;
+    if (ws) {
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          try { ws.close(); } catch { /* ignore */ }
+          this.ws = null;
+          resolve();
+        }, 1500);
+        ws.onclose = () => {
+          clearTimeout(t);
+          this.ws = null;
+          resolve();
+        };
+      });
+    }
   }
 
   isRunning(): boolean {
     return this.running;
   }
+}
 
-  /** Generate iFlytek WebSocket auth URL with HMAC-SHA256 signature */
-  private generateAuthUrl(): string {
-    // iFlytek auth uses date + HMAC signature in URL
-    // Simplified version — full implementation needs crypto.subtle
-    const host = 'iat-api.xfyun.cn';
-    const path = '/v2/iat';
-    const date = new Date().toUTCString();
-
-    // For now, use a basic URL. Full HMAC auth requires async crypto.
-    // In production, this should use WebCrypto API for proper signing.
-    const baseUrl = `wss://${host}${path}`;
-    const params = new URLSearchParams({
-      authorization: btoa(`api_key="${this.apiKey}", algorithm="hmac-sha256", headers="host date request-line", signature="placeholder"`),
-      date,
-      host,
-    });
-
-    return `${baseUrl}?${params}`;
+/**
+ * Convert a 16-kHz mono Float32 PCM frame to base64-encoded Int16LE,
+ * which is what iFlytek's `audio/L16;rate=16000` format expects.
+ */
+function float32ToInt16Base64(samples: Float32Array): string {
+  const int16 = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
   }
+  // Treat the underlying bytes of the Int16 buffer as a Uint8Array,
+  // then base64 via String.fromCharCode + btoa. We can't use
+  // TextDecoder here because the bytes are binary, not UTF-8.
+  const bytes = new Uint8Array(int16.buffer);
+  let binary = '';
+  // Process in chunks to avoid stack-overflow from very long
+  // String.fromCharCode arguments.
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+  }
+  return btoa(binary);
 }

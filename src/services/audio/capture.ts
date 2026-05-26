@@ -19,6 +19,13 @@ export interface CaptureState {
 export type CaptureListener = (state: Partial<CaptureState>) => void;
 export type AudioChunkCallback = (data: ArrayBuffer) => void;
 export type AudioSegmentCallback = (data: ArrayBuffer) => void;
+/**
+ * Callback for `pcm-stream` mode. Receives 16-kHz mono Float32 PCM
+ * frames packaged as ArrayBuffer (i.e. `new Float32Array(buf)` rebuilds
+ * the samples). Cadence depends on the AudioWorklet's render quantum;
+ * each invocation typically carries ~10–25 ms of audio.
+ */
+export type PcmFrameCallback = (data: ArrayBuffer) => void;
 
 function mapMicError(err: unknown): string {
   const name = (err as DOMException)?.name;
@@ -75,6 +82,25 @@ class AudioCaptureManager {
   // dropped it.
   private segmentDeliveries = new Set<Promise<void>>();
 
+  // PCM-stream mode state. Set via setPcmStreamMode() before start().
+  // When enabled, capture wires an AudioContext + AudioWorklet to the
+  // MediaStream, resamples to 16 kHz mono Float32, and pushes each
+  // resampled frame to pcmFrameCallbacks. The primary MediaRecorder
+  // above is unaffected (still emits webm/opus chunks to onAudioChunk
+  // + to the file writer); the PCM stream is a parallel sink for
+  // engines that require uncompressed PCM (iFlytek).
+  private pcmStreamEnabled = false;
+  private pcmFrameCallbacks: PcmFrameCallback[] = [];
+  private pcmAudioContext: AudioContext | null = null;
+  private pcmWorkletNode: AudioWorkletNode | null = null;
+  private pcmSourceNode: MediaStreamAudioSourceNode | null = null;
+  // Muted GainNode that gives the Web Audio graph a "sink" so the
+  // worklet's process() actually runs. Without this connection (and
+  // because routing straight to destination would feed back into the
+  // mic), the worklet sits idle. See startPcmStream for details.
+  private pcmMuteNode: GainNode | null = null;
+  private pcmWorkletObjectUrl: string | null = null;
+
   private deviceId = '';
 
   setDevice(deviceId: string): void {
@@ -108,6 +134,42 @@ class AudioCaptureManager {
   setSegmentMode(durationMs: number | null): void {
     this.segmentDurationMs = durationMs && durationMs > 0 ? durationMs : null;
     console.log(`[Audio] Segment mode: ${this.segmentDurationMs ? this.segmentDurationMs + 'ms' : 'off'}`);
+  }
+
+  /**
+   * Enable/disable `pcm-stream` mode. Must be called before `start()`.
+   * When enabled, capture attaches an AudioWorklet to the MediaStream,
+   * resamples its output to 16 kHz mono Float32, and pushes each frame
+   * to subscribers registered through `onPcmFrame`. Used by STT engines
+   * that need raw PCM rather than webm/opus (iFlytek IAT).
+   */
+  setPcmStreamMode(enabled: boolean): void {
+    this.pcmStreamEnabled = !!enabled;
+    console.log(`[Audio] PCM-stream mode: ${this.pcmStreamEnabled ? 'on' : 'off'}`);
+  }
+
+  /**
+   * Subscribe to PCM frames. Cadence depends on the AudioWorklet
+   * render quantum (typically ~10–25 ms per frame at the post-
+   * resample sample rate). Requires `setPcmStreamMode(true)` to be
+   * active before `start()`.
+   */
+  onPcmFrame(cb: PcmFrameCallback): () => void {
+    this.pcmFrameCallbacks.push(cb);
+    return () => { this.pcmFrameCallbacks = this.pcmFrameCallbacks.filter(c => c !== cb); };
+  }
+
+  /**
+   * Drop every chunk/segment/PCM subscriber registered via
+   * onAudioChunk / onSegment / onPcmFrame. Called whenever start()
+   * is about to throw so a subsequent fallback session does not
+   * inherit stale subscribers from the failed start attempt. The
+   * caller (the failing branch) owns the throw itself.
+   */
+  private clearAudioSubscribers(): void {
+    this.audioChunkCallbacks = [];
+    this.segmentCallbacks = [];
+    this.pcmFrameCallbacks = [];
   }
 
   private _state: CaptureState = {
@@ -175,7 +237,12 @@ class AudioCaptureManager {
       this.emit({ micActive: true, deviceLabel: trackLabel, error: null });
     } catch (err) {
       console.warn('[Audio] Failed with selected device:', (err as DOMException)?.name);
-      // Fallback to default
+      // Fallback to default device if we tried a specific one first.
+      // If even the default device fails, throw so meeting-store's
+      // mock-fallback catch runs. A previous version silently `return`ed
+      // on this branch, which made capture.start() resolve with no
+      // recorder configured — the session would then run with neither
+      // real nor mock audio.
       if (!isDefault) {
         try {
           console.log('[Audio] Falling back to default device...');
@@ -187,12 +254,21 @@ class AudioCaptureManager {
           this.emit({ micActive: true, deviceLabel: trackLabel, error: null });
         } catch (fallbackErr) {
           console.error('[Audio] Default also failed:', (fallbackErr as DOMException)?.name);
-          this.emit({ micActive: false, error: mapMicError(fallbackErr) });
-          return;
+          const msg = mapMicError(fallbackErr);
+          // We already opened the main-process file writer above
+          // (audio.startRecording IPC). Close it before throwing so
+          // the fallback session does not race a leaked file handle.
+          try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
+          this.clearAudioSubscribers();
+          this.emit({ micActive: false, error: msg, recording: false });
+          throw new Error(msg);
         }
       } else {
-        this.emit({ micActive: false, error: mapMicError(err) });
-        return;
+        const msg = mapMicError(err);
+        try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
+        this.clearAudioSubscribers();
+        this.emit({ micActive: false, error: msg, recording: false });
+        throw new Error(msg);
       }
     }
 
@@ -241,14 +317,58 @@ class AudioCaptureManager {
       this.recorder.start(250);
       console.log(`[Audio] MediaRecorder started (${mimeType || 'default'}, 250ms chunks)`);
     } catch (err) {
+      // Throw so meeting-store's mock-fallback catch runs. A previous
+      // version `return`ed silently which left capture.start() resolved
+      // with no recorder configured.
+      const msg = `MediaRecorder failed: ${err instanceof Error ? err.message : 'Unknown'} / 录音器创建失败`;
       console.error('[Audio] MediaRecorder creation failed:', err);
-      this.emit({ error: `MediaRecorder failed: ${err instanceof Error ? err.message : 'Unknown'} / 录音器创建失败` });
-      return;
+      try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      this.stream = null;
+      // Same as the getUserMedia throw paths: the main-process file
+      // writer was opened earlier; close it before throwing.
+      try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
+      this.clearAudioSubscribers();
+      this.emit({ error: msg, recording: false, micActive: false });
+      throw new Error(msg);
     }
 
     // Segment recorder (only if setSegmentMode was called before start())
     if (this.segmentDurationMs) {
       this.startSegmentRecorder();
+    }
+
+    // PCM stream (only if setPcmStreamMode(true) was called before start()).
+    // Awaited because the AudioWorklet's addModule is async; setup
+    // failures MUST propagate out of `start()` so the caller can fall
+    // back (e.g. meeting-store can swap in the mock STT engine).
+    // Swallowing the error here was a previous bug: capture appeared
+    // to start successfully, the STT engine thought it was active, but
+    // no PCM frames ever arrived — leaving iFlytek silently dead.
+    if (this.pcmStreamEnabled) {
+      try {
+        await this.startPcmStream();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown';
+        console.error('[Audio] PCM stream setup failed:', err);
+        // Full cleanup symmetric with `stop()`: stop the recorder,
+        // drain its in-flight ondataavailable promises, close the
+        // main-process file writer, and release the MediaStream
+        // tracks. A previous version skipped the drain + writer-close
+        // here, so the fallback mock recording could race against
+        // stale final-chunk state — the .webm file on disk would be
+        // missing its trailing bytes and the IPC handle would still
+        // be open when the mock tried to write to it.
+        try { if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop(); } catch { /* ignore */ }
+        try { await this.mainRecorderDone; } catch { /* ignore */ }
+        this.recorder = null;
+        try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+        this.stream = null;
+        try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
+        this.clearAudioSubscribers();
+        this.pcmStreamEnabled = false;
+        this.emit({ error: `PCM stream setup failed: ${msg} / PCM 流启动失败`, recording: false, micActive: false });
+        throw err;
+      }
     }
 
     // Volume indicator
@@ -343,6 +463,139 @@ class AudioCaptureManager {
     }, this.segmentDurationMs);
   }
 
+  /**
+   * Set up a parallel PCM extraction pipeline:
+   *   MediaStreamSource → AudioWorklet → resample(48k→16k) → callbacks
+   *
+   * The worklet emits Float32 frames at the AudioContext's native
+   * sample rate (typically 48 kHz on macOS/Windows). We then linearly
+   * downsample to 16 kHz mono because that's what iFlytek IAT (and
+   * essentially every Chinese cloud STT) actually accepts. The
+   * resample buffer accumulates fractional samples across frames so
+   * we don't drift over a long session.
+   */
+  private async startPcmStream(): Promise<void> {
+    if (!this.stream) return;
+
+    // Lazy-import the worklet source. Stringifying + Blob URL avoids
+    // any build-time configuration; the source lives in pcm-worklet.ts
+    // and runs in the AudioWorkletGlobalScope thread.
+    const { PCM_WORKLET_SOURCE, PCM_WORKLET_NAME } = await import('./pcm-worklet');
+    const blob = new Blob([PCM_WORKLET_SOURCE], { type: 'application/javascript' });
+    this.pcmWorkletObjectUrl = URL.createObjectURL(blob);
+
+    this.pcmAudioContext = new AudioContext();
+    await this.pcmAudioContext.audioWorklet.addModule(this.pcmWorkletObjectUrl);
+
+    this.pcmSourceNode = this.pcmAudioContext.createMediaStreamSource(this.stream);
+    this.pcmWorkletNode = new AudioWorkletNode(this.pcmAudioContext, PCM_WORKLET_NAME);
+
+    const sourceSampleRate = this.pcmAudioContext.sampleRate; // usually 48000
+    const targetSampleRate = 16000;
+    const ratio = sourceSampleRate / targetSampleRate;
+    // Sample-accurate decimation needs a CARRY buffer across worklet
+    // frames. The previous implementation read `input[srcIdx]` directly
+    // and substituted 0 whenever the computed index exceeded the
+    // current frame — i.e. it injected silence at every frame boundary
+    // (~every 128 samples), audibly corrupting the 16k PCM stream.
+    //
+    // The carry-based variant below appends each new worklet frame to
+    // a leftover buffer, picks output samples on the fixed `ratio`
+    // grid, and saves the unconsumed tail for the next callback. The
+    // global sample index advances monotonically across frames so a
+    // long session does not accumulate phase error.
+    let phase = 0;             // next source sample index we want to pick
+    let carry = new Float32Array(0);
+    // Output batching. The worklet fires every render quantum (128
+    // frames; ~2.7ms at 48kHz). Forwarding to subscribers at that
+    // rate means hundreds of WebSocket sends per second to iFlytek
+    // — well above what they recommend and what the network can
+    // sustain cleanly. We accumulate ~40ms of post-resample audio
+    // (640 samples at 16kHz, iFlytek's recommended frame size) and
+    // emit one buffer per batch.
+    const BATCH_SAMPLES = Math.round(targetSampleRate * 0.04); // 640 @ 16kHz
+    let outBatch: number[] = [];
+    const flushBatch = () => {
+      if (outBatch.length === 0) return;
+      const buf = new Float32Array(outBatch).buffer;
+      for (const cb of this.pcmFrameCallbacks) cb(buf);
+      outBatch = [];
+    };
+
+    this.pcmWorkletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
+      if (!this._state.recording || this.pcmFrameCallbacks.length === 0) return;
+      const input = event.data;
+      if (!input || input.length === 0) return;
+
+      // Concatenate any leftover samples from the previous frame.
+      const merged = new Float32Array(carry.length + input.length);
+      merged.set(carry, 0);
+      merged.set(input, carry.length);
+
+      // Pick on the fixed grid: floor(phase + i*ratio) for i = 0, 1, 2, …
+      while (true) {
+        const idx = Math.floor(phase);
+        if (idx >= merged.length) break;
+        outBatch.push(merged[idx]);
+        phase += ratio;
+        if (outBatch.length >= BATCH_SAMPLES) {
+          flushBatch();
+        }
+      }
+
+      // Carry any samples we haven't consumed yet. The new buffer
+      // starts at the largest integer index we read from; shift phase
+      // accordingly so the next callback sees phase ∈ [0, 1).
+      const drop = Math.floor(phase);
+      if (drop < merged.length) {
+        carry = merged.slice(drop);
+        phase -= drop;
+      } else {
+        carry = new Float32Array(0);
+        phase -= merged.length;
+        if (phase < 0) phase = 0; // numerical safety
+      }
+    };
+
+    // The Web Audio graph only runs nodes that are connected (directly
+    // or transitively) to the destination. An AudioWorklet with no
+    // downstream connection sits idle — its `process()` is never
+    // called, no messages arrive, and iFlytek would see zero PCM
+    // frames. We must connect downstream, but routing the mic output
+    // straight to speakers would create a feedback loop. So we go
+    // through a muted GainNode (gain=0) to give the graph a "sink"
+    // without anything actually playing back.
+    const muteNode = this.pcmAudioContext.createGain();
+    muteNode.gain.value = 0;
+    this.pcmSourceNode.connect(this.pcmWorkletNode);
+    this.pcmWorkletNode.connect(muteNode);
+    muteNode.connect(this.pcmAudioContext.destination);
+    // Keep a reference so stop() can disconnect cleanly.
+    this.pcmMuteNode = muteNode;
+    console.log(`[Audio] PCM stream started (source ${sourceSampleRate} Hz → ${targetSampleRate} Hz mono)`);
+  }
+
+  /**
+   * Tear down the PCM pipeline created in startPcmStream(). Safe to
+   * call when PCM mode is off — every branch checks for null.
+   */
+  private async stopPcmStream(): Promise<void> {
+    try { this.pcmSourceNode?.disconnect(); } catch { /* ignore */ }
+    try { this.pcmWorkletNode?.disconnect(); } catch { /* ignore */ }
+    try { this.pcmMuteNode?.disconnect(); } catch { /* ignore */ }
+    if (this.pcmAudioContext) {
+      try { await this.pcmAudioContext.close(); } catch { /* ignore */ }
+    }
+    if (this.pcmWorkletObjectUrl) {
+      try { URL.revokeObjectURL(this.pcmWorkletObjectUrl); } catch { /* ignore */ }
+      this.pcmWorkletObjectUrl = null;
+    }
+    this.pcmSourceNode = null;
+    this.pcmWorkletNode = null;
+    this.pcmMuteNode = null;
+    this.pcmAudioContext = null;
+  }
+
   async stop(): Promise<string> {
     if (this.volumeInterval) { clearInterval(this.volumeInterval); this.volumeInterval = null; }
 
@@ -381,10 +634,19 @@ class AudioCaptureManager {
     try { await this.mainRecorderDone; } catch { /* ignore */ }
     this.recorder = null;
 
+    // Tear down the PCM pipeline (no-op when PCM mode is off). Done
+    // BEFORE clearing pcmFrameCallbacks below so a final worklet
+    // postMessage doesn't sneak through.
+    if (this.pcmStreamEnabled) {
+      await this.stopPcmStream();
+      this.pcmStreamEnabled = false;
+    }
+
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
 
     this.audioChunkCallbacks = [];
     this.segmentCallbacks = [];
+    this.pcmFrameCallbacks = [];
 
     const tempPath = await window.electronAPI?.audio.stopRecording() as string;
     this.emit({ recording: false, micActive: false, volume: 0, deviceLabel: '', filePath: tempPath || this._state.filePath });

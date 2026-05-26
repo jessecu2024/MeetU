@@ -200,8 +200,13 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     useSummaryStore.getState().setActive(true);
     useSummaryStore.getState().clear();
 
-    // Listen for audio capture state changes
-    const unsubscribe = audioManager.onChange((state) => {
+    // Listen for audio capture state changes. The subscriber is
+    // tracked through `unsubscribe` so the fallback path (real audio
+    // start fails → swap to mockCaptureManager) can re-subscribe
+    // against the right source; without that, the UI would keep
+    // reading state from the abandoned real `audioManager` and the
+    // mock's mic/volume/filePath updates would never reach the user.
+    const stateListener = (state: Partial<import('../services/audio/capture').CaptureState>) => {
       set({
         micActive: state.micActive ?? get().micActive,
         currentVolume: state.volume ?? get().currentVolume,
@@ -210,7 +215,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         bluetoothDetected: state.bluetoothDetected ?? get().bluetoothDetected,
         deviceLabel: state.deviceLabel ?? get().deviceLabel,
       });
-    });
+    };
+    let unsubscribe = audioManager.onChange(stateListener);
 
     // Start STT session — fallback to mock if it fails
     let activeSttEngine = sttEngine;
@@ -255,35 +261,100 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     }
 
     try {
-      // Hook up audio to STT engine via capture manager callbacks. Two
-      // delivery modes exist; the engine declares which one it wants:
-      // - 'stream' (default): the engine receives raw 250ms MediaRecorder
-      //   chunks. Used by Deepgram (streams audio over a WebSocket).
-      // - 'segment': capture spawns a parallel MediaRecorder per segment
-      //   window and each callback fires with one complete webm file.
-      //   Used by Whisper API (each REST request needs a self-contained
-      //   audio file). setSegmentMode must run BEFORE audioManager.start
-      //   so the segment recorder is wired up on the first window.
+      // Hook up audio to the STT engine via capture-manager callbacks.
+      // Three delivery modes exist; the engine declares which it wants:
+      // - 'stream' (default): raw 250ms MediaRecorder chunks (webm/opus).
+      //   Deepgram streams these straight over its WebSocket.
+      // - 'segment': capture spawns a parallel MediaRecorder per window;
+      //   each callback fires with one complete webm file. Whisper API
+      //   needs this because every REST request carries one audio file.
+      // - 'pcm-stream': capture attaches an AudioWorklet + resampler
+      //   and emits 16-kHz mono Float32 frames. iFlytek needs this
+      //   because IAT only accepts audio/L16;rate=16000.
+      //
+      // Mode setters MUST be called BEFORE audioManager.start so the
+      // corresponding pipeline is wired on the first frame/window.
       if (useRealAudio && !activeSttIsMock) {
-        if (
-          activeSttEngine.audioMode === 'segment' &&
-          activeSttEngine.segmentDurationMs &&
-          activeSttEngine.segmentDurationMs > 0
-        ) {
+        const mode = activeSttEngine.audioMode ?? 'stream';
+        if (mode === 'segment' && activeSttEngine.segmentDurationMs && activeSttEngine.segmentDurationMs > 0) {
           captureManager.setSegmentMode(activeSttEngine.segmentDurationMs);
+          captureManager.setPcmStreamMode(false);
           captureManager.onSegment((data: ArrayBuffer) => {
+            activeSttEngine.feedAudio(data);
+          });
+        } else if (mode === 'pcm-stream') {
+          captureManager.setSegmentMode(null);
+          captureManager.setPcmStreamMode(true);
+          captureManager.onPcmFrame((data: ArrayBuffer) => {
             activeSttEngine.feedAudio(data);
           });
         } else {
           captureManager.setSegmentMode(null);
+          captureManager.setPcmStreamMode(false);
           captureManager.onAudioChunk((data: ArrayBuffer) => {
             activeSttEngine.feedAudio(data);
           });
         }
       }
 
+      // Tracks the audio source actually in use, independent of the
+      // STT engine. Stays in sync with `audioManager` so stopRecording
+      // can `audioManager.stop()` against the right manager. The
+      // previous `useMock` field conflated audio-mock with stt-mock
+      // and would tell stopRecording to stop the wrong manager (e.g.
+      // STT-only fallback would stop the mock capture and leave the
+      // real mic running indefinitely).
+      let useMockAudio = !useRealAudio;
       // Start audio capture
-      await audioManager.start();
+      try {
+        await audioManager.start();
+      } catch (audioErr) {
+        // Audio capture failed to come up — for engines with custom
+        // pipelines (PCM stream for iFlytek), this can happen if the
+        // AudioWorklet's addModule rejects, the AudioContext is
+        // blocked, etc. Rather than abort the session, fall through
+        // to a mock-audio + mock-STT pairing so the user can still
+        // exercise the meeting flow and see what happened.
+        console.error('[MeetingStore] Real audio start failed, falling back to mock:', audioErr);
+        const msg = audioErr instanceof Error ? audioErr.message : 'Audio start failed';
+        set({
+          audioError: `Audio capture failed: ${msg} — running in demo mode / 音频启动失败，已切换到演示模式`,
+        });
+        try { await activeSttEngine.stopSession(); } catch { /* ignore */ }
+
+        const mockEngine = sttRegistry.getMock();
+        if ('setUserName' in mockEngine) {
+          (mockEngine as import('../services/stt-engine/mock-engine').MockSTTEngine)
+            .setUserName(settings.userProfile.name, settings.userProfile.nameEn);
+        }
+        mockEngine.onTranscript((result) => {
+          useTranscriptStore.getState().addResult(result);
+          if (result.isFinal) {
+            const entry = {
+              id: result.id, text: result.text, isFinal: true,
+              speaker: result.speaker, language: result.language,
+              startMs: result.startMs, endMs: result.endMs,
+              confidence: result.confidence, timestamp: Date.now(),
+            };
+            translationService.processEntry(entry);
+            mentionDetector.processEntry(entry);
+          }
+        });
+        await mockEngine.startSession({ sampleRate: 16000 });
+        activeSttEngine = mockEngine;
+        activeSttIsMock = true;
+        // Audio source is now the mock too — reflect that in the
+        // dedicated flag so stopRecording calls mockCaptureManager.stop()
+        // (and not the abandoned real captureManager).
+        useMockAudio = true;
+        // Re-route the audio-state subscription from the failed real
+        // manager onto the mock so the UI continues to see mic
+        // active / volume / filePath updates during demo mode.
+        try { unsubscribe(); } catch { /* ignore */ }
+        unsubscribe = mockCaptureManager.onChange(stateListener);
+        await mockCaptureManager.start();
+        transcriptStore.startSession(meetingId, 'mock', true);
+      }
 
       const startTime = Date.now();
       const interval = setInterval(() => {
@@ -294,7 +365,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         isRecording: true,
         recordingStartTime: startTime,
         meetingId,
-        useMock: !useRealAudio,
+        // useMock used to mean "show demo banner" AND "stopRecording
+        // picks mockCaptureManager". Conflating audio mock with STT
+        // mock leaks the real mic when only STT falls back to mock.
+        // Now: useMock follows audio source only; sttMock follows STT.
+        useMock: useMockAudio,
         sttActive: true,
         sttMock: activeSttIsMock,
         sttEngineId: activeSttIsMock ? 'mock' : activeSttEngine.id,

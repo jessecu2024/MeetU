@@ -20,12 +20,13 @@ describe('isSelectableSTTEngine', () => {
     expect(isSelectableSTTEngine('whisper_api')).toBe(true);
   });
 
-  it('rejects planned engines (xfyun) — its auth signing is still a placeholder so live sessions fail', () => {
-    // Was 'beta' in earlier iterations on the assumption users could at
-    // least attempt a connection. Codex review showed testConnection was
-    // lying (format-only) and startSession would fail at the auth step, so
-    // xfyun is non-selectable until HMAC-SHA256 signing lands.
-    expect(isSelectableSTTEngine('xfyun')).toBe(false);
+  it('accepts xfyun now that HMAC-SHA256 signing + PCM stream mode are implemented', () => {
+    // Was 'planned' for a long while because the WebSocket auth signer
+    // emitted `signature="placeholder"` and audio came in as webm/opus
+    // (engine expected PCM). Both are real now: signature is built
+    // via WebCrypto in xfyun-signature.ts, and capture has a dedicated
+    // 'pcm-stream' audioMode driving an AudioWorklet → 16-kHz resampler.
+    expect(isSelectableSTTEngine('xfyun')).toBe(true);
   });
 
   it('rejects planned engines (local_whisper) — silently falls back to demo otherwise', () => {
@@ -52,12 +53,11 @@ describe('getDefaultSTTEngineForRegion', () => {
     expect(getDefaultSTTEngineForRegion('global')).toBe('deepgram');
   });
 
-  it('returns deepgram for China users today — xfyun is planned, so the function skips it and falls back to the global default', () => {
-    // Codex review caught the previous behavior: returning 'xfyun' for
-    // China handed users a default that was guaranteed to fail at runtime
-    // because xfyun's auth signer is a placeholder. The function now walks
-    // a candidate list rather than returning the region preference blindly.
-    expect(getDefaultSTTEngineForRegion('china')).toBe('deepgram');
+  it('returns xfyun for China users now that the engine is stable', () => {
+    // Was 'deepgram' for a while because xfyun was planned; now that
+    // its auth signing and PCM pipeline are both shipping, China users
+    // land on the region-native engine again.
+    expect(getDefaultSTTEngineForRegion('china')).toBe('xfyun');
   });
 
   it('returns deepgram when region is null or undefined (safe fallback)', () => {
@@ -83,19 +83,16 @@ describe('migrateSTTConfig', () => {
     expect(r.engineChanged).toBe(false);
   });
 
-  it('migrates a stored xfyun selection away — xfyun is currently planned (HMAC signing TODO), not selectable', () => {
-    // China users with a stored xfyun selection now land on deepgram (the
-    // first stable candidate) instead of being stuck on an engine whose
-    // sessions cannot authenticate. The stored xfyun API key is also
-    // pruned (not preserved) because keeping a secret for a non-selectable
-    // engine in encrypted storage is what the migration is supposed to
-    // clean up. Once xfyun becomes selectable (HMAC signing implemented),
-    // the user re-enters their credentials.
+  it('keeps a stored xfyun selection now that the engine is stable', () => {
+    // For a long while xfyun was 'planned' and the migration pruned it
+    // from both the active selection and the key map. Now that the
+    // engine ships, China users with a stored xfyun selection should
+    // simply keep it (and their AppID:APIKey:APISecret credential).
     const r = migrateSTTConfig('xfyun', { xfyun: 'app:key:secret' }, 'china');
-    expect(r.engine).toBe('deepgram');
-    expect(r.engineChanged).toBe(true);
-    expect(r.apiKeys).toEqual({});
-    expect(r.prunedKeys).toEqual(['xfyun']);
+    expect(r.engine).toBe('xfyun');
+    expect(r.engineChanged).toBe(false);
+    expect(r.apiKeys).toEqual({ xfyun: 'app:key:secret' });
+    expect(r.prunedKeys).toEqual([]);
   });
 
   it('rewrites a stored local_whisper selection to the region default and reports the change', () => {
@@ -104,21 +101,21 @@ describe('migrateSTTConfig', () => {
     expect(r.engineChanged).toBe(true);
   });
 
-  it('rewrites local_whisper to the China region fallback (deepgram today)', () => {
+  it('rewrites local_whisper to the China region default (xfyun today)', () => {
     const r = migrateSTTConfig('local_whisper', {}, 'china');
-    expect(r.engine).toBe('deepgram');
+    expect(r.engine).toBe('xfyun');
     expect(r.engineChanged).toBe(true);
   });
 
-  it('rewrites a removed engine ID (aliyun_speech) to the region fallback', () => {
+  it('rewrites a removed engine ID (aliyun_speech) to the region fallback (xfyun for China)', () => {
     const r = migrateSTTConfig('aliyun_speech', {}, 'china');
-    expect(r.engine).toBe('deepgram');
+    expect(r.engine).toBe('xfyun');
     expect(r.engineChanged).toBe(true);
   });
 
   it('returns the region default for a missing / undefined stored engine', () => {
     expect(migrateSTTConfig(undefined, {}, 'global').engine).toBe('deepgram');
-    expect(migrateSTTConfig(null, {}, 'china').engine).toBe('deepgram');
+    expect(migrateSTTConfig(null, {}, 'china').engine).toBe('xfyun');
     expect(migrateSTTConfig('', {}, null).engine).toBe('deepgram');
   });
 
@@ -159,20 +156,21 @@ describe('migrateSTTConfig', () => {
     const r = migrateSTTConfig('local_whisper', {
       aliyun_speech: 'old1',
       local_whisper: 'old2',
-      xfyun: 'old3',
-      whisper_api: 'sk-also-valid',  // whisper_api is stable now, key kept
-      deepgram: 'sk-real',
+      xfyun: 'app:key:secret',          // xfyun is stable now, key kept
+      whisper_api: 'sk-also-valid',     // whisper_api stable, key kept
+      deepgram: 'sk-real',              // deepgram stable, key kept
     }, null);
     expect(r.engine).toBe('deepgram');               // region null → global default
     expect(r.engineChanged).toBe(true);
-    // Both stable-engine keys are kept; only truly-unusable engine keys
-    // (aliyun_speech removed; local_whisper + xfyun still planned) are
+    // Three stable-engine keys retained; only truly-unusable engine
+    // keys (aliyun_speech removed, local_whisper still planned) are
     // pruned from encrypted storage.
     expect(r.apiKeys).toEqual({
       deepgram: 'sk-real',
       whisper_api: 'sk-also-valid',
+      xfyun: 'app:key:secret',
     });
-    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper', 'xfyun']);
+    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper']);
   });
 });
 
