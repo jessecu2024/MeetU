@@ -84,14 +84,13 @@ export function mapSystemAudioError(err: unknown): string {
   const message = (err as Error)?.message || '';
   switch (name) {
     case 'NotAllowedError':
-      // Permission denied at the OS / Electron layer. On Windows
-      // this is rare (loopback does not normally require a prompt);
-      // it usually indicates a session/permission policy bug. Note:
-      // we do NOT direct users to macOS Screen Recording settings
-      // here — this code path is Windows-only per Electron 30, and
-      // mis-directing macOS users to grant a permission that won't
-      // help is worse than the generic phrasing.
-      return 'System audio access denied at the OS / session layer. This Electron loopback path is Windows-only; macOS native loopback is on the roadmap (PR #4b). / 系统音频权限在 OS / 会话层被拒绝;此 Electron loopback 路径仅 Windows 支持,macOS 原生 loopback 在路线图中(PR #4b)';
+      // Permission denied at the OS / Electron layer. This branch is
+      // the getDisplayMedia (Windows electron-loopback) path only —
+      // macOS uses the native ScreenCaptureKit module whose errors
+      // arrive via the IPC onError channel, not here. On Windows this
+      // is rare (loopback doesn't normally prompt); it usually
+      // indicates a session/permission policy bug.
+      return 'System audio access denied at the OS / session layer (Windows loopback path). Please report the OS and how MeetU was launched. / 系统音频权限在 OS / 会话层被拒绝(Windows loopback 路径),请反馈系统信息与启动方式';
     case 'NotFoundError':
       return 'No system audio source available. Make sure something is playing through the system output. / 未找到系统音频源';
     case 'NotReadableError':
@@ -126,7 +125,11 @@ export function mapSystemAudioError(err: unknown): string {
       // getDisplayMedia is called without any constraints at all.
       return 'System audio call rejected by the browser (bad constraints). This is likely a MeetU bug — please report it. / 系统音频调用参数被浏览器拒绝，可能是应用 bug，请反馈';
     case 'NotSupportedError':
-      return 'System audio capture via the Electron loopback path is supported on Windows 10+ only at this time. On macOS, route through a virtual audio cable or wait for PR #4b (native ScreenCaptureKit module). / 此 Electron loopback 路径仅 Windows 10+ 支持。macOS 用户请用虚拟音频线缆,或等待 PR #4b 上线原生 ScreenCaptureKit 模块';
+      // getDisplayMedia loopback path is Windows-only. macOS has its
+      // own native ScreenCaptureKit backend (selected by the probe as
+      // mode:'macos-native'), so a macOS user should never reach this
+      // string — if they do, the backend was mis-selected.
+      return 'System audio capture via the Electron loopback path is supported on Windows 10+ only. macOS uses the native ScreenCaptureKit backend instead. / 此 Electron loopback 路径仅 Windows 10+ 支持;macOS 使用原生 ScreenCaptureKit 后端';
     case 'AbortError':
       return 'System audio request was rejected by the main process (no screen sources). / 主进程未返回有效的屏幕源';
     default:
@@ -192,11 +195,55 @@ class AudioCaptureManager {
   private pcmMuteNode: GainNode | null = null;
   private pcmWorkletObjectUrl: string | null = null;
 
+  // macOS native ScreenCaptureKit source state. When the selected
+  // device is SYSTEM_AUDIO_DEVICE_ID AND the probe reported
+  // mode==='macos-native', start() takes the native path: it asks the
+  // main process to start ScreenCaptureKit, receives 16-kHz mono
+  // Float32 PCM frames over IPC, and replays them through a playback
+  // AudioWorklet into a MediaStreamAudioDestinationNode. The
+  // destination's `.stream` then feeds the normal MediaRecorder /
+  // segment / resampler pipeline, so every STT engine and file
+  // recording works identically to the getUserMedia/getDisplayMedia
+  // paths.
+  private systemAudioBackend: 'electron-loopback' | 'macos-native' | null = null;
+  private systemAudioPid: number | null = null;
+  private nativePlaybackCtx: AudioContext | null = null;
+  private nativePlaybackNode: AudioWorkletNode | null = null;
+  private nativePlaybackUrl: string | null = null;
+  private nativePcmUnsub: (() => void) | null = null;
+  private nativeErrorUnsub: (() => void) | null = null;
+  private nativeActive = false;
+  // Monotonic token bumped SYNCHRONOUSLY the moment a stop is
+  // initiated (top of doStop) and at the top of stopNativeMacOSSource.
+  // startNativeMacOSSource captures the token at entry and re-checks
+  // it at every await boundary; a mismatch means a stop raced in and
+  // the start must abort WITHOUT issuing macos.start(). This is more
+  // robust than the `nativeActive` flag alone, because nativeActive is
+  // only cleared late in stopNativeMacOSSource (after its own awaits),
+  // leaving a window where an in-flight start could still see it true.
+  private nativeStartToken = 0;
+
   private deviceId = '';
 
   setDevice(deviceId: string): void {
     this.deviceId = deviceId || '';
     console.log(`[Audio] Device set: "${this.deviceId || '(default)'}"`);
+  }
+
+  /**
+   * Choose which system-audio backend `start()` uses when the device
+   * is SYSTEM_AUDIO_DEVICE_ID. Driven by the renderer from the
+   * `system-audio:probe` result:
+   *   - 'electron-loopback' (Windows) -> getDisplayMedia path
+   *   - 'macos-native'      (macOS)   -> native ScreenCaptureKit IPC
+   *   - null                          -> default to getDisplayMedia
+   * `pid` is only honored on the macOS native path: a positive pid
+   * captures that one application; null/0 captures the full system mix.
+   */
+  setSystemAudioBackend(mode: 'electron-loopback' | 'macos-native' | null, pid?: number | null): void {
+    this.systemAudioBackend = mode;
+    this.systemAudioPid = pid && pid > 0 ? pid : null;
+    console.log(`[Audio] System-audio backend: ${mode ?? '(default)'}${this.systemAudioPid ? ` pid=${this.systemAudioPid}` : ''}`);
   }
 
   onAudioChunk(cb: AudioChunkCallback): () => void {
@@ -284,7 +331,9 @@ class AudioCaptureManager {
   async start(): Promise<void> {
     if (this._state.recording) return;
     const useSystemAudio = this.deviceId === SYSTEM_AUDIO_DEVICE_ID;
-    console.log(`[Audio] Starting capture (path=${useSystemAudio ? 'getDisplayMedia/loopback' : 'getUserMedia'})`);
+    const useNativeMacOS = useSystemAudio && this.systemAudioBackend === 'macos-native';
+    const path = useNativeMacOS ? 'macos-native/ScreenCaptureKit' : useSystemAudio ? 'getDisplayMedia/loopback' : 'getUserMedia';
+    console.log(`[Audio] Starting capture (path=${path})`);
 
     // ── Diagnostics ──
     try {
@@ -315,7 +364,29 @@ class AudioCaptureManager {
     }
     this.emit({ recording: true, filePath, error: null });
 
-    if (useSystemAudio) {
+    if (useNativeMacOS) {
+      // macOS native ScreenCaptureKit path. The main process drives
+      // the native addon; we receive PCM over IPC and rebuild a
+      // MediaStream from it so the downstream pipeline is unchanged.
+      try {
+        this.stream = await this.startNativeMacOSSource();
+        const trackLabel = this.systemAudioPid
+          ? `System Audio (app pid ${this.systemAudioPid})`
+          : 'System Audio (whole system)';
+        console.log(`[Audio] macOS native stream OK — ${trackLabel}`);
+        this.emit({ micActive: true, deviceLabel: trackLabel, error: null });
+      } catch (err) {
+        console.error('[Audio] macOS native capture failed:', err);
+        const msg = err instanceof Error ? err.message : 'macOS native capture failed';
+        await this.stopNativeMacOSSource();
+        try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+        this.stream = null;
+        try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
+        this.clearAudioSubscribers();
+        this.emit({ micActive: false, error: `System audio (macOS native): ${msg} / macOS 原生系统音频失败`, recording: false });
+        throw new Error(msg);
+      }
+    } else if (useSystemAudio) {
       // getDisplayMedia requires a video constraint to be present even
       // when we only want audio. We ask for the smallest possible frame
       // (1×1 at 1 fps) and stop the video track immediately to free the
@@ -458,6 +529,10 @@ class AudioCaptureManager {
       // with no recorder configured.
       const msg = `MediaRecorder failed: ${err instanceof Error ? err.message : 'Unknown'} / 录音器创建失败`;
       console.error('[Audio] MediaRecorder creation failed:', err);
+      // If the stream came from the macOS native path, stop
+      // ScreenCaptureKit in the main process too — otherwise the
+      // SCStream keeps running after we abandon the renderer side.
+      if (this.nativeActive) { await this.stopNativeMacOSSource(); }
       try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
       this.stream = null;
       // Same as the getUserMedia throw paths: the main-process file
@@ -497,6 +572,8 @@ class AudioCaptureManager {
         try { if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop(); } catch { /* ignore */ }
         try { await this.mainRecorderDone; } catch { /* ignore */ }
         this.recorder = null;
+        // Stop ScreenCaptureKit in main if the stream came from there.
+        if (this.nativeActive) { await this.stopNativeMacOSSource(); }
         try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
         this.stream = null;
         try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
@@ -712,6 +789,157 @@ class AudioCaptureManager {
   }
 
   /**
+   * Build a MediaStream from the macOS native ScreenCaptureKit PCM
+   * feed. Sequence:
+   *
+   *   1. AudioContext at 16 kHz (matches the native addon's output
+   *      rate, so the playback worklet replays 1:1 with no resample).
+   *   2. Playback AudioWorklet (pcm-playback-worklet) that ring-buffers
+   *      incoming PCM and emits it on the render thread.
+   *   3. MediaStreamAudioDestinationNode whose `.stream` is returned —
+   *      this is what the normal MediaRecorder / segment / resampler
+   *      pipeline consumes downstream.
+   *   4. Subscribe to IPC PCM frames + error events from the main
+   *      process, then ask main to start the native capture.
+   *
+   * Throws (after cleaning up partial state) if the main process
+   * reports the native start failed, so start()'s catch can fall back.
+   */
+  private async startNativeMacOSSource(): Promise<MediaStream> {
+    const macos = window.electronAPI?.audio.macos;
+    if (!macos) {
+      throw new Error('macOS native capture IPC bridge is unavailable (preload missing audio.macos)');
+    }
+
+    // Mark the native path "engaged" BEFORE any await. nativeActive
+    // gates whether stop() tears the native side down. If we only set
+    // it after `await macos.start()` resolved, a stop() during that
+    // await would skip stopNativeMacOSSource() and leak the SCStream +
+    // IPC listeners on the main side. Setting it now means every
+    // teardown path (doStop, MediaRecorder failure, PCM failure, this
+    // method's own throw) cleans up the native session.
+    this.nativeActive = true;
+    // Capture the cancellation token at entry. Any stop() (or nested
+    // stopNativeMacOSSource) bumps this synchronously, so a mismatch at
+    // any await boundary below means "a stop raced in — abort".
+    const token = ++this.nativeStartToken;
+
+    // 16 kHz context so the worklet replays the native PCM 1:1.
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    this.nativePlaybackCtx = ctx;
+
+    const { PCM_PLAYBACK_WORKLET_SOURCE, PCM_PLAYBACK_WORKLET_NAME } = await import('./pcm-playback-worklet');
+    const blob = new Blob([PCM_PLAYBACK_WORKLET_SOURCE], { type: 'application/javascript' });
+    this.nativePlaybackUrl = URL.createObjectURL(blob);
+    await ctx.audioWorklet.addModule(this.nativePlaybackUrl);
+
+    const playerNode = new AudioWorkletNode(ctx, PCM_PLAYBACK_WORKLET_NAME, {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    this.nativePlaybackNode = playerNode;
+
+    const dest = ctx.createMediaStreamDestination();
+    playerNode.connect(dest);
+
+    // Pump IPC PCM frames into the worklet's ring buffer. We transfer
+    // the underlying buffer to avoid a copy across the postMessage.
+    this.nativePcmUnsub = macos.onPcmFrame((buf: ArrayBuffer) => {
+      if (!this._state.recording) return;
+      const f32 = new Float32Array(buf);
+      try {
+        playerNode.port.postMessage(f32, [f32.buffer]);
+      } catch { /* worklet torn down mid-flight */ }
+    });
+    this.nativeErrorUnsub = macos.onError((err: { message: string; code: number }) => {
+      // Fatal SCStream error (permission revoked mid-session, target
+      // app quit, etc.). The native session has already torn itself
+      // down on the main side (didStopWithError → Idle). The renderer
+      // pipeline would otherwise keep recording silence, so we tear
+      // the whole capture down here. stop() is re-entrancy-guarded, so
+      // a near-simultaneous user-initiated stop won't double-run.
+      console.error('[Audio] macOS native capture error — stopping session:', err);
+      this.emit({ error: `System audio capture stopped: ${err.message} (code ${err.code}) / 系统音频捕获中断` });
+      if (this._state.recording) {
+        void this.stop().catch((e) => console.error('[Audio] stop() after native error failed:', e));
+      }
+    });
+
+    // Pre-start cancellation check. The AudioContext / worklet setup
+    // above contains awaits; if a stop raced in during them, the token
+    // was bumped synchronously. We must NOT issue macos.start() after a
+    // stop — otherwise ScreenCaptureKit starts (and may stall on a
+    // permission prompt) AFTER the session was torn down. This check is
+    // synchronous and immediately precedes the start call, so no stop()
+    // can interleave between the check and the call.
+    if (this.nativeStartToken !== token) {
+      throw new Error('macOS native capture was stopped during setup');
+    }
+
+    // Ask the main process to start ScreenCaptureKit. If this rejects
+    // (permission denied, no displays, pid gone), the caller's catch
+    // tears everything down.
+    const res = await macos.start({ pid: this.systemAudioPid ?? undefined });
+    if (!res.ok) {
+      throw new Error(res.error || 'native start returned ok:false');
+    }
+
+    // Post-start cancellation check. If stop() ran while we were
+    // awaiting macos.start(), the token changed and stopNativeMacOSSource
+    // already sent macos.stop() (the native state machine turns that
+    // into a cancel). Don't hand a now-dead stream back to start() for
+    // MediaRecorder wiring; throw so start()'s catch cleans up the rest.
+    if (this.nativeStartToken !== token) {
+      throw new Error('macOS native capture was stopped during start');
+    }
+
+    // nativeActive was already set at the top of this method.
+    return dest.stream;
+  }
+
+  /**
+   * Tear down the macOS native source created in
+   * startNativeMacOSSource(). Safe to call when the native path was
+   * never started — every branch checks for null. Unsubscribes IPC
+   * listeners, tells main to stop ScreenCaptureKit, and closes the
+   * playback AudioContext.
+   */
+  private async stopNativeMacOSSource(): Promise<void> {
+    // Invalidate any in-flight start SYNCHRONOUSLY (before the awaits
+    // below), and clear nativeActive up-front, so a startNativeMacOSSource()
+    // suspended on its setup awaits aborts at its next checkpoint
+    // rather than racing macos.start() against this teardown. (doStop
+    // also bumps the token, but stopNativeMacOSSource is called
+    // directly from start()'s own failure paths too, so it must be
+    // self-sufficient.)
+    this.nativeStartToken++;
+    this.nativeActive = false;
+    try { this.nativePcmUnsub?.(); } catch { /* ignore */ }
+    try { this.nativeErrorUnsub?.(); } catch { /* ignore */ }
+    this.nativePcmUnsub = null;
+    this.nativeErrorUnsub = null;
+
+    // Tell main to stop the native capture regardless of our local
+    // `nativeActive` flag — start() may have failed AFTER the main
+    // process began capturing (e.g. the playback graph threw), and we
+    // must not leak a live SCStream.
+    try { await window.electronAPI?.audio.macos?.stop(); } catch { /* ignore */ }
+
+    try { this.nativePlaybackNode?.disconnect(); } catch { /* ignore */ }
+    if (this.nativePlaybackCtx) {
+      try { await this.nativePlaybackCtx.close(); } catch { /* ignore */ }
+    }
+    if (this.nativePlaybackUrl) {
+      try { URL.revokeObjectURL(this.nativePlaybackUrl); } catch { /* ignore */ }
+      this.nativePlaybackUrl = null;
+    }
+    this.nativePlaybackNode = null;
+    this.nativePlaybackCtx = null;
+    this.nativeActive = false;
+  }
+
+  /**
    * Tear down the PCM pipeline created in startPcmStream(). Safe to
    * call when PCM mode is off — every branch checks for null.
    */
@@ -732,7 +960,23 @@ class AudioCaptureManager {
     this.pcmAudioContext = null;
   }
 
+  // Guards stop() against re-entrancy: a fatal native-error handler
+  // and a user-initiated stop can fire near-simultaneously. The first
+  // call owns teardown; the second awaits the same promise.
+  private stopInFlight: Promise<string> | null = null;
+
   async stop(): Promise<string> {
+    if (this.stopInFlight) return this.stopInFlight;
+    this.stopInFlight = this.doStop().finally(() => { this.stopInFlight = null; });
+    return this.stopInFlight;
+  }
+
+  private async doStop(): Promise<string> {
+    // Invalidate any in-flight native start SYNCHRONOUSLY, before any
+    // await below. A startNativeMacOSSource() suspended on its setup
+    // awaits will see the bumped token at its next checkpoint and abort
+    // instead of issuing macos.start() after we've torn down.
+    this.nativeStartToken++;
     if (this.volumeInterval) { clearInterval(this.volumeInterval); this.volumeInterval = null; }
 
     // Disable scheduling of further segments BEFORE we trigger the
@@ -776,6 +1020,15 @@ class AudioCaptureManager {
     if (this.pcmStreamEnabled) {
       await this.stopPcmStream();
       this.pcmStreamEnabled = false;
+    }
+
+    // Tear down the macOS native source (no-op when the native path
+    // was not used). Stops ScreenCaptureKit in the main process,
+    // unsubscribes IPC, and closes the playback context. Done before
+    // we stop the local MediaStream tracks because the native source
+    // IS that stream's producer.
+    if (this.nativeActive) {
+      await this.stopNativeMacOSSource();
     }
 
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }

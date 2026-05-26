@@ -9,56 +9,76 @@ import { describe, it, expect } from 'vitest';
 import { probeSystemAudioSupport } from './system-audio-probe';
 
 describe('probeSystemAudioSupport', () => {
-  // ── darwin gating ──
-  // Electron 30's `setDisplayMediaRequestHandler` typedef explicitly
-  // says `audio:'loopback'` is supported on Windows only. Even though
-  // ScreenCaptureKit itself ships in macOS 13+, the Electron renderer
-  // path is not wired to use it. Returning `supported:true` on darwin
-  // would let the renderer race a request that silently produces dead
-  // audio or rejects with NotAllowedError — no actionable recovery.
-  // The probe MUST return `supported:false` on every darwin version
-  // until either (a) Electron exposes the macOS path or (b) the
-  // native N-API module (PR #4b) replaces this code path entirely.
+  // ── darwin: native ScreenCaptureKit path (PR #4b) ──
+  // macOS 13+ is supported via the native addon, NOT via Electron's
+  // getDisplayMedia (which is Windows-only). The probe upgrades darwin
+  // to `mode:'macos-native'` ONLY when the caller reports the addon
+  // loaded (`macOSNativeAvailable:true`). Without the addon, darwin is
+  // unsupported with an actionable reason. macOS <13 is always
+  // unsupported (ScreenCaptureKit requires 13+).
 
-  it('rejects darwin 13.0.0 because Electron getDisplayMedia loopback is Windows-only', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.0.0' });
-    expect(r.supported).toBe(false);
-    expect(r.reason).toMatch(/macOS/);
-    expect(r.reason).toMatch(/Windows only|仅 Windows/);
+  it('supports darwin 13.0.0 when the native addon is available, in macos-native mode with per-app capture', () => {
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.0.0', macOSNativeAvailable: true });
+    expect(r.supported).toBe(true);
+    expect(r.mode).toBe('macos-native');
+    expect(r.perAppCapture).toBe(true);
+    expect(r.version).toBe('13.0.0');
   });
 
-  it('rejects darwin 14.4 (current macOS) — version is not the gating reason; the wrapper path is', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '14.4' });
-    expect(r.supported).toBe(false);
-    expect(r.reason).toMatch(/roadmap|路线图/);
+  it('supports darwin 14.4 (no patch) when the native addon is available', () => {
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '14.4', macOSNativeAvailable: true });
+    expect(r.supported).toBe(true);
+    expect(r.mode).toBe('macos-native');
   });
 
-  it('rejects darwin 12.7.4 (also unsupported on this wrapper path)', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '12.7.4' });
-    expect(r.supported).toBe(false);
-  });
-
-  it('rejects darwin with empty / garbage version (unsupported regardless)', () => {
-    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '' }).supported).toBe(false);
-    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'unknown' }).supported).toBe(false);
-    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'v13.0.0' }).supported).toBe(false);
-  });
-
-  it('echoes the screen-recording permission status on darwin (UI may still want to display it)', () => {
+  it('rejects darwin 13+ when the native addon failed to load, surfacing the loader reason', () => {
     const r = probeSystemAudioSupport({
       platform: 'darwin',
       macOsVersion: '14.0.0',
-      screenPermission: 'granted',
+      macOSNativeAvailable: false,
+      macOSNativeReason: 'Could not load build/Release/meetu_screencapture.node: dlopen failed',
     });
-    expect(r.permission).toBe('granted');
+    expect(r.supported).toBe(false);
+    expect(r.mode).toBeUndefined();
+    expect(r.reason).toMatch(/dlopen failed/);
+  });
+
+  it('rejects darwin 13+ with a generic reason when the addon is unavailable and no reason is given', () => {
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.6.0', macOSNativeAvailable: false });
+    expect(r.supported).toBe(false);
+    expect(r.reason).toMatch(/npm rebuild|not loaded/);
+  });
+
+  it('rejects darwin 12.7.4 outright — ScreenCaptureKit requires macOS 13+, even if the addon claims available', () => {
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '12.7.4', macOSNativeAvailable: true });
+    expect(r.supported).toBe(false);
+    expect(r.reason).toMatch(/macOS 13/);
+    expect(r.reason).toMatch(/12\.7\.4/);
+  });
+
+  it('rejects darwin with empty / garbage version (cannot confirm macOS 13+)', () => {
+    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '', macOSNativeAvailable: true }).supported).toBe(false);
+    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'unknown', macOSNativeAvailable: true }).supported).toBe(false);
+    expect(probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'v13.0.0', macOSNativeAvailable: true }).supported).toBe(false);
+  });
+
+  it('echoes the screen-recording permission status on darwin (supported AND unsupported paths)', () => {
+    const ok = probeSystemAudioSupport({
+      platform: 'darwin', macOsVersion: '14.0.0', macOSNativeAvailable: true, screenPermission: 'granted',
+    });
+    expect(ok.permission).toBe('granted');
+    const denied = probeSystemAudioSupport({
+      platform: 'darwin', macOsVersion: '14.0.0', macOSNativeAvailable: false, screenPermission: 'denied',
+    });
+    expect(denied.permission).toBe('denied');
   });
 
   it('defaults permission to "unknown" on darwin when not provided', () => {
-    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.0.0' });
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.0.0', macOSNativeAvailable: true });
     expect(r.permission).toBe('unknown');
   });
 
-  // ── win32 gating: the only platform actually supported today ──
+  // ── win32: Electron getDisplayMedia + WASAPI loopback ──
 
   it('rejects win32 with "10-rc" suffix (parseInt would silently accept)', () => {
     const r = probeSystemAudioSupport({ platform: 'win32', winRelease: '10-rc' });
@@ -66,15 +86,18 @@ describe('probeSystemAudioSupport', () => {
     expect(r.reason).toMatch(/Windows 10/);
   });
 
-  it('marks Windows 10 (release 10.0.19042) as supported (WASAPI loopback cutoff)', () => {
+  it('marks Windows 10 supported in electron-loopback mode WITHOUT per-app capture', () => {
     const r = probeSystemAudioSupport({ platform: 'win32', winRelease: '10.0.19042' });
     expect(r.supported).toBe(true);
+    expect(r.mode).toBe('electron-loopback');
+    expect(r.perAppCapture).toBe(false);
     expect(r.version).toBe('10.0.19042');
   });
 
   it('marks Windows 11 (release 10.0.22631) as supported (still major=10)', () => {
     const r = probeSystemAudioSupport({ platform: 'win32', winRelease: '10.0.22631' });
     expect(r.supported).toBe(true);
+    expect(r.mode).toBe('electron-loopback');
   });
 
   it('rejects Windows 8.1 (release 6.3.x) with version detail', () => {
@@ -97,7 +120,9 @@ describe('probeSystemAudioSupport', () => {
   it('rejects Linux outright with a clear platform message', () => {
     const r = probeSystemAudioSupport({ platform: 'linux' });
     expect(r.supported).toBe(false);
-    expect(r.reason).toMatch(/Windows 10\+ only/);
+    expect(r.mode).toBeUndefined();
+    expect(r.reason).toMatch(/Windows 10\+/);
+    expect(r.reason).toMatch(/macOS 13\+/);
   });
 
   it('rejects freebsd / other unix platforms', () => {

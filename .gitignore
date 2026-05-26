@@ -8,3 +8,9 @@ Thumbs.db
 .env
 .env.local
 *.tsbuildinfo
+
+# Native modules — built artefacts, not source
+native/macos/build/
+native/**/Release/
+native/**/Debug/
+native/**/*.node

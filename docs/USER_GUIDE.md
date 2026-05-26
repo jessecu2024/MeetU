@@ -26,7 +26,7 @@
 
 **MeetU（开会啦）** 是一款跨平台桌面 AI 会议助手。在线上会议期间运行本应用，即可获得：
 
-- **实时语音转文字** — 转写你选择的音频输入设备(默认麦克风);要捕获会议中其他参与者的声音,Windows 10+ 用户可选择**系统音频 loopback**(原生 WASAPI,无需驱动),或在系统层启用 Stereo Mix / 虚拟音频线缆作为输入。macOS 整机/per-app 原生捕获在路线图中(PR #4b 上线 ScreenCaptureKit N-API 模块)
+- **实时语音转文字** — 转写你选择的音频输入设备(默认麦克风);要捕获会议中其他参与者的声音,可选择**系统音频捕获**(无需驱动):Windows 10+ 用原生 WASAPI loopback,macOS 13+ 用原生 ScreenCaptureKit(支持按应用捕获);也可在系统层启用 Stereo Mix / 虚拟音频线缆作为输入
 - **实时翻译** — 中英双向即时翻译
 - **@检测与智能回复建议** — 检测到有人叫你时，自动生成三种风格的回复建议
 - **实时摘要** — 每隔几分钟自动提取会议要点
@@ -71,7 +71,7 @@ MeetU 采用 **100% BYOK** 模式：
 1. 下载 `MeetU-1.1.0.dmg`
 2. 打开 DMG，将 MeetU 拖入 Applications 文件夹
 3. 首次打开时，如遇到"无法验证开发者"提示，请在 **系统设置 → 隐私与安全性** 中点击"仍要打开"
-4. macOS 会提示授予麦克风权限（用于录音），请允许。**注:** "System Audio (native loopback)" 按钮在 macOS 上当前 grey out (Electron 30 包装路径仅 Windows 支持);macOS 原生系统音频在 PR #4b 路线图中。Windows 用户首次选择该按钮无需额外权限
+4. macOS 会提示授予麦克风权限（用于录音），请允许。**首次选择"System Audio (native loopback)"时**,macOS 会要求授予 *屏幕与系统录制* 权限(ScreenCaptureKit 需要)—— 在 *系统设置 → 隐私与安全 → 屏幕与系统录制* 中勾选 MeetU 后重启应用方可生效。Windows 用户首次选择该按钮无需额外权限
 
 ### 方法二：从源码构建
 
@@ -185,7 +185,9 @@ npm run build        # 构建发布版
 
 应用有两条录音路径,在 设置 → 偏好设置 → 音频输入设备 中选择:
 
-1. **Windows 系统音频 loopback(推荐,无需驱动)** — 录制整个系统输出,Windows 10+ 内部使用 WASAPI loopback。在 设置 → 偏好设置 → 音频输入设备 上方点击"🔊 System Audio (native loopback)"按钮即可。**macOS 暂不支持此路径**(Electron 30 的官方 typedef 明确写明 `audio:'loopback'` 仅 Windows),按钮在 macOS 上 grey out,macOS 用户请用虚拟音频线缆或等待 PR #4b 上线原生 ScreenCaptureKit 模块。
+1. **系统音频捕获(推荐,无需驱动)** — 录制系统输出端的声音,无需安装任何驱动。在 设置 → 偏好设置 → 音频输入设备 上方点击"🔊 System Audio (native loopback)"按钮即可。
+   - **Windows 10+**:走 Electron `getDisplayMedia` + `audio:'loopback'`,内部用 WASAPI loopback,整机捕获。
+   - **macOS 13+**:走原生 ScreenCaptureKit 模块,**支持整机捕获,也支持按应用捕获**(在按钮下方的"捕获目标"下拉里选某个应用,例如只录 Zoom)。首次使用需在 *系统设置 → 隐私与安全 → 屏幕与系统录制* 中授予 MeetU 权限并重启应用。
 2. **麦克风 / 第三方 loopback 设备** — 通过浏览器 `getUserMedia` 选择任一音频输入,包括麦克风、Windows Stereo Mix、或 macOS 虚拟音频线缆。
 
 | 平台 | 当前实际方案 | 状态 |
@@ -194,7 +196,8 @@ npm run build        # 构建发布版
 | Windows 10+ | **整机系统音频 loopback**(Electron `getDisplayMedia` + `audio:'loopback'`,内部用 WASAPI loopback) | ✅ 可用 |
 | Windows 10+ 备用 | 在系统中启用 **Stereo Mix**(设置 → 系统 → 声音 → 录制设备) | ✅ 可用,需用户启用 |
 | Windows 9 及以下 | 系统音频选项不可用 | 用 Stereo Mix 替代 |
-| macOS 全版本 | 整机/per-app 原生捕获通过 ScreenCaptureKit N-API 模块 | 🔜 计划中(PR #4b — `native/macos/` 有 Swift 草稿但 N-API 绑定为 placeholder。Electron 30 包装路径仅 Windows 支持) |
+| macOS 13+ | **整机 + 按应用原生捕获**(`native/macos/` ObjC++ N-API 模块直调 ScreenCaptureKit) | ✅ 可用,需授权系统录屏权限 |
+| macOS 12 及以下 | 系统音频选项不可用(ScreenCaptureKit 要求 macOS 13+) | 用虚拟音频线缆替代 |
 | macOS 备用 | 安装非 GPL 虚拟音频线缆,把会议应用输出路由到该设备 | ✅ 可用,需用户配置 |
 
 ### 转写界面

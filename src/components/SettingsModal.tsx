@@ -46,10 +46,15 @@ export default function SettingsModal() {
   const [showStereoMixGuide, setShowStereoMixGuide] = useState(false);
   const [systemAudioProbe, setSystemAudioProbe] = useState<{
     supported: boolean;
+    mode?: 'electron-loopback' | 'macos-native';
+    perAppCapture?: boolean;
     reason?: string;
     permission?: string;
     version?: string;
   } | null>(null);
+  // macOS native per-app picker: the capturable application list.
+  const [macApps, setMacApps] = useState<Array<{ pid: number; name: string; bundleId: string }>>([]);
+  const [macAppsError, setMacAppsError] = useState<string | null>(null);
 
   // Read test results from store (persists across modal open/close)
   const aiTestResults = useSettingsStore((s) => s.aiTestResults);
@@ -639,12 +644,15 @@ export default function SettingsModal() {
                 </div>
               </div>
 
-              {/* System Audio (loopback) — Electron-wrapped WASAPI
-                  loopback on Windows 10+. Driverless; no Stereo Mix
-                  needed. macOS native loopback (ScreenCaptureKit) is
-                  on the roadmap (PR #4b) and is NOT available through
-                  this Electron path; the probe returns supported:false
-                  on darwin so the button below is greyed out. */}
+              {/* System Audio — driverless system-output capture.
+                  Backend depends on the probe `mode`:
+                    - 'electron-loopback' (Windows 10+): getDisplayMedia
+                      + WASAPI loopback, whole-system only.
+                    - 'macos-native' (macOS 13+): native ScreenCaptureKit
+                      addon, supports both whole-system and per-app
+                      capture (the per-app picker below).
+                  Unsupported platforms get a greyed-out card with the
+                  probe's reason. */}
               {systemAudioProbe && (
                 <div className={`rounded-lg border p-2.5 ${
                   systemAudioProbe.supported
@@ -657,6 +665,10 @@ export default function SettingsModal() {
                       store.updateAppSettings({
                         micDeviceId: SYSTEM_AUDIO_DEVICE_ID,
                         micDeviceLabel: 'System Audio (loopback)',
+                        // Default to whole-system; the per-app picker
+                        // below can narrow it on the macOS native path.
+                        sysAudioMacAppPid: 0,
+                        sysAudioMacAppLabel: '',
                       });
                     }}
                     disabled={!systemAudioProbe.supported}
@@ -670,11 +682,80 @@ export default function SettingsModal() {
                       )}
                     </div>
                     <p className="text-zinc-500 dark:text-zinc-400 mt-0.5">
-                      {systemAudioProbe.supported
-                        ? 'Windows 10+ uses WASAPI loopback · no driver needed. macOS native loopback is on the roadmap (PR #4b). / Windows 10+ 使用 WASAPI loopback，无需安装驱动。macOS 原生 loopback 在路线图中(PR #4b)'
-                        : systemAudioProbe.reason || 'Not supported on this OS'}
+                      {!systemAudioProbe.supported
+                        ? (systemAudioProbe.reason || 'Not supported on this OS')
+                        : systemAudioProbe.mode === 'macos-native'
+                          ? 'macOS 13+ ScreenCaptureKit · no driver needed · supports per-app capture below / macOS 13+ 原生 ScreenCaptureKit，无需驱动，支持下方按应用捕获'
+                          : 'Windows 10+ WASAPI loopback · no driver needed / Windows 10+ WASAPI loopback，无需驱动'}
                     </p>
+                    {systemAudioProbe.supported && systemAudioProbe.mode === 'macos-native' && systemAudioProbe.permission === 'denied' && (
+                      <p className="mt-1 text-amber-600 dark:text-amber-400">
+                        ⚠ Screen &amp; System Audio Recording permission is denied. Grant it in System Settings → Privacy &amp; Security, then restart MeetU. / 屏幕与系统录制权限被拒绝，请在 系统设置 → 隐私与安全 中授权后重启
+                      </p>
+                    )}
                   </button>
+
+                  {/* Per-app picker — macOS native path only. Lets the
+                      user capture a single application's audio (e.g.
+                      only Zoom) instead of the whole-system mix. */}
+                  {systemAudioProbe.supported
+                    && systemAudioProbe.perAppCapture
+                    && store.appSettings.micDeviceId === SYSTEM_AUDIO_DEVICE_ID && (
+                    <div className="mt-2 pt-2 border-t border-emerald-200 dark:border-emerald-800">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                          Capture target / 捕获目标
+                        </span>
+                        <button
+                          onClick={async () => {
+                            setMacAppsError(null);
+                            const res = await window.electronAPI?.audio.macos.listApps();
+                            if (res?.ok) {
+                              setMacApps(res.apps);
+                            } else {
+                              setMacAppsError(res?.error || 'Failed to list applications');
+                            }
+                          }}
+                          className="text-xs px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800">
+                          Refresh apps / 刷新应用
+                        </button>
+                      </div>
+                      <select
+                        value={store.appSettings.sysAudioMacAppPid}
+                        onChange={(e) => {
+                          const pid = Number(e.target.value);
+                          const app = macApps.find(a => a.pid === pid);
+                          store.updateAppSettings({
+                            sysAudioMacAppPid: pid,
+                            sysAudioMacAppLabel: app?.name || '',
+                          });
+                        }}
+                        className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600
+                          bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                        <option value={0}>🔊 Whole system audio / 整个系统音频</option>
+                        {macApps.map(a => (
+                          <option key={a.pid} value={a.pid}>
+                            {a.name || a.bundleId || `pid ${a.pid}`}
+                          </option>
+                        ))}
+                        {/* Keep the persisted selection visible even if
+                            the app isn't in the refreshed list (it may
+                            have quit, or the list hasn't loaded yet). */}
+                        {store.appSettings.sysAudioMacAppPid > 0
+                          && !macApps.some(a => a.pid === store.appSettings.sysAudioMacAppPid) && (
+                          <option value={store.appSettings.sysAudioMacAppPid}>
+                            {store.appSettings.sysAudioMacAppLabel || `pid ${store.appSettings.sysAudioMacAppPid}`} (not running?)
+                          </option>
+                        )}
+                      </select>
+                      {macAppsError && (
+                        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{macAppsError}</p>
+                      )}
+                      <p className="mt-1 text-[11px] text-zinc-400">
+                        Per-app capture records only the selected application&apos;s audio. The pid changes each launch — re-pick if you restart the app. / 按应用捕获只录选定应用的声音；pid 每次启动会变，重启该应用后需重新选择
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 

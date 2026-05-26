@@ -22,12 +22,25 @@ declare global {
         getDevices: () => Promise<unknown[]>;
         probeSystemAudio: () => Promise<{
           supported: boolean;
+          mode?: 'electron-loopback' | 'macos-native';
+          perAppCapture?: boolean;
           reason?: string;
           permission?: string;
           version?: string;
         }>;
         onChunk: (cb: (chunk: ArrayBuffer) => void) => void;
         onLevel: (cb: (level: number) => void) => void;
+        macos: {
+          listApps: () => Promise<{
+            ok: boolean;
+            apps: Array<{ pid: number; name: string; bundleId: string }>;
+            error?: string;
+          }>;
+          start: (opts: { pid?: number }) => Promise<{ ok: boolean; error?: string }>;
+          stop: () => Promise<{ ok: boolean; error?: string }>;
+          onPcmFrame: (cb: (buf: ArrayBuffer) => void) => () => void;
+          onError: (cb: (err: { message: string; code: number }) => void) => () => void;
+        };
       };
       settings: {
         get: (key: string) => Promise<unknown>;
@@ -73,6 +86,12 @@ interface AppSettings {
   micDeviceLabel: string;
   sysAudioDeviceId: string;
   sysAudioDeviceLabel: string;
+  // macOS native per-app capture target. 0 (or undefined) means the
+  // whole-system mix; a positive pid captures only that application via
+  // ScreenCaptureKit's SCContentFilter(includingApplications:). Only
+  // honored when the system-audio backend resolves to 'macos-native'.
+  sysAudioMacAppPid: number;
+  sysAudioMacAppLabel: string;
   outputDeviceId: string;
   outputDeviceLabel: string;
 }
@@ -196,6 +215,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     micDeviceLabel: 'Default Microphone',
     sysAudioDeviceId: '',
     sysAudioDeviceLabel: '',
+    sysAudioMacAppPid: 0,
+    sysAudioMacAppLabel: '',
     outputDeviceId: 'default',
     outputDeviceLabel: 'Default Speaker',
   },

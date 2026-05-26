@@ -6,7 +6,7 @@
 import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, shell, desktopCapturer } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getSetting, setSetting } from './store';
 import {
   startRecording, stopRecording, appendChunk,
@@ -16,11 +16,35 @@ import { initDatabase, runQuery } from './database';
 import { renderMinutesDocx } from './export/docx-generator';
 import { sanitizeFilenameForExport } from './export/sanitize-filename';
 import { probeSystemAudioSupport } from './system-audio-probe';
+import { getMacOSNativeCapture, makeMacOSNativeCaptureIpc } from './audio/macos-native-capture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
+
+// What the renderer is allowed to run at. Set in createWindow and
+// consulted by both the navigation lockdown and the trusted-IPC frame
+// check, so a top frame navigated off-origin (we block it, but defense
+// in depth) cannot invoke privileged native-audio IPC.
+//
+// Dev:  exact dev-server origin (e.g. http://localhost:5173).
+// Prod: a file:// prefix scoped to the bundled `dist/` directory — NOT
+//       all of file://. Trusting any local file URL would let a top
+//       frame navigated to some other on-disk HTML reach the privileged
+//       channels.
+let trustedDevOrigin: string | null = null;
+let trustedFilePrefix: string | null = null;
+function isTrustedAppUrl(url: string): boolean {
+  if (!url) return false;
+  if (trustedDevOrigin) {
+    try { return new URL(url).origin === trustedDevOrigin; } catch { return false; }
+  }
+  if (trustedFilePrefix) {
+    return url.startsWith(trustedFilePrefix);
+  }
+  return false;
+}
 
 /** Create main window (floating mode) */
 function createWindow(): void {
@@ -51,12 +75,46 @@ function createWindow(): void {
   });
 
   const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL'];
+  const prodIndexPath = path.join(__dirname, '../dist/index.html');
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(prodIndexPath);
   }
+
+  // ── Navigation lockdown (security hardening) ──
+  // The macOS native + Windows loopback IPC handlers trust the
+  // mainWindow's top frame. That trust is only safe if the top frame
+  // can never be navigated to attacker-controlled content. So:
+  //   1. Deny all window.open / target=_blank popups (open externally).
+  //   2. Block in-page navigation away from our own app origin; any
+  //      external link goes to the user's browser via shell.openExternal.
+  // The trusted origin is the dev server URL in dev, or file:// in prod.
+  if (VITE_DEV_SERVER_URL) {
+    trustedDevOrigin = new URL(VITE_DEV_SERVER_URL).origin;
+    trustedFilePrefix = null;
+  } else {
+    trustedDevOrigin = null;
+    // Scope trust to the bundled dist/ directory file-URL prefix, so
+    // only our own packaged HTML (not arbitrary on-disk files) counts
+    // as the app origin.
+    trustedFilePrefix = pathToFileURL(path.join(__dirname, '../dist/')).href;
+  }
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) { void shell.openExternal(url); }
+    return { action: 'deny' };
+  });
+  const blockOffOriginNav = (event: Electron.Event, url: string) => {
+    if (!isTrustedAppUrl(url)) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(url)) { void shell.openExternal(url); }
+    }
+  };
+  // Cover both user/script navigations AND server/meta redirects, so a
+  // redirect can't sneak the top frame off the app origin.
+  mainWindow.webContents.on('will-navigate', blockOffOriginNav);
+  mainWindow.webContents.on('will-redirect', blockOffOriginNav);
 
   // Forward renderer console logs to main process terminal for debugging
   mainWindow.webContents.on('console-message', (_event, _level, message) => {
@@ -151,10 +209,16 @@ function registerDisplayMediaHandler(): void {
       const requestFrameId = request.frame?.frameTreeNodeId;
       const trustedFrameId = win?.webContents?.mainFrame?.frameTreeNodeId;
       const isMainFrame = !!win && !win.isDestroyed() && requestFrameId !== undefined && requestFrameId === trustedFrameId;
-      if (!isMainFrame) {
+      // Belt-and-suspenders, matching the macOS native IPC check: the
+      // top frame must also be on our own app origin. Navigation
+      // lockdown already prevents the top frame leaving the app origin,
+      // but re-checking here means a redirect / lockdown regression
+      // can't turn an off-origin top frame into a screen-capture grant.
+      const isTrustedFrameUrl = !!request.frame && isTrustedAppUrl(request.frame.url);
+      if (!isMainFrame || !isTrustedFrameUrl) {
         console.warn(
-          `[Display] Rejected getDisplayMedia from non-main-frame request`,
-          { origin: request.securityOrigin, audioRequested: request.audioRequested, videoRequested: request.videoRequested },
+          `[Display] Rejected getDisplayMedia from untrusted frame`,
+          { origin: request.securityOrigin, url: request.frame?.url, audioRequested: request.audioRequested, videoRequested: request.videoRequested },
         );
         callback(denyShape);
         return;
@@ -275,20 +339,23 @@ function registerIPC(): void {
   // ScreenCaptureKit is on the roadmap and ships through a native
   // N-API module (PR #4b) rather than this Electron wrapper path.
   ipcMain.handle('system-audio:probe', async () => {
-    // On darwin we read the Screen Recording permission state purely
-    // for diagnostics. It is informational only on this PR — darwin
-    // returns `supported:false` regardless of the permission value
-    // (per Electron 30 typedef, this loopback path is Windows-only).
-    // When PR #4b lands the native ScreenCaptureKit module, the same
-    // permission status will gate the macOS path; we surface it now
-    // so the renderer and the future native path read a consistent
-    // value.
+    // On darwin we read the Screen Recording permission state and
+    // probe the native ScreenCaptureKit addon. The probe function
+    // selects the backend:
+    //   - win32  -> 'electron-loopback' (getDisplayMedia)
+    //   - darwin -> 'macos-native' when the addon loaded, else
+    //               unsupported with an actionable reason
     let screenPermission: string | undefined;
+    let macOSNativeAvailable: boolean | undefined;
+    let macOSNativeReason: string | undefined;
     if (process.platform === 'darwin') {
       try {
         const { systemPreferences } = await import('electron');
         screenPermission = systemPreferences.getMediaAccessStatus('screen');
       } catch { /* legacy macOS without that API */ }
+      const native = getMacOSNativeCapture();
+      macOSNativeAvailable = native.available;
+      macOSNativeReason = native.available ? undefined : native.reason;
     }
     return probeSystemAudioSupport({
       platform: process.platform,
@@ -298,7 +365,61 @@ function registerIPC(): void {
       macOsVersion: process.platform === 'darwin' ? process.getSystemVersion() : undefined,
       winRelease: process.platform === 'win32' ? os.release() : undefined,
       screenPermission,
+      macOSNativeAvailable,
+      macOSNativeReason,
     });
+  });
+
+  // ── macOS native ScreenCaptureKit capture (PR #4b) ──
+  // These channels start ScreenCaptureKit (which can trigger the TCC
+  // permission prompt and capture system audio), so they get the same
+  // main-frame hardening as the Windows setDisplayMediaRequestHandler:
+  // a request from any iframe / webview / popup is rejected. Without
+  // this, embedded or compromised content reaching ipcRenderer could
+  // enumerate running apps or start system-audio capture. PCM frames
+  // are pushed back on 'macos-system-audio:pcm-frame'.
+  const macNativeIpc = makeMacOSNativeCaptureIpc(() => mainWindow);
+  // Returns true only when the request originates from the trusted
+  // top-level frame of our own window.
+  const isTrustedMacRequest = (event: Electron.IpcMainInvokeEvent): boolean => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return false;
+    const trusted = win.webContents.mainFrame;
+    const sender = event.senderFrame;
+    if (!sender) return false;
+    // (1) Must be the top-level frame of our window (not an iframe/
+    //     webview/popup), AND (2) that frame must be on our own app
+    //     origin. (2) is belt-and-suspenders: will-navigate already
+    //     blocks the top frame from leaving the app origin, but we
+    //     re-check here so privileged native-audio IPC can never be
+    //     reached from off-origin content even if navigation lockdown
+    //     regresses.
+    return sender.frameTreeNodeId === trusted.frameTreeNodeId
+      && isTrustedAppUrl(sender.url);
+  };
+  ipcMain.handle('macos-system-audio:list-apps', (event) => {
+    if (!isTrustedMacRequest(event)) {
+      console.warn('[Main] Rejected macos-system-audio:list-apps from untrusted frame');
+      return { ok: false, apps: [], error: 'rejected: untrusted frame' };
+    }
+    return macNativeIpc.listApplications();
+  });
+  ipcMain.handle('macos-system-audio:start', (event, opts: { pid?: number }) => {
+    if (!isTrustedMacRequest(event)) {
+      console.warn('[Main] Rejected macos-system-audio:start from untrusted frame');
+      return { ok: false, error: 'rejected: untrusted frame' };
+    }
+    // Validate the pid argument shape — only a non-negative integer is
+    // meaningful (0/undefined = whole system).
+    const pid = typeof opts?.pid === 'number' && Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : undefined;
+    return macNativeIpc.start({ pid });
+  });
+  ipcMain.handle('macos-system-audio:stop', (event) => {
+    if (!isTrustedMacRequest(event)) {
+      console.warn('[Main] Rejected macos-system-audio:stop from untrusted frame');
+      return { ok: false, error: 'rejected: untrusted frame' };
+    }
+    return macNativeIpc.stop();
   });
 
   // ── Database ──

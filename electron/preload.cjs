@@ -19,6 +19,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('audio:chunk', (_e, chunk) => cb(chunk)),
     onLevel: (cb) =>
       ipcRenderer.on('audio:level', (_e, level) => cb(level)),
+
+    // ── macOS native ScreenCaptureKit capture ──
+    macos: {
+      listApps: () => ipcRenderer.invoke('macos-system-audio:list-apps'),
+      start: (opts) => ipcRenderer.invoke('macos-system-audio:start', opts),
+      stop: () => ipcRenderer.invoke('macos-system-audio:stop'),
+      // PCM frames (Float32 16-kHz mono ArrayBuffer) pushed from main.
+      // Returns an unsubscribe fn so the renderer can detach on stop.
+      onPcmFrame: (cb) => {
+        const listener = (_e, buf) => cb(buf);
+        ipcRenderer.on('macos-system-audio:pcm-frame', listener);
+        return () => ipcRenderer.removeListener('macos-system-audio:pcm-frame', listener);
+      },
+      onError: (cb) => {
+        const listener = (_e, err) => cb(err);
+        ipcRenderer.on('macos-system-audio:error', listener);
+        return () => ipcRenderer.removeListener('macos-system-audio:error', listener);
+      },
+    },
   },
 
   // ── STT ──
