@@ -4,7 +4,7 @@
 // ============================================================
 
 import { create } from 'zustand';
-import { captureManager } from '../services/audio/capture';
+import { captureManager, SYSTEM_AUDIO_DEVICE_ID } from '../services/audio/capture';
 import { mockCaptureManager } from '../services/audio/mock-capture';
 import { sttRegistry } from '../services/stt-engine/engine-registry';
 import { useTranscriptStore } from './transcript-store';
@@ -122,9 +122,47 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const useRealAudio = canUseRealCapture();
     const audioManager = useRealAudio ? captureManager : mockCaptureManager;
 
-    // Set audio input device from settings
+    // Set audio input device from settings. Before handing the
+    // persisted value to captureManager, normalize a stale
+    // SYSTEM_AUDIO_DEVICE_ID sentinel back to 'default' on platforms
+    // where the probe says system-audio loopback is unavailable.
+    //
+    // Why this guard exists at the recording entry point and not only
+    // in SettingsModal: the SettingsModal auto-reset only fires when
+    // the user actually opens the Preferences tab. A user who
+    // selected system audio on Windows and later launches on macOS /
+    // Linux / Windows <10 could go straight from app start → "start
+    // recording" without visiting Settings; without this guard, the
+    // stale sentinel would flow into captureManager, getDisplayMedia
+    // would attempt the loopback path, main.ts would reject it with
+    // NotAllowedError, and the whole session would fall back to mock
+    // demo audio. Probing here closes that gap.
     if (useRealAudio) {
-      const { micDeviceId } = useSettingsStore.getState().appSettings;
+      let micDeviceId = useSettingsStore.getState().appSettings.micDeviceId;
+      if (micDeviceId === SYSTEM_AUDIO_DEVICE_ID) {
+        const resetToDefault = (reasonLog: string, detail?: unknown) => {
+          console.warn(`[MeetingStore] ${reasonLog}`, detail ?? '');
+          useSettingsStore.getState().updateAppSettings({
+            micDeviceId: 'default',
+            micDeviceLabel: 'Default Microphone',
+          });
+          micDeviceId = 'default';
+        };
+        try {
+          const probe = await window.electronAPI?.audio.probeSystemAudio();
+          if (probe && !probe.supported) {
+            resetToDefault(
+              'System-audio sentinel selected but probe says unsupported; resetting to default mic before record start',
+              probe,
+            );
+          }
+        } catch (err) {
+          // Probe IPC failed — be safe and fall back. Better to record
+          // from the default mic than to throw at the start of a
+          // session the user just consented to.
+          resetToDefault('System-audio probe failed before record start; falling back to default mic', err);
+        }
+      }
       captureManager.setDevice(micDeviceId);
     }
 
