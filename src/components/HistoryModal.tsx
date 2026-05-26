@@ -4,7 +4,7 @@
 // SQLite store via src/services/meeting-history.ts.
 // ============================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSettingsStore } from '../stores/settings-store';
 import {
   listMeetings, getMeetingTranscript, searchTranscripts, deleteMeeting,
@@ -71,23 +71,32 @@ export default function HistoryModal() {
 
   useEffect(() => { refreshMeetings(); }, [refreshMeetings]);
 
-  // Debounced search as the user types.
+  // Debounced search as the user types. `cancelled` guards against a
+  // slow in-flight request resolving AFTER the query changed again —
+  // otherwise query A's results could land under query B (clearTimeout
+  // only stops a not-yet-fired timer, not an already-started fetch).
   useEffect(() => {
     const q = query.trim();
     if (!q) { setHits([]); setSearching(false); return; }
     setSearching(true);
+    let cancelled = false;
     const handle = setTimeout(() => {
       searchTranscripts(q)
-        .then(setHits)
-        .finally(() => setSearching(false));
+        .then((res) => { if (!cancelled) setHits(res); })
+        .finally(() => { if (!cancelled) setSearching(false); });
     }, 250);
-    return () => clearTimeout(handle);
+    return () => { cancelled = true; clearTimeout(handle); };
   }, [query]);
 
+  // Monotonic token so a slow getMeetingTranscript for meeting A can't
+  // populate the detail view after the user opened meeting B.
+  const openSeqRef = useRef(0);
   const openMeeting = async (id: number, title: string, startTime: string | null) => {
+    const seq = ++openSeqRef.current;
     setSelected({ id, title, startTime });
     setTranscript([]);
-    setTranscript(await getMeetingTranscript(id));
+    const rows = await getMeetingTranscript(id);
+    if (openSeqRef.current === seq) setTranscript(rows);
   };
 
   const confirmDelete = async (id: number) => {
