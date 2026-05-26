@@ -9,6 +9,7 @@ import { STT_ENGINE_INFO, isSelectableSTTEngine } from '../services/stt-engine/t
 
 export default function Header() {
   const openSettings = useSettingsStore((s) => s.openSettingsModal);
+  const openHistory = useSettingsStore((s) => s.openHistoryModal);
   const defaultProvider = useSettingsStore((s) => s.aiConfig.defaultProvider);
   const hasAiKey = useSettingsStore((s) => !!s.aiConfig.apiKeys[s.aiConfig.defaultProvider]);
   const aiTestResult = useSettingsStore((s) => s.aiTestResults[s.aiConfig.defaultProvider]);
@@ -47,14 +48,24 @@ export default function Header() {
         <div>
           <p className="text-[9px] text-zinc-400">Your AI Meeting Assistant / 你的会议 AI 秘书</p>
         </div>
-        <button
-          onClick={openSettings}
-          className="w-7 h-7 rounded-lg flex items-center justify-center
-            hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 text-sm"
-          title="Settings / 设置"
-        >
-          ⚙
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={openHistory}
+            className="w-7 h-7 rounded-lg flex items-center justify-center
+              hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 text-sm"
+            title="Meeting History / 会议历史"
+          >
+            🕘
+          </button>
+          <button
+            onClick={openSettings}
+            className="w-7 h-7 rounded-lg flex items-center justify-center
+              hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 text-sm"
+            title="Settings / 设置"
+          >
+            ⚙
+          </button>
+        </div>
       </div>
 
       {/* Recording controls */}

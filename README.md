@@ -32,6 +32,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
 | 💡 **Smart Speech Suggestions** | AI generates 3 reply strategies (conservative / assertive / diplomatic) when you're @'d |
 | 📋 **Real-time Summary** | Key points, decisions, and action items extracted every few minutes |
 | 📄 **Meeting Minutes Export** | Structured minutes auto-generated on meeting end, exportable as Markdown, Word (.docx), or PDF (rendered via Electron/Chromium — CJK included) |
+| 🕘 **Meeting History & Search** | Browse past meetings and full-text-search across all their transcripts; open any meeting's full transcript; delete meetings. All local (SQLite). |
 
 ## How It Works
 
@@ -152,7 +153,7 @@ We welcome contributions! Please note:
 - [x] Windows 10+ system-wide audio loopback (WASAPI via Electron `getDisplayMedia`)
 - [x] macOS 13+ system-wide AND per-application audio capture (native ScreenCaptureKit Objective-C++ N-API module)
 - [ ] Multi-language support beyond EN/中 (Japanese, Korean, etc.)
-- [ ] Meeting history browser with search
+- [x] Meeting history browser with transcript search
 - [ ] Plugin system for custom AI workflows
 - [ ] Mobile companion app for meeting review
 
@@ -179,6 +180,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
 | 💡 **智能发言建议** | 被@时 AI 自动生成 3 种回复方案（保守/积极/外交） |
 | 📋 **实时摘要** | 每隔几分钟自动提取要点、决策和待办事项 |
 | 📄 **会后纪要导出** | 会议结束自动生成结构化纪要，可导出为 Markdown、Word (.docx) 或 PDF（经 Electron/Chromium 渲染，中文正常显示） |
+| 🕘 **会议历史与搜索** | 浏览历史会议、跨所有会议全文搜索转写内容、查看单场完整转写、删除会议。全部本地（SQLite）。 |
 
 ## 工作原理
 
@@ -299,7 +301,7 @@ MeetU 采用 **Business Source License 1.1** 许可证。详见 [LICENSE](LICENS
 - [x] Windows 10+ 整机系统音频 loopback（via Electron `getDisplayMedia`，内部 WASAPI）
 - [x] macOS 13+ 整机与按应用音频捕获（原生 ScreenCaptureKit Objective-C++ N-API 模块）
 - [ ] 更多语言支持（日语、韩语等）
-- [ ] 会议历史浏览与搜索
+- [x] 会议历史浏览与转写搜索
 - [ ] 插件系统，支持自定义 AI 工作流
 - [ ] 移动端配套应用，用于回顾会议
 

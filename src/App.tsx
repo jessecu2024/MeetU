@@ -12,6 +12,7 @@ import { sttRegistry } from './services/stt-engine/engine-registry';
 import LegalDisclaimer from './components/LegalDisclaimer';
 import OnboardingWizard from './components/OnboardingWizard';
 import SettingsModal from './components/SettingsModal';
+import HistoryModal from './components/HistoryModal';
 import Header from './components/Header';
 import TabBar, { type TabId } from './components/TabBar';
 import RecordingConsent from './components/RecordingConsent';
@@ -27,6 +28,7 @@ export default function App() {
   const isFirstLaunch = useSettingsStore((s) => s.isFirstLaunch);
   const settingsLoaded = useSettingsStore((s) => s.settingsLoaded);
   const settingsModalOpen = useSettingsStore((s) => s.settingsModalOpen);
+  const historyModalOpen = useSettingsStore((s) => s.historyModalOpen);
   const openSettingsModal = useSettingsStore((s) => s.openSettingsModal);
   const aiConfig = useSettingsStore((s) => s.aiConfig);
   const loadFromStore = useSettingsStore((s) => s.loadFromStore);
@@ -111,6 +113,7 @@ export default function App() {
     <div className="h-screen flex flex-col bg-white dark:bg-zinc-900">
       {/* Modals & Overlays */}
       {settingsModalOpen && <SettingsModal />}
+      {historyModalOpen && <HistoryModal />}
       {showRecordingConsent && (
         <RecordingConsent
           onConfirm={() => {

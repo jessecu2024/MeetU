@@ -17,6 +17,7 @@
 | 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
 | Markdown 纪要导出 | ✅ Stable | 主进程写 `~/MeetingAI/minutes/*.md` |
 | Word (.docx) 纪要导出 | ✅ Stable | `electron/export/docx-generator.ts` 使用 `docx@^8` 在主进程生成 Word 文档（标题/摘要/讨论议题/Action Items 表格/未解决问题/下一步/免责声明），renderer 通过 `file:export` IPC 传 minutes payload，主进程写到 `~/MeetingAI/minutes/*.docx` |
+| 会议历史浏览 + 转写搜索 | ✅ Stable | `src/components/HistoryModal.tsx`(Header 🕘 打开)。`src/services/meeting-history.ts` 读 SQLite:列出历史会议(标题/日期/时长/引擎/行数)、打开看完整转写、跨会议搜索转写文本。搜索用参数化 `LIKE ... ESCAPE`(用户输入只走 bound param + LIKE 通配转义,非拼接,无注入),支持中英文子串 + 高亮。可删除会议(级联删转写)。查询构造器是纯函数,有单测 |
 | PDF 纪要导出 | ✅ Stable | `electron/export/pdf-generator.ts` 用 Electron 自带 Chromium 的 `webContents.printToPDF` 渲染——`buildMinutesHtml()` 把 minutes 拼成内联 CSS 的 HTML(所有插值 HTML-escape),在隐藏的、禁用 JS 的 BrowserWindow 里 print 成 PDF,写到 `~/MeetingAI/minutes/*.pdf`。**零新依赖、CJK 用系统字体自动渲染**(双语 app 关键),不需要打包 8MB 中文字体。SummaryView 有"PDF"导出按钮 |
 | i18n 多语言 | ❌ 未引入框架 | 渲染层用硬编码 `"English / 中文"` 双语字符串，扩展到日韩需要先引入 i18n 框架 |
 | GPL/AGPL 许可证审计 | ✅ Stable | `npm run check-licenses` 已实现 |

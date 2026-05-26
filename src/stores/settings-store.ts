@@ -134,6 +134,7 @@ interface SettingsState {
   onboardingStep: number;
   settingsModalOpen: boolean;
   settingsModalTab: 'ai' | 'stt' | 'profile' | 'app' | null;
+  historyModalOpen: boolean;
   settingsLoaded: boolean;
 
   // ── User profile ──
@@ -180,6 +181,8 @@ interface SettingsState {
   setSttTestResult: (result: TestResult) => void;
   openSettingsModal: (tab?: 'ai' | 'stt' | 'profile' | 'app' | unknown) => void;
   closeSettingsModal: () => void;
+  openHistoryModal: () => void;
+  closeHistoryModal: () => void;
 }
 
 /** Helper to persist a setting to electron-store */
@@ -195,6 +198,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   isFirstLaunch: true,
   onboardingStep: 0,
   settingsModalOpen: false,
+  historyModalOpen: false,
   settingsModalTab: null,
   settingsLoaded: false,
 
@@ -515,4 +519,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ settingsModalOpen: true, settingsModalTab: resolvedTab });
   },
   closeSettingsModal: () => set({ settingsModalOpen: false, settingsModalTab: null }),
+  openHistoryModal: () => set({ historyModalOpen: true }),
+  closeHistoryModal: () => set({ historyModalOpen: false }),
 }));
