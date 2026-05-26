@@ -29,24 +29,32 @@ export interface SystemAudioProbeResult {
 }
 
 /**
- * Strict major-version extractor. Returns `NaN` for any input that
- * does not start with one or more digits followed by either a dot
- * separator or end-of-string. This is intentional:
+ * Strict major-version extractor. Requires the ENTIRE input to be a
+ * dotted-decimal version (one-or-more digit runs separated by single
+ * dots, no leading non-digit, no trailing suffix). Returns the first
+ * component as an integer; returns `NaN` otherwise.
  *
  *   "13.4.0"   -> 13
  *   "13"       -> 13
  *   "10.0.226" -> 10
- *   ""         -> NaN   (cannot confirm — must reject)
- *   "v13.0"    -> NaN   (leading non-digit — must reject)
- *   "13-beta"  -> NaN   (suffix is not a dot/EOS — must reject)
+ *   ""         -> NaN
+ *   "v13.0"    -> NaN   (leading non-digit)
+ *   "13-beta"  -> NaN   (suffix after digit run)
+ *   "13.beta"  -> NaN   ("beta" is not a digit run)
+ *   "13."      -> NaN   (dangling dot — not a complete component)
+ *   "13..0"    -> NaN   (empty component between dots)
+ *   "unknown"  -> NaN
  *
- * The previous implementation used `parseInt(s.split('.')[0])` which
- * lenient-parsed `"13-beta"` as 13 (parseInt strips trailing junk)
- * and was hostile to `"v13.0.0"` (returned NaN, but then `NaN < 13`
- * is `false`, mis-marking the platform as supported).
+ * Earlier iterations of this regex (`/^(\d+)(?:\.|$)/`) only validated
+ * the first separator and accepted `"13.beta"` / `"13."` / `"13..0"`
+ * as "13". A round-2 codex review flagged that, so the regex now
+ * requires every component to be a digit run. The original
+ * `parseInt('13-beta') === 13` and `parseInt('v13.0.0') === NaN`
+ * (where `NaN < 13` evaluates to false) failure modes are also
+ * blocked by this stricter shape.
  */
 function parseMajor(version: string): number {
-  const m = /^(\d+)(?:\.|$)/.exec(version);
+  const m = /^(\d+)(?:\.\d+)*$/.exec(version);
   return m ? parseInt(m[1], 10) : NaN;
 }
 

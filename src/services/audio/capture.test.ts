@@ -87,10 +87,15 @@ describe('mapSystemAudioError', () => {
     expect(msg).toMatch(/约束/);
   });
 
-  it('maps SecurityError to "main process missing handler — reinstall"', () => {
+  it('maps SecurityError to the generic origin/policy block (NOT to a "missing main-process handler" claim)', () => {
     const msg = mapSystemAudioError(domException('SecurityError'));
     expect(msg).toMatch(/security/i);
-    expect(msg).toMatch(/reinstall/i);
+    // Round-2 review: claiming the main process is misconfigured is
+    // misleading because a missing setDisplayMediaRequestHandler rejects
+    // with NotSupportedError (handled elsewhere), not SecurityError.
+    expect(msg).not.toMatch(/setDisplayMediaRequestHandler/);
+    expect(msg).not.toMatch(/reinstall/i);
+    expect(msg).toMatch(/origin|iframe|Permissions-Policy/);
   });
 
   it('maps TypeError to "bad constraints — likely a bug"', () => {

@@ -104,10 +104,15 @@ export function mapSystemAudioError(err: unknown): string {
       // app bug, not a permission/hardware problem.
       return 'System audio constraints could not be satisfied by this OS. This is likely a MeetU bug — please report it. / 系统音频约束无法满足，可能是应用 bug，请反馈';
     case 'SecurityError':
-      // The origin doesn't have permission to call getDisplayMedia.
-      // Inside Electron this generally means the main process did not
-      // register setDisplayMediaRequestHandler — a regression in main.ts.
-      return 'System audio is blocked by security policy. The main process may be missing setDisplayMediaRequestHandler — please reinstall MeetU. / 系统音频被安全策略阻止，主进程可能缺少配置，请重装';
+      // Browser/origin-level block: e.g. an insecure context, an iframe
+      // without `allow="display-capture"`, or a Permissions-Policy
+      // header forbidding the call. In a packaged Electron app this is
+      // unusual but possible if the renderer is ever embedded in a
+      // sandboxed frame; we surface the generic class so users can
+      // report it without us mis-blaming the main process. (A missing
+      // setDisplayMediaRequestHandler rejects with NotSupportedError,
+      // not SecurityError — that case is handled above.)
+      return 'System audio is blocked by the browser security policy (origin, iframe, or Permissions-Policy). Please report the OS and how MeetU was launched. / 系统音频被浏览器安全策略阻止，请反馈系统信息与启动方式';
     case 'TypeError':
       // Wrong argument shape — should never happen with our
       // hard-coded constraints, but DOM specs raise this when

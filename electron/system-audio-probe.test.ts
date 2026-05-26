@@ -61,6 +61,29 @@ describe('probeSystemAudioSupport', () => {
     expect(r.supported).toBe(false);
   });
 
+  it('rejects darwin with "13.beta" (non-digit second component)', () => {
+    // The previous regex /^(\d+)(?:\.|$)/ matched the leading "13."
+    // and accepted this as major=13. The stricter /^(\d+)(?:\.\d+)*$/
+    // requires every component to be a digit run.
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.beta' });
+    expect(r.supported).toBe(false);
+  });
+
+  it('rejects darwin with "13." (dangling dot)', () => {
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13.' });
+    expect(r.supported).toBe(false);
+  });
+
+  it('rejects darwin with "13..0" (empty component)', () => {
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13..0' });
+    expect(r.supported).toBe(false);
+  });
+
+  it('accepts darwin with single-digit major "13" (no dotted components)', () => {
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13' });
+    expect(r.supported).toBe(true);
+  });
+
   it('rejects win32 with "10-rc" suffix (parseInt would silently accept)', () => {
     const r = probeSystemAudioSupport({ platform: 'win32', winRelease: '10-rc' });
     expect(r.supported).toBe(false);
