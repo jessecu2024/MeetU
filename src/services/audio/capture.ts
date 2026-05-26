@@ -802,6 +802,15 @@ class AudioCaptureManager {
       throw new Error('macOS native capture IPC bridge is unavailable (preload missing audio.macos)');
     }
 
+    // Mark the native path "engaged" BEFORE any await. nativeActive
+    // gates whether stop() tears the native side down. If we only set
+    // it after `await macos.start()` resolved, a stop() during that
+    // await would skip stopNativeMacOSSource() and leak the SCStream +
+    // IPC listeners on the main side. Setting it now means every
+    // teardown path (doStop, MediaRecorder failure, PCM failure, this
+    // method's own throw) cleans up the native session.
+    this.nativeActive = true;
+
     // 16 kHz context so the worklet replays the native PCM 1:1.
     const ctx = new AudioContext({ sampleRate: 16000 });
     this.nativePlaybackCtx = ctx;
@@ -852,7 +861,17 @@ class AudioCaptureManager {
       throw new Error(res.error || 'native start returned ok:false');
     }
 
-    this.nativeActive = true;
+    // If stop() ran while we were awaiting macos.start(), it will have
+    // called stopNativeMacOSSource() (sending macos.stop() — which the
+    // native state machine turns into a cancel — and clearing
+    // nativeActive). Don't proceed to hand a now-dead stream back to
+    // start() for MediaRecorder wiring; throw so start()'s catch
+    // cleans up the rest.
+    if (!this.nativeActive) {
+      throw new Error('macOS native capture was stopped during start');
+    }
+
+    // nativeActive was already set at the top of this method.
     return dest.stream;
   }
 

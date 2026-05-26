@@ -117,6 +117,13 @@ API_AVAILABLE(macos(13.0))
 @property (nonatomic, assign) double targetSampleRate; // 16000
 @property (nonatomic, assign) double resamplePhase;
 @property (nonatomic, strong) NSMutableData* carryBuffer; // leftover mono Float32 samples
+// Per-capture SERIAL queue for audio sample delivery. ScreenCaptureKit
+// is handed this queue via addStreamOutput; using a serial queue (not
+// the global concurrent queue) guarantees didOutputSampleBuffer never
+// runs concurrently with itself, so the resampler's carryBuffer /
+// resamplePhase mutation is single-threaded and race-free. Retained
+// as a strong property so it outlives the stream.
+@property (nonatomic, strong) dispatch_queue_t sampleQueue;
 @end
 
 @implementation MeetUAudioCapture
@@ -127,6 +134,7 @@ API_AVAILABLE(macos(13.0))
     _sourceSampleRate = 48000.0;
     _resamplePhase = 0.0;
     _carryBuffer = [NSMutableData data];
+    _sampleQueue = dispatch_queue_create("com.meetu.screencapture.audio", DISPATCH_QUEUE_SERIAL);
   }
   return self;
 }
@@ -414,8 +422,12 @@ static Napi::Value StartCapture(const Napi::CallbackInfo& info) {
     MeetUAudioCapture* capture = [[MeetUAudioCapture alloc] init];
     SCStream* stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:capture];
     NSError* addErr = nil;
+    // Deliver samples on the capture's own SERIAL queue so the
+    // resampler state (carryBuffer / resamplePhase) is never mutated
+    // concurrently. The global concurrent queue could overlap
+    // callbacks and corrupt that state.
     BOOL added = [stream addStreamOutput:capture type:SCStreamOutputTypeAudio
-                      sampleHandlerQueue:dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0) error:&addErr];
+                      sampleHandlerQueue:capture.sampleQueue error:&addErr];
     if (!added) {
       abortToIdle(addErr && addErr.localizedDescription ? std::string(addErr.localizedDescription.UTF8String) : "addStreamOutput failed");
       return;

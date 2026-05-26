@@ -126,11 +126,17 @@ export function __resetMacOSNativeCaptureForTest(): void {
  * shapes only — the actual Float32 PCM goes through
  * `mainWindow.webContents.send('macos-system-audio:pcm-frame', ...)`.
  */
-export function makeMacOSNativeCaptureIpc(getWindow: () => BrowserWindow | null) {
+export function makeMacOSNativeCaptureIpc(
+  getWindow: () => BrowserWindow | null,
+  // Loader injection point — defaults to the cached real loader.
+  // Tests pass a fake { available:true, start/stop/listApplications }
+  // so they exercise THIS production glue rather than a copy.
+  loaderProvider: () => AvailableLoader = getMacOSNativeCapture,
+) {
   return {
     /** Probe whether the native module is loadable and ready. */
     async probe(): Promise<{ available: boolean; reason?: string }> {
-      const loader = getMacOSNativeCapture();
+      const loader = loaderProvider();
       return loader.available
         ? { available: true }
         : { available: false, reason: loader.reason };
@@ -138,7 +144,7 @@ export function makeMacOSNativeCaptureIpc(getWindow: () => BrowserWindow | null)
 
     /** List capturable applications. Returns [] on failure. */
     async listApplications(): Promise<{ ok: boolean; apps: ApplicationEntry[]; error?: string }> {
-      const loader = getMacOSNativeCapture();
+      const loader = loaderProvider();
       if (!loader.available) {
         return { ok: false, apps: [], error: loader.reason };
       }
@@ -159,7 +165,7 @@ export function makeMacOSNativeCaptureIpc(getWindow: () => BrowserWindow | null)
      * renderer -> capture.ts subscriber.
      */
     async start(opts: { pid?: number }): Promise<{ ok: boolean; error?: string }> {
-      const loader = getMacOSNativeCapture();
+      const loader = loaderProvider();
       if (!loader.available) {
         return { ok: false, error: loader.reason };
       }
@@ -193,7 +199,7 @@ export function makeMacOSNativeCaptureIpc(getWindow: () => BrowserWindow | null)
 
     /** Tear down. Safe to call when not running. */
     async stop(): Promise<{ ok: boolean; error?: string }> {
-      const loader = getMacOSNativeCapture();
+      const loader = loaderProvider();
       if (!loader.available) {
         return { ok: false, error: loader.reason };
       }
