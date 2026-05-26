@@ -40,7 +40,7 @@ Recording laws vary significantly across jurisdictions. In some regions, all par
 • Application settings and your encrypted API Keys are persisted via your OS's secure storage
 
 Outbound transmission (only to providers YOU configure and pay for):
-• Live transcription: audio is sent directly from your device to your chosen STT provider — streamed (Deepgram), in 5-second segments (OpenAI Whisper API), or PCM-streamed (iFlytek). Local Whisper is a roadmap item.
+• Live transcription: with a cloud STT engine, audio is sent directly from your device to your chosen provider — streamed (Deepgram), in 5-second segments (OpenAI Whisper API), or PCM-streamed (iFlytek). With the offline Local Whisper engine, audio is transcribed entirely on your device and is NOT sent anywhere.
 • AI features (translation, summary, mention detection, speech suggestions): the relevant transcript text is sent to your chosen AI provider (e.g., Anthropic, OpenAI, Google, DeepSeek)
 
 What MeetU does NOT do:
@@ -52,7 +52,7 @@ What MeetU does NOT do:
 • 应用设置和加密后的 API Key 通过操作系统安全存储进行持久化
 
 向外发送（仅发往您自己配置并付费的服务商）：
-• 实时转写：音频从您的设备直接发送至您选择的 STT 服务商 —— 流式（Deepgram）、5 秒分段（OpenAI Whisper API）或 PCM 流式（讯飞）。Local Whisper 在路线图中。
+• 实时转写：使用云端 STT 引擎时，音频从您的设备直接发送至您选择的服务商 —— 流式（Deepgram）、5 秒分段（OpenAI Whisper API）或 PCM 流式（讯飞）。使用离线 Local Whisper 引擎时，音频完全在您的设备上转写，不发送到任何地方。
 • AI 功能（翻译/摘要/@检测/发言建议）：相关转写文本将发送至您选择的 AI 服务商（如 Anthropic、OpenAI、Google、DeepSeek 等）
 
 MeetU 本身不会做的事：

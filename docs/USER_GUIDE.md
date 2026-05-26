@@ -36,7 +36,7 @@
 
 MeetU 采用 **100% BYOK** 模式：
 - 你使用自己的 AI API Key（Claude / OpenAI / DeepSeek 等）
-- 你使用自己的语音转文字 API Key（Deepgram 流式 / OpenAI Whisper API 5 秒分段 / 讯飞 PCM 流式，三选一；Local Whisper 在路线图中）
+- 实时转写四选一：Deepgram 流式 / OpenAI Whisper API 5 秒分段 / 讯飞 PCM 流式（三个云端 BYOK），或 Local Whisper（离线 whisper.cpp，无需 Key，需先下载模型）
 - **所有数据存储在本地**，音频和文字不会发送到 MeetU 的服务器
 - AI 请求直接从你的设备发送到你选择的 AI 服务商
 
@@ -52,7 +52,7 @@ MeetU 采用 **100% BYOK** 模式：
 | STT API Key | **必需**：Deepgram 或 OpenAI Whisper API Key 之一（用于实时转写） |
 | AI API Key | 至少一个 AI 提供商的 Key（用于翻译/摘要/建议功能） |
 
-> 计划中的离线 Local Whisper 引擎尚未发布；当前版本必须配置一个云端 STT Key 才能完成实时转写，否则应用会退回到 demo/mock 转写。
+> 实时转写可用一个云端 STT Key（Deepgram/Whisper API/讯飞），或离线 Local Whisper（在 设置 → 语音引擎 中下载模型后无需 Key）。都没有时应用会退回到 demo/mock 转写。
 
 ---
 
@@ -131,7 +131,7 @@ npm run build        # 构建发布版
 | Deepgram | 实时 WebSocket 流式转写，延迟低 | ✅ Stable |
 | Whisper API | OpenAI 的语音识别 API (5 秒分段) | ✅ Stable |
 | 讯飞语音 | 国内 PCM 流式语音识别（最佳中文识别） | ✅ Stable |
-| 本地 Whisper | 离线运行，MIT 许可 | 🔜 Planned — whisper.cpp 集成尚未发布，UI 中已禁用 |
+| 本地 Whisper | 离线运行，MIT 许可 | 🟡 Beta — 经 smart-whisper(whisper.cpp) 实现；需在设置中一次性下载 ggml 模型；转写核心已端到端验证 |
 
 > 阿里语音 (Paraformer) 之前列在此处但尚未实现，已暂时从代码中移除。
 
@@ -346,7 +346,7 @@ npm run build        # 构建发布版
 
 - 切换语音转文字引擎
 - 配置 STT API Key
-- "本地 Whisper" 未来无需 Key，但当前版本被标记为 "Planned" 且不可选（whisper.cpp 集成尚未发布）
+- "本地 Whisper" 无需 Key，但需先在 设置 → 语音引擎 中下载一个 ggml 模型（几十 MB 到几百 MB）；下载后完全离线运行
 
 **支持的 STT 引擎：**
 
@@ -355,7 +355,7 @@ npm run build        # 构建发布版
 | Deepgram | ✅ Stable | [console.deepgram.com](https://console.deepgram.com) | 海外首选，实时性好 |
 | Whisper API | ✅ Stable | [platform.openai.com](https://platform.openai.com) | 海外备选 (5 秒分段,精度高) |
 | 讯飞语音 | ✅ Stable | [console.xfyun.cn](https://console.xfyun.cn) | 国内首选（中文识别率最高，需 AppID:APIKey:APISecret 三段拼接） |
-| 本地 Whisper | 🔜 Planned — 在设置面板中显示为禁用状态 | — | whisper.cpp 集成尚未发布 |
+| 本地 Whisper | 🟡 Beta — 可选，需先下载模型 | 无需 Key | 离线 whisper.cpp(smart-whisper)；速度取决于 CPU/GPU |
 
 > 阿里语音 (Paraformer) 曾列在此处，但代码从未实现，已暂时从应用中移除。后续真正集成后会重新出现。
 
@@ -385,7 +385,7 @@ npm run build        # 构建发布版
 
 可以。**录音 + 语音转文字**只需要一个 Deepgram API Key，无需 AI Key。但翻译、摘要、发言建议等 AI 功能需要额外配置 AI Key。
 
-> 本地 Whisper 在路线图中尚未发布；当前实时转写可选 Deepgram（流式，延迟约 300ms）、OpenAI Whisper API（5 秒分段，精度高但延迟约 5-7 秒）或讯飞（PCM 流式，中文识别最佳）。
+> 实时转写可选 Deepgram（流式，延迟约 300ms）、OpenAI Whisper API（5 秒分段，精度高但延迟约 5-7 秒）、讯飞（PCM 流式，中文识别最佳），或 Local Whisper（离线，约 12 秒窗口，速度取决于本机 CPU/GPU 与所选模型大小）。
 
 ### Q: API 费用由谁承担？
 
@@ -457,7 +457,7 @@ MeetU 本身：
 ## 快捷操作提示 / Tips
 
 1. **半透明叠加** — 将窗口透明度调到 70%，覆盖在会议窗口上，边开会边看字幕
-2. **离线模式** — 计划中（"本地 Whisper" 引擎尚未发布）；当前需要至少一个云端 STT Key 才能转写
+2. **离线模式** — 选择 Local Whisper 引擎并下载一个 ggml 模型后，转写完全在本机运行，音频不出设备（无需任何 Key）
 3. **快速复制回复** — 在发言建议卡片上悬停鼠标，点击"复制"按钮即可复制建议内容
 4. **切换 AI 服务商** — 在设置中随时更换 AI 提供商，无需重启应用
 5. **深色模式** — 在弱光环境下切换为深色主题，保护眼睛

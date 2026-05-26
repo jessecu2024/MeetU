@@ -13,7 +13,7 @@ export type STTEngineId =
   | 'deepgram'        // Deepgram (global) — stable, streaming WebSocket
   | 'whisper_api'     // OpenAI Whisper API — stable, segment-based REST
   | 'xfyun'           // iFlytek (China) — stable, PCM streaming WebSocket
-  | 'local_whisper';  // Local Whisper.cpp (offline) — planned, not yet usable
+  | 'local_whisper';  // Local Whisper.cpp (offline) — beta, smart-whisper binding + model download
 
 /**
  * Implementation status — used to gate UI and warn users honestly.
@@ -156,13 +156,13 @@ export const STT_ENGINE_INFO: STTEngineInfo[] = [
     name: '本地 Whisper（离线）',
     nameEn: 'Local Whisper (Offline)',
     region: 'local',
-    description: '完全离线，无需网络，隐私最佳',
-    descriptionEn: 'Fully offline, no network needed, best privacy',
+    description: '完全离线，无需网络，隐私最佳；需先下载模型',
+    descriptionEn: 'Fully offline, no network, best privacy; requires a one-time model download',
     requiresApiKey: false,
-    pricing: 'Free (requires GPU or Apple Silicon)',
+    pricing: 'Free (runs on your CPU/GPU)',
     strengths: ['Fully offline', 'Zero cost', 'Data never leaves device', 'Best privacy'],
-    status: 'planned',
-    statusNote: 'whisper.cpp integration not yet shipped / whisper.cpp 集成尚未发布',
+    status: 'beta',
+    statusNote: 'Requires a one-time model download in Settings; speed depends on your CPU/GPU. On-device transcription quality should be validated on your machine. / 需在设置中一次性下载模型；速度取决于你的 CPU/GPU。建议在本机验证转写质量',
   },
 ];
 
@@ -248,9 +248,10 @@ export interface STTMigrationResult {
  * Three classes of legacy values are handled:
  *  - missing / unknown engine id  → fall back to the region default
  *  - engine id removed from the union (e.g. `aliyun_speech`) → same
- *  - engine id still in the union but `status === 'planned'` (e.g.
- *    `local_whisper`) → same; persisting it would let the runtime hit the
- *    stub path
+ *  - engine id still in the union but `status === 'planned'` → same;
+ *    persisting it would let the runtime hit a stub path. (No engine
+ *    is 'planned' today — all four ship — but the guard remains so a
+ *    future planned engine can't slip through.)
  *
  * Orphan key entries (keys for engines we no longer accept) are dropped
  * from the returned map and listed in `prunedKeys` so the caller can issue

@@ -55,6 +55,15 @@ export default function SettingsModal() {
   // macOS native per-app picker: the capturable application list.
   const [macApps, setMacApps] = useState<Array<{ pid: number; name: string; bundleId: string }>>([]);
   const [macAppsError, setMacAppsError] = useState<string | null>(null);
+  // Local Whisper model manager state.
+  const [whisperProbe, setWhisperProbe] = useState<{
+    available: boolean;
+    reason?: string;
+    models: Array<{ name: string; present: boolean; url: string; sizeBytes?: number }>;
+    hasAnyModel: boolean;
+  } | null>(null);
+  const [whisperDownloading, setWhisperDownloading] = useState<string | null>(null);
+  const [whisperProgress, setWhisperProgress] = useState<{ received: number; total: number }>({ received: 0, total: 0 });
 
   // Read test results from store (persists across modal open/close)
   const aiTestResults = useSettingsStore((s) => s.aiTestResults);
@@ -99,6 +108,24 @@ export default function SettingsModal() {
           resetSentinelIfUnsupported();
         });
     }
+  }, [activeTab]);
+
+  // Probe Local Whisper (native module + downloaded models) whenever the
+  // Speech Engine tab is open, so the model manager reflects current
+  // state. Re-probed after each download completes (via refreshWhisper).
+  const refreshWhisperProbe = () => {
+    window.electronAPI?.audio.localWhisper?.probe()
+      .then(setWhisperProbe)
+      .catch(() => setWhisperProbe({ available: false, reason: 'probe failed', models: [], hasAnyModel: false }));
+  };
+  useEffect(() => {
+    if (activeTab !== 'stt') return;
+    refreshWhisperProbe();
+    // Stream download progress into the local state for the active model.
+    const unsub = window.electronAPI?.audio.localWhisper?.onDownloadProgress((p) => {
+      setWhisperProgress({ received: p.receivedBytes, total: p.totalBytes });
+    });
+    return () => { try { unsub?.(); } catch { /* ignore */ } };
   }, [activeTab]);
 
   const handleTestConnection = async (providerId: AIProviderId) => {
@@ -484,6 +511,86 @@ export default function SettingsModal() {
                   </div>
                 );
               })()}
+
+              {/* ── Local Whisper model manager ── */}
+              {store.sttEngine === 'local_whisper' && whisperProbe && (
+                <div className="mt-3 p-3 rounded-xl border border-zinc-200 dark:border-zinc-700 space-y-2">
+                  <p className="text-sm font-medium text-zinc-900 dark:text-white">
+                    Offline Whisper Models <span className="text-zinc-400 font-normal">/ 离线 Whisper 模型</span>
+                  </p>
+                  {!whisperProbe.available ? (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      ⚠ {whisperProbe.reason || 'Local Whisper native module unavailable. Reinstall with build tools. / 本地 Whisper 原生模块不可用'}
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-xs text-zinc-500">
+                        Download a model once; it runs fully offline. Larger models are more accurate but slower. / 下载一次即可完全离线运行；模型越大越准但越慢。
+                      </p>
+                      <div className="space-y-1.5">
+                        {whisperProbe.models.map((m) => {
+                          const isActive = store.appSettings.localWhisperModel === m.name;
+                          const isDownloading = whisperDownloading === m.name;
+                          const pct = whisperProgress.total > 0
+                            ? Math.round((whisperProgress.received / whisperProgress.total) * 100)
+                            : 0;
+                          return (
+                            <div key={m.name}
+                              className={`flex items-center justify-between gap-2 p-2 rounded-lg border text-xs ${
+                                isActive ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-zinc-200 dark:border-zinc-700'
+                              }`}>
+                              <div className="min-w-0">
+                                <span className="font-medium text-zinc-900 dark:text-white">ggml-{m.name}</span>
+                                {m.present && (
+                                  <span className="ml-1 text-green-600 dark:text-green-400">✓ downloaded</span>
+                                )}
+                                {isActive && m.present && (
+                                  <span className="ml-1 text-blue-600 dark:text-blue-400">· active</span>
+                                )}
+                              </div>
+                              <div className="shrink-0">
+                                {m.present ? (
+                                  <button
+                                    onClick={() => store.updateAppSettings({ localWhisperModel: m.name })}
+                                    disabled={isActive}
+                                    className={`px-2 py-1 rounded ${isActive
+                                      ? 'bg-blue-100 text-blue-400 dark:bg-blue-900/30 cursor-default'
+                                      : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+                                    {isActive ? 'Selected' : 'Use this'}
+                                  </button>
+                                ) : isDownloading ? (
+                                  <span className="text-zinc-500">{pct}% …</span>
+                                ) : (
+                                  <button
+                                    onClick={async () => {
+                                      setWhisperDownloading(m.name);
+                                      setWhisperProgress({ received: 0, total: 0 });
+                                      const res = await window.electronAPI?.audio.localWhisper.downloadModel(m.name);
+                                      setWhisperDownloading(null);
+                                      if (res?.ok) {
+                                        store.updateAppSettings({ localWhisperModel: m.name });
+                                      }
+                                      refreshWhisperProbe();
+                                    }}
+                                    disabled={!!whisperDownloading}
+                                    className="px-2 py-1 rounded bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200 hover:bg-zinc-300 disabled:opacity-50">
+                                    Download
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {!whisperProbe.hasAnyModel && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400">
+                          ⚠ No model downloaded yet — recording will fall back to demo mode until you download one. / 尚未下载模型，录音将进入演示模式直到下载完成。
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </>
           )}
 

@@ -204,6 +204,14 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         .setUserName(settings.userProfile.name, settings.userProfile.nameEn);
     }
 
+    // Local Whisper: tell the engine which downloaded ggml model to
+    // load before startSession. Safe to call on the real engine only;
+    // the mock fallback has no setModel.
+    if (!sttIsMock && sttEngine.id === 'local_whisper' && 'setModel' in sttEngine) {
+      (sttEngine as import('../services/stt-engine/local-whisper').LocalWhisperEngine)
+        .setModel(settings.appSettings.localWhisperModel);
+    }
+
     // Register transcript callback
     const transcriptStore = useTranscriptStore.getState();
     transcriptStore.startSession(meetingId, sttIsMock ? 'mock' : sttEngine.id, sttIsMock);

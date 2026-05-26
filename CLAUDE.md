@@ -13,7 +13,7 @@
 | OpenAI Whisper API STT | ✅ Stable | 引擎以 segment 模式 (`audioMode='segment'`, `segmentDurationMs=5000`) 工作;capture.ts 用并行 MediaRecorder 每 5 秒产出一个完整 webm 文件直接 POST `/v1/audio/transcriptions`;内置 hallucination 过滤丢弃 silence 时的 "Thank you for watching" / 字幕组 类幻觉 |
 | 讯飞 STT | ✅ Stable | WebSocket 鉴权:`xfyun-signature.ts` 用 WebCrypto API 计算 HMAC-SHA256;音频管线:`audioMode='pcm-stream'`,capture.ts 启 AudioWorklet 输出 16-kHz 单声道 Float32 PCM,engine 内部转 Int16 + base64 发 `audio/L16;rate=16000` 帧 |
 | 阿里语音 STT | ❌ Removed | 之前列在文档/类型中，但代码从未实现，已从 `STTEngineId` 移除 |
-| Local Whisper (whisper.cpp) | 🔜 Planned | `local-whisper.ts` 为 stub，`feedAudio`/`stopSession` 是 TODO |
+| Local Whisper (whisper.cpp) | 🟡 Beta — 核心已验证 | 经 `smart-whisper`(MIT,whisper.cpp N-API binding,optionalDependency)实现。引擎 `audioMode='pcm-stream'`,renderer 累积 ~12s 16-kHz Float32 窗口,经 IPC 送主进程 `electron/audio/local-whisper-native.ts` 调 whisper.cpp 转写。模型管理(下载 ggml 到 userData/whisper-models + 进度)在 SettingsModal。**转写核心已端到端验证**(tiny 模型转 JFK 样本正确)。Beta 因:需一次性下载模型、速度依赖 CPU/GPU、完整 app 内管线建议真机验证 |
 | 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
 | Markdown 纪要导出 | ✅ Stable | 主进程写 `~/MeetingAI/minutes/*.md` |
 | Word (.docx) 纪要导出 | ✅ Stable | `electron/export/docx-generator.ts` 使用 `docx@^8` 在主进程生成 Word 文档（标题/摘要/讨论议题/Action Items 表格/未解决问题/下一步/免责声明），renderer 通过 `file:export` IPC 传 minutes payload，主进程写到 `~/MeetingAI/minutes/*.docx` |
@@ -75,7 +75,7 @@
 - **通用**：DeepSeek（国内外均可）
 - **国内**：通义千问(Qwen) / MiniMax / 智谱(GLM)
 
-**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。当前版本下，**实时转写需要配置 Deepgram(流式)、OpenAI Whisper API(5 秒分段) 或讯飞(PCM 流式) 之一**;只有原始音频录制可以完全无 Key 工作。Local Whisper 仍在路线图中。
+**没有"免费试用"或"内置 AI"选项。** 未配置 AI Key 时，AI 功能（翻译/摘要/发言建议）显示为灰色"未启用"状态。实时转写有四个引擎可选:Deepgram(流式)、OpenAI Whisper API(5 秒分段)、讯飞(PCM 流式) 三个云端 BYOK 引擎,以及 **Local Whisper(离线,whisper.cpp,无需 Key,需先在设置中下载模型)**。只有原始音频录制可以完全无引擎工作。
 
 **收费模式：** 软件本身收费（一次性购买或订阅），AI 和 STT 费用由用户直接向对应服务商支付。
 
@@ -87,9 +87,9 @@
 | OpenAI Whisper API | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable — segment 模式 (5 秒分段) |
 | 讯飞语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ✅ Stable — `xfyun-signature.ts` 实现 HMAC-SHA256 (WebCrypto),`audioMode='pcm-stream'` 走 AudioWorklet PCM 管线 |
 | 阿里语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ❌ 尚未实现，已暂时从 `STTEngineId` 类型中移除 |
-| whisper.cpp (本地) | **MIT 许可** | ✅ 可安全嵌入分发 | 🔜 Planned — `local-whisper.ts` 是 stub，`feedAudio` / `stopSession` 仍是 TODO |
+| whisper.cpp (本地,via smart-whisper) | **MIT 许可** | ✅ 可安全嵌入分发 | 🟡 Beta — `smart-whisper` (MIT) N-API binding;`local-whisper.ts` 走 pcm-stream 窗口化 + IPC 到主进程转写;模型按需下载。转写核心已端到端验证 |
 
-> **whisper.cpp** 是 Georgi Gerganov 用 C/C++ 重写的 Whisper 推理引擎，MIT 许可，可安全嵌入闭源商业产品。本地运行，零网络依赖，隐私最佳。**目标**是作为离线兜底方案，但当前版本只有接口骨架，尚未集成 WASM/native 二进制；用户必须配置至少一个云端 STT Key 才能转写。
+> **whisper.cpp** 是 Georgi Gerganov 用 C/C++ 重写的 Whisper 推理引擎，MIT 许可，可安全嵌入闭源商业产品。本地运行，零网络依赖，隐私最佳。已通过 `smart-whisper`(MIT,只依赖 node-addon-api,vendors whisper.cpp,作为 optionalDependency — 构建失败不阻断 `npm install`,loader 容错报 unavailable)集成到主进程。模型(ggml `.bin`,MIT)按需从 HuggingFace 下载到 `userData/whisper-models`。`scripts/build-macos-native.cjs` 之外,smart-whisper 自带 install 钩子编译 whisper.cpp(N-API,ABI 稳定,system-node 编译产物也能在 Electron load)。**转写核心已用 tiny 模型 + JFK 样本端到端验证通过**。
 
 ### Electron 构建：排除 GPL ffmpeg
 
@@ -227,7 +227,7 @@ meetu/
 │   │   │   ├── deepgram-engine.ts     # BYOK
 │   │   │   ├── whisper-api-engine.ts  # BYOK
 │   │   │   ├── xfyun-engine.ts       # BYOK
-│   │   │   └── local-whisper.ts       # MIT，可嵌入
+│   │   │   └── local-whisper.ts       # 离线 whisper.cpp (smart-whisper)，pcm-stream 窗口化 → IPC
 │   │   ├── translation.ts
 │   │   ├── mention-detector.ts
 │   │   ├── speech-advisor.ts

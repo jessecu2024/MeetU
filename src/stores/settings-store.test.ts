@@ -57,13 +57,14 @@ describe('useSettingsStore.setSTTApiKey', () => {
     expect(useSettingsStore.getState().sttApiKeys.deepgram).toBe('sk-xxx');
   });
 
-  it('refuses to persist a key for a planned engine (local_whisper)', () => {
+  it('refuses to persist a key for a non-selectable engine id (removed aliyun_speech)', () => {
     // Regression guard: even if a UI/feature-flag bug lets the user reach
-    // the "save key" code path for a planned engine, the store must drop
-    // the write so that no secret lands in encrypted storage that the next
-    // migration would have to clean up.
-    useSettingsStore.getState().setSTTApiKey('local_whisper', 'pretend-secret');
-    expect(useSettingsStore.getState().sttApiKeys.local_whisper).toBeUndefined();
+    // the "save key" code path for an engine that isn't selectable, the
+    // store must drop the write so no orphan secret lands in encrypted
+    // storage. No engine is 'planned' today, so we exercise the guard
+    // with a removed-from-union id (cast through STTEngineId).
+    useSettingsStore.getState().setSTTApiKey('aliyun_speech' as never, 'pretend-secret');
+    expect((useSettingsStore.getState().sttApiKeys as Record<string, string>).aliyun_speech).toBeUndefined();
   });
 
   it('accepts a key for xfyun now that it is selectable', () => {
@@ -92,13 +93,11 @@ describe('useSettingsStore.setSTTEngine', () => {
     expect(useSettingsStore.getState().sttEngine).toBe('whisper_api');
   });
 
-  it('refuses a planned engine (local_whisper) and falls back to the region default', () => {
-    // Store-level guard: even if a UI bug lets a planned engine click
-    // through, the store normalizes to a selectable one. Without this,
-    // a stray setSTTEngine('local_whisper') call would persist a broken
-    // selection that survives until next migration.
+  it('accepts local_whisper now that it is selectable (beta)', () => {
+    // Was rejected + rewritten to the region default while planned.
+    // Now offline Whisper ships, so the selection sticks.
     useSettingsStore.getState().setSTTEngine('local_whisper');
-    expect(useSettingsStore.getState().sttEngine).toBe('deepgram');
+    expect(useSettingsStore.getState().sttEngine).toBe('local_whisper');
   });
 
   it('accepts xfyun (now stable) without rewriting', () => {
@@ -106,9 +105,12 @@ describe('useSettingsStore.setSTTEngine', () => {
     expect(useSettingsStore.getState().sttEngine).toBe('xfyun');
   });
 
-  it('uses the China region default (xfyun today) when a planned engine is rejected for a China user', () => {
+  it('falls back to the region default when a non-selectable id is forced through (removed aliyun_speech)', () => {
+    // The store-level guard normalizes a non-selectable id to a
+    // selectable one. No engine is 'planned' now, so we exercise it
+    // with a removed-from-union id.
     useSettingsStore.setState({ userRegion: 'china' });
-    useSettingsStore.getState().setSTTEngine('local_whisper');
+    useSettingsStore.getState().setSTTEngine('aliyun_speech' as never);
     expect(useSettingsStore.getState().sttEngine).toBe('xfyun');
   });
 });

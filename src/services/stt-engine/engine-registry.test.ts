@@ -13,10 +13,12 @@ describe('sttRegistry.getConfiguredEngine fallback', () => {
     expect(result.engine.id).toBe('deepgram');
   });
 
-  it('falls through from local_whisper (stub) to mock when no other engine has a key', async () => {
-    // Regression guard: previously the fallback loop could return the Local
-    // Whisper stub as `isMock: false` if `apiKeys.local_whisper` had any
-    // truthy value at all. Now it must skip planned engines entirely.
+  it('does not let a spurious local_whisper key bypass the availability check (no native module in node test → mock)', async () => {
+    // local_whisper is keyless: a stored "key" must NOT short-circuit
+    // selection. The engine is availability-tested via testConnection,
+    // which fails in the node test env (no window.electronAPI / native
+    // module), so we correctly fall back to mock rather than returning a
+    // non-functional engine.
     const result = await sttRegistry.getConfiguredEngine('local_whisper', {
       local_whisper: 'pretend-this-was-set-somehow',
     });
@@ -36,7 +38,11 @@ describe('sttRegistry.getConfiguredEngine fallback', () => {
     expect(result.engine.id).toBe('whisper_api');
   });
 
-  it('skips the only-remaining-planned engine (local_whisper) and falls back to mock when nothing else has a key', async () => {
+  it('does not surface keyless local_whisper from the fallback loop on a spurious key (falls back to mock)', async () => {
+    // preferred=deepgram has no key; the only stored "key" is for the
+    // keyless local_whisper. The fallback loop skips keyless engines
+    // (they are only chosen as the explicit preferred engine, where
+    // they get availability-tested), so this lands on mock.
     const result = await sttRegistry.getConfiguredEngine('deepgram', {
       local_whisper: 'should-be-ignored',
     });
