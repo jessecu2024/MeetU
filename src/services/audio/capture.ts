@@ -853,6 +853,18 @@ class AudioCaptureManager {
       }
     });
 
+    // Pre-start cancellation check. The AudioContext / worklet setup
+    // above contains awaits; if stop() ran during them, doStop() will
+    // have called stopNativeMacOSSource() and cleared nativeActive.
+    // We must NOT issue macos.start() after a stop — otherwise
+    // ScreenCaptureKit starts (and possibly stalls on a permission
+    // prompt) AFTER the session was torn down. This check is
+    // synchronous and immediately precedes the start call, so no
+    // stop() can interleave between the check and the call.
+    if (!this.nativeActive) {
+      throw new Error('macOS native capture was stopped during setup');
+    }
+
     // Ask the main process to start ScreenCaptureKit. If this rejects
     // (permission denied, no displays, pid gone), the caller's catch
     // tears everything down.
@@ -861,12 +873,11 @@ class AudioCaptureManager {
       throw new Error(res.error || 'native start returned ok:false');
     }
 
-    // If stop() ran while we were awaiting macos.start(), it will have
-    // called stopNativeMacOSSource() (sending macos.stop() — which the
-    // native state machine turns into a cancel — and clearing
-    // nativeActive). Don't proceed to hand a now-dead stream back to
-    // start() for MediaRecorder wiring; throw so start()'s catch
-    // cleans up the rest.
+    // Post-start cancellation check. If stop() ran while we were
+    // awaiting macos.start(), it sent macos.stop() (the native state
+    // machine turns that into a cancel) and cleared nativeActive.
+    // Don't hand a now-dead stream back to start() for MediaRecorder
+    // wiring; throw so start()'s catch cleans up the rest.
     if (!this.nativeActive) {
       throw new Error('macOS native capture was stopped during start');
     }
