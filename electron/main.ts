@@ -3,7 +3,8 @@
 // Creates floating window, registers IPC handlers, manages lifecycle
 // ============================================================
 
-import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, shell, desktopCapturer } from 'electron';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSetting, setSetting } from './store';
@@ -14,6 +15,7 @@ import {
 import { initDatabase, runQuery } from './database';
 import { renderMinutesDocx } from './export/docx-generator';
 import { sanitizeFilenameForExport } from './export/sanitize-filename';
+import { probeSystemAudioSupport } from './system-audio-probe';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,6 +107,98 @@ function createWindow(): void {
   });
 }
 
+/**
+ * Register the global session handler that lets the renderer call
+ * `navigator.mediaDevices.getDisplayMedia({audio:true, ...})` and
+ * receive system-audio loopback. Without this, Electron rejects every
+ * such call with `NotSupportedError`.
+ *
+ * Defense-in-depth:
+ *
+ *   - Reject every request that does not originate from the trusted
+ *     main frame of the mainWindow. Embedded iframes, popup windows,
+ *     and any future webview content must not be able to silently
+ *     receive a screen capture by issuing `getDisplayMedia`.
+ *   - Reject requests that do not ask for audio (the renderer's
+ *     only legitimate use of this API is the system-audio loopback
+ *     path; a stray request that wants only video should not be
+ *     handed the primary screen on the user's behalf).
+ *   - Only return `audio:'loopback'` on platforms where Electron
+ *     supports it (Windows). On other platforms we still reject so
+ *     a future MeetU UI bug that calls `getDisplayMedia` outside of
+ *     the system-audio button cannot silently leak the screen.
+ *
+ * Lives in its own function (not inside `createWindow`) because it
+ * mutates the default Session — global state configured exactly once
+ * during `app.whenReady`.
+ */
+function registerDisplayMediaHandler(): void {
+  // Bypass-shape for `callback({})` — the typedef expects a Streams
+  // object with optional `video`/`audio`, and passing `{}` tells
+  // Electron to reject the request. The signature parameter typing
+  // here is a workaround for the strict overload.
+  const denyShape = {} as { video?: never; audio?: never };
+
+  session.defaultSession.setDisplayMediaRequestHandler(
+    async (request, callback) => {
+      // 1) Authenticate the requester. Only the trusted main frame
+      //    (top-level WebFrameMain of the BrowserWindow we created)
+      //    is allowed to ask for system audio. A future iframe /
+      //    webview / popup would have a different `frame` and
+      //    different `securityOrigin`, so we reject the request
+      //    rather than handing out the primary screen.
+      const win = mainWindow;
+      const requestFrameId = request.frame?.frameTreeNodeId;
+      const trustedFrameId = win?.webContents?.mainFrame?.frameTreeNodeId;
+      const isMainFrame = !!win && !win.isDestroyed() && requestFrameId !== undefined && requestFrameId === trustedFrameId;
+      if (!isMainFrame) {
+        console.warn(
+          `[Display] Rejected getDisplayMedia from non-main-frame request`,
+          { origin: request.securityOrigin, audioRequested: request.audioRequested, videoRequested: request.videoRequested },
+        );
+        callback(denyShape);
+        return;
+      }
+
+      // 2) We only serve loopback audio requests. A request that
+      //    wants only video has no legitimate use case in MeetU and
+      //    is more likely a bug or an attempt to bypass the device
+      //    selector. Reject so the screen does not leak.
+      if (!request.audioRequested) {
+        console.warn('[Display] Rejected getDisplayMedia: audio not requested');
+        callback(denyShape);
+        return;
+      }
+
+      // 3) Only return loopback on platforms where Electron's typedef
+      //    documents support. On macOS/Linux Electron 30 returns
+      //    Windows-only support; allowing it here would either be a
+      //    no-op (Electron rejects internally) or, worse, hand out
+      //    the primary screen with a silent audio track.
+      if (process.platform !== 'win32') {
+        console.warn(
+          `[Display] Rejected getDisplayMedia: audio:'loopback' is Windows-only on Electron ${process.versions.electron}; platform=${process.platform}`,
+        );
+        callback(denyShape);
+        return;
+      }
+
+      try {
+        const sources = await desktopCapturer.getSources({ types: ['screen'] });
+        if (sources.length === 0) {
+          console.error('[Display] No screen sources available for loopback');
+          callback(denyShape);
+          return;
+        }
+        callback({ video: sources[0], audio: 'loopback' });
+      } catch (err) {
+        console.error('[Display] setDisplayMediaRequestHandler failed:', err);
+        callback(denyShape);
+      }
+    },
+  );
+}
+
 /** Register global shortcuts */
 function registerShortcuts(): void {
   globalShortcut.register('CommandOrControl+Shift+M', () => {
@@ -168,6 +262,43 @@ function registerIPC(): void {
   // ── Audio: Legacy ──
   ipcMain.handle('audio:get-devices', async () => {
     return [];
+  });
+
+  // ── System audio loopback: support probe ──
+  // The renderer calls this before offering the "System Audio" device
+  // option, so users on unsupported platforms (everything except
+  // Windows 10+ today) see an explanation instead of a silent failure
+  // when they try to record. Backed by Electron's getDisplayMedia +
+  // setDisplayMediaRequestHandler path. Per Electron 30's typedef,
+  // audio:'loopback' is "currently only supported on Windows" (it
+  // wraps WASAPI loopback). macOS native system-audio capture via
+  // ScreenCaptureKit is on the roadmap and ships through a native
+  // N-API module (PR #4b) rather than this Electron wrapper path.
+  ipcMain.handle('system-audio:probe', async () => {
+    // On darwin we read the Screen Recording permission state purely
+    // for diagnostics. It is informational only on this PR — darwin
+    // returns `supported:false` regardless of the permission value
+    // (per Electron 30 typedef, this loopback path is Windows-only).
+    // When PR #4b lands the native ScreenCaptureKit module, the same
+    // permission status will gate the macOS path; we surface it now
+    // so the renderer and the future native path read a consistent
+    // value.
+    let screenPermission: string | undefined;
+    if (process.platform === 'darwin') {
+      try {
+        const { systemPreferences } = await import('electron');
+        screenPermission = systemPreferences.getMediaAccessStatus('screen');
+      } catch { /* legacy macOS without that API */ }
+    }
+    return probeSystemAudioSupport({
+      platform: process.platform,
+      // Electron augments NodeJS.Process with getSystemVersion(); on
+      // macOS it returns the real OS version (e.g. "13.4.0"), unlike
+      // os.release() which returns the Darwin kernel version.
+      macOsVersion: process.platform === 'darwin' ? process.getSystemVersion() : undefined,
+      winRelease: process.platform === 'win32' ? os.release() : undefined,
+      screenPermission,
+    });
   });
 
   // ── Database ──
@@ -478,6 +609,7 @@ app.whenReady().then(async () => {
 
   await initDatabase();
   registerIPC();
+  registerDisplayMediaHandler();
   registerShortcuts();
   createWindow();
 

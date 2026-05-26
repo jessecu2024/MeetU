@@ -1,0 +1,135 @@
+// Tests for the renderer-side capture-manager pieces that we can
+// exercise without a real browser audio stack (the start()/stop()
+// pipeline depends on MediaRecorder + AudioContext + window.electronAPI
+// and is covered by integration testing instead).
+//
+// These tests focus on:
+//   - The SYSTEM_AUDIO_DEVICE_ID sentinel stays distinct from any
+//     plausible real device id, including the legacy "default" value.
+//   - mapSystemAudioError covers every DOMException name we expect
+//     from getDisplayMedia (the names are stable per the spec) and
+//     produces bilingual strings the UI can render verbatim.
+//
+// Why this matters: getting the sentinel wrong (e.g. accidentally
+// using a string a browser might emit as an actual deviceId) would
+// silently route real microphone selections through the system-audio
+// branch. Getting the error-mapper wrong means users see "Audio
+// error: Undefined" instead of the System Settings instructions for
+// granting Screen Recording permission.
+import { describe, it, expect } from 'vitest';
+import { SYSTEM_AUDIO_DEVICE_ID, mapSystemAudioError } from './capture';
+
+describe('SYSTEM_AUDIO_DEVICE_ID sentinel', () => {
+  it('is a distinctive underscore-wrapped string that cannot collide with a real device id', () => {
+    // Real audio deviceIds are non-empty hex hashes; "default" and
+    // "communications" are the only standardized non-hash values.
+    expect(SYSTEM_AUDIO_DEVICE_ID).toBe('__system_audio__');
+    expect(SYSTEM_AUDIO_DEVICE_ID).not.toBe('');
+    expect(SYSTEM_AUDIO_DEVICE_ID).not.toBe('default');
+    expect(SYSTEM_AUDIO_DEVICE_ID).not.toBe('communications');
+    expect(SYSTEM_AUDIO_DEVICE_ID.startsWith('__')).toBe(true);
+    expect(SYSTEM_AUDIO_DEVICE_ID.endsWith('__')).toBe(true);
+  });
+});
+
+function domException(name: string, message = ''): DOMException {
+  return new DOMException(message, name);
+}
+
+describe('mapSystemAudioError', () => {
+  it('maps NotAllowedError without mis-directing users to macOS Screen Recording settings', () => {
+    // This code path is Windows-only per Electron 30's typedef.
+    // Telling a macOS user to grant macOS Screen Recording permission
+    // for THIS path is a bad bug: granting it won't help (Electron's
+    // wrapper doesn't use ScreenCaptureKit yet), and the user wastes
+    // time + might disclose more than they intended. The error must
+    // route macOS users elsewhere (virtual cable / PR #4b) instead.
+    const msg = mapSystemAudioError(domException('NotAllowedError'));
+    expect(msg).toMatch(/denied/i);
+    expect(msg).not.toMatch(/Screen Recording permission/);
+    expect(msg).toMatch(/Windows-only|PR #4b/);
+    expect(msg).toMatch(/路线图|PR #4b/);
+  });
+
+  it('maps NotFoundError to a "no source available" hint', () => {
+    const msg = mapSystemAudioError(domException('NotFoundError'));
+    expect(msg).toMatch(/No system audio source/);
+    expect(msg).toMatch(/未找到/);
+  });
+
+  it('maps NotSupportedError to "Windows 10+ only on this path; macOS users use cable / PR #4b"', () => {
+    const msg = mapSystemAudioError(domException('NotSupportedError'));
+    // Must NOT echo the old (incorrect) "macOS 13+ OR Windows 10+"
+    // claim — Electron 30's typedef declares loopback Windows-only.
+    expect(msg).not.toMatch(/macOS 13\+ or Windows 10\+/);
+    expect(msg).toMatch(/Windows 10\+ only/);
+    expect(msg).toMatch(/virtual audio cable|virtual cable/i);
+    expect(msg).toMatch(/PR #4b|ScreenCaptureKit/);
+    expect(msg).toMatch(/虚拟音频线缆/);
+  });
+
+  it('maps AbortError to "main process rejected" (the setDisplayMediaRequestHandler returned {})', () => {
+    const msg = mapSystemAudioError(domException('AbortError'));
+    expect(msg).toMatch(/main process/i);
+    expect(msg).toMatch(/主进程/);
+  });
+
+  it('maps NotReadableError to "device busy" with concrete other-app guidance', () => {
+    const msg = mapSystemAudioError(domException('NotReadableError'));
+    expect(msg).toMatch(/busy/i);
+    // Names real apps that commonly hold the screen-capture engine on
+    // macOS so the user can find and quit them.
+    expect(msg).toMatch(/Loom|OBS|QuickTime/);
+    expect(msg).toMatch(/繁忙|不可读/);
+  });
+
+  it('maps InvalidStateError to a "bring window to foreground" hint', () => {
+    const msg = mapSystemAudioError(domException('InvalidStateError'));
+    expect(msg).toMatch(/foreground/i);
+    expect(msg).toMatch(/前台/);
+  });
+
+  it('maps OverconstrainedError to "constraints not satisfied — likely a bug"', () => {
+    const msg = mapSystemAudioError(domException('OverconstrainedError'));
+    expect(msg).toMatch(/constraints/i);
+    expect(msg).toMatch(/bug/i);
+    expect(msg).toMatch(/约束/);
+  });
+
+  it('maps SecurityError to the generic origin/policy block (NOT to a "missing main-process handler" claim)', () => {
+    const msg = mapSystemAudioError(domException('SecurityError'));
+    expect(msg).toMatch(/security/i);
+    // Round-2 review: claiming the main process is misconfigured is
+    // misleading because a missing setDisplayMediaRequestHandler rejects
+    // with NotSupportedError (handled elsewhere), not SecurityError.
+    expect(msg).not.toMatch(/setDisplayMediaRequestHandler/);
+    expect(msg).not.toMatch(/reinstall/i);
+    expect(msg).toMatch(/origin|iframe|Permissions-Policy/);
+  });
+
+  it('maps TypeError to "bad constraints — likely a bug"', () => {
+    const msg = mapSystemAudioError(domException('TypeError'));
+    expect(msg).toMatch(/bad constraints/i);
+    expect(msg).toMatch(/bug/i);
+  });
+
+  it('falls back to a generic message for unknown DOMException names', () => {
+    const msg = mapSystemAudioError(domException('SomeFutureDOMError', 'oops'));
+    expect(msg).toMatch(/System audio error/);
+    expect(msg).toMatch(/系统音频错误/);
+    expect(msg).toMatch(/oops/);
+  });
+
+  it('falls back gracefully when given a non-DOMException object', () => {
+    const msg = mapSystemAudioError(new Error('plain js error'));
+    expect(msg).toMatch(/System audio error/);
+    expect(msg).toMatch(/plain js error/);
+  });
+
+  it('does not crash on null/undefined', () => {
+    expect(() => mapSystemAudioError(null)).not.toThrow();
+    expect(() => mapSystemAudioError(undefined)).not.toThrow();
+    const msg = mapSystemAudioError(null);
+    expect(msg).toMatch(/System audio error/);
+  });
+});

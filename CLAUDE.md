@@ -7,8 +7,8 @@
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | 麦克风录音（`getUserMedia`） | ✅ Stable | 单声道麦克风 + Windows Stereo Mix / macOS 虚拟声卡 loopback 路径走通 |
-| macOS ScreenCaptureKit 原生捕获 | 🔜 Planned | `native/macos/` 有 Swift 草稿与 binding.gyp，但 `audio_tap.mm` 的 N-API 绑定仍是 placeholder，未参与构建 |
-| Windows WASAPI Loopback 原生捕获 | 🔜 Planned | `native/windows/` 尚未创建 |
+| Windows 系统音频 loopback (整机捕获) | ✅ Stable | Windows 10+ via Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`(内部用 WASAPI loopback)。`SettingsModal` 里"🔊 System Audio (native loopback)"开关在 Windows 上 enabled;`SYSTEM_AUDIO_DEVICE_ID` 哨兵触发 `capture.ts` 走 `getDisplayMedia` 分支,旁路 `getUserMedia`。零 GPL 驱动 |
+| macOS 系统音频 loopback (整机/per-app) | 🔜 Planned (PR #4b) | Electron 30 的 `setDisplayMediaRequestHandler` typedef 明确写明 `audio:'loopback'` "currently only supported on Windows" — 不能用 Electron 包装路径覆盖 macOS。`native/macos/` 有 Swift 草稿与 binding.gyp,但 `audio_tap.mm` 的 N-API 绑定仍是 placeholder。macOS 用户当前需用非 GPL 虚拟音频线缆作为替代;PR #4b 将上线原生 ScreenCaptureKit N-API 模块同时覆盖整机和 per-app 捕获 |
 | Deepgram STT | ✅ Stable | WebSocket 经主进程 IPC，已可用 |
 | OpenAI Whisper API STT | ✅ Stable | 引擎以 segment 模式 (`audioMode='segment'`, `segmentDurationMs=5000`) 工作;capture.ts 用并行 MediaRecorder 每 5 秒产出一个完整 webm 文件直接 POST `/v1/audio/transcriptions`;内置 hallucination 过滤丢弃 silence 时的 "Thank you for watching" / 字幕组 类幻觉 |
 | 讯飞 STT | ✅ Stable | WebSocket 鉴权:`xfyun-signature.ts` 用 WebCrypto API 计算 HMAC-SHA256;音频管线:`audioMode='pcm-stream'`,capture.ts 启 AudioWorklet 输出 16-kHz 单声道 Float32 PCM,engine 内部转 Int16 + base64 发 `audio/L16;rate=16000` 帧 |
@@ -27,7 +27,7 @@
 本产品的法律定位是：**个人会议笔记辅助工具**。
 
 核心原则：
-1. **我们是录音笔记工具，不是会议平台插件** — 不调用任何会议平台（Zoom/Teams/腾讯会议）的 API，不以机器人身份加入会议；当前版本通过 `getUserMedia` 捕获用户在系统中选择的音频输入设备（默认麦克风；用户可手动启用 Stereo Mix / 虚拟音频线缆以捕获系统输出），等同于用户自己按下录音键
+1. **我们是录音笔记工具，不是会议平台插件** — 不调用任何会议平台（Zoom/Teams/腾讯会议）的 API，不以机器人身份加入会议；当前版本通过 `getUserMedia`（麦克风/Stereo Mix/虚拟音频线缆）或 Electron `getDisplayMedia({audio:'loopback'})`（Windows 10+ 整机系统音频;macOS 仍待 PR #4b 上原生 ScreenCaptureKit 后才有原生路径）捕获,等同于用户自己按下录音键
 2. **用户自带一切（纯 BYOK）** — 用户必须使用自己的 AI API Key 和 STT API Key，我们不代理、不转售任何 AI 服务。应用本身是纯工具软件
 3. **用户承担录音合规责任** — 首次使用前必须展示法律声明，用户确认知晓并遵守当地录音法规后才能使用
 4. **零 GPL 依赖** — 不使用 BlackHole 或任何 GPL 许可的组件，确保闭源商业发布合规
@@ -48,16 +48,19 @@
 
 **禁止使用 BlackHole(GPL-3.0)、Soundflower(GPL) 或任何 GPL 许可的虚拟音频驱动。**
 
-| 平台 | 目标方案 | 当前状态 |
-|------|---------|---------|
-| macOS 13+ | **ScreenCaptureKit** | 🔜 计划中 — `native/macos/` 已有 Swift 草稿和 binding.gyp，但 N-API 绑定 (`audio_tap.mm`) 仍是占位符；运行时尚未挂载 |
-| macOS 12及以下 | 暂不支持 | 要求最低 macOS 13 Ventura |
-| Windows 10+ | **WASAPI Loopback** | 🔜 计划中 — `native/windows/` 尚未创建 |
-| 当前所有平台 | **`getUserMedia` 麦克风 + loopback 指引** | ✅ 已落地 — 渲染层使用 `navigator.mediaDevices.getUserMedia`，UI 引导用户在 Windows 启用 Stereo Mix 或在 macOS 路由虚拟音频线缆 |
+| 平台 | 方案 | 当前状态 |
+|------|------|---------|
+| Windows 10+ | **WASAPI Loopback** (via Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`) | ✅ 已落地 — `electron/main.ts` 注册 handler,`capture.ts` 见到 `SYSTEM_AUDIO_DEVICE_ID` 哨兵时走 `getDisplayMedia` 分支 |
+| Windows 9 及以下 | 不支持 | UI 自动 gray out 系统音频选项;用户走 Stereo Mix |
+| macOS 13+ | **ScreenCaptureKit 整机 + 按 app capture**(原生 N-API,`native/macos/` 路径) | 🔜 计划中 (PR #4b) — Electron 30 的 `audio:'loopback'` 仅 Windows 支持(per Electron typedef),所以 macOS 必须走原生 N-API。Swift 草稿和 binding.gyp 已就位,N-API 绑定 (`audio_tap.mm`) 仍为占位符 |
+| macOS 12 及以下 | 不支持 | ScreenCaptureKit 自身要求 macOS 13+;用户走 `getUserMedia` + 虚拟音频线缆 |
+| 所有平台 | **`getUserMedia` 麦克风/Stereo Mix/虚拟音频线缆** | ✅ 已落地 — 始终可作为 fallback 路径 |
 
-macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；可选择捕获特定应用（如 Zoom）的音频而非全系统；不需要用户安装任何额外驱动；macOS 13+ 覆盖主流用户群。
+Windows 系统音频 loopback 通过 Electron 30+ 官方 `setDisplayMediaRequestHandler` + `audio:'loopback'` 实现,内部就是 WASAPI Loopback。无需 node-gyp 编译,无需用户安装驱动。
 
-> **开发注意：** ScreenCaptureKit 需通过 Node.js 原生模块（N-API addon）在 Electron 主进程中调用 Swift/ObjC 代码。`native/macos/` 已有目录骨架，但 `audio_tap.mm` 中的 N-API 绑定仍为 TODO，需要补全后才能真正捕获系统音频。在此之前，README 与 UI 不应承诺"系统音频自动捕获"。
+> **关键约束:** Electron 30 的官方 typedef (node_modules/electron/electron.d.ts) 写得非常明确:`audio:'loopback'` "currently only supported on Windows"。我们不能在 macOS 上声称已经做完整机 loopback —— renderer 调 `getDisplayMedia({audio:'loopback'})` 会被 Electron 自身拒绝或返回静默音轨。所以 `system-audio:probe` IPC 在 darwin 上直接返回 `supported:false`,UI gray out 选项,把用户引导到虚拟音频线缆 / PR #4b 的原生 ScreenCaptureKit 模块。
+>
+> **安全 hardening:** `setDisplayMediaRequestHandler` 内部三道检查:(1) `request.frame === mainWindow.webContents.mainFrame` —— 拒绝任何 iframe / webview / popup 发出的请求;(2) `request.audioRequested === true` —— 拒绝纯视频请求,避免泄漏屏幕;(3) `process.platform === 'win32'` —— 即使是被信任的 main frame,在非 Windows 上也一律拒绝,防止未来 UI bug 误调 `getDisplayMedia` 时静默泄屏。
 
 ### AI 提供商：纯 BYOK 模式
 
@@ -106,8 +109,10 @@ Electron 本身是 MIT 许可，可商用。但内置 Chromium 的 ffmpeg 包含
 1. 录音合规责任
 本应用通过您在操作系统中选择的音频输入设备（默认为麦克风）进行录制。
 如需同时录制其他参与者的声音，需要在系统层启用 loopback（Windows: Stereo Mix；
-macOS: 非 GPL 虚拟音频线缆），并在应用内选择该设备。原生 ScreenCaptureKit /
-WASAPI Loopback 在路线图中尚未发布。
+macOS: 非 GPL 虚拟音频线缆），并在应用内选择该设备。Windows 10+ 用户也
+可在设置中启用"System Audio (native loopback)"使用 Electron 包装的
+WASAPI loopback(无需 Stereo Mix);macOS 原生 ScreenCaptureKit 在 PR
+#4b 路线图中。
 您有责任确保：
 - 已遵守您所在地区关于录音的法律法规
 - 已获得所有会议参与者的知情同意（如适用法律要求）
@@ -255,8 +260,8 @@ meetu/
 5. 实现 STT 引擎选择（含本地 whisper.cpp 离线方案）
 
 ### Phase 2: 音频捕获 + 录音（零 GPL 依赖）
-1. macOS: 实现 ScreenCaptureKit N-API 原生模块
-2. Windows: 实现 WASAPI Loopback N-API 原生模块
+1. Windows: 整机 WASAPI loopback (Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`,无需 N-API,已在 PR #4a 上线)
+2. macOS: ScreenCaptureKit 整机 + per-app capture(原生 N-API,Swift + ObjC++ 桥;PR #4b)
 3. 双通道音频流（系统音频 + 麦克风）
 4. WAV 录音（Web Audio API，不依赖 ffmpeg）
 5. 每次录音前显示 RecordingConsent

@@ -1,10 +1,36 @@
 // ============================================================
 // Audio Capture Manager (Renderer Process)
 //
-// Pure getUserMedia approach — no desktopCapturer, no AudioContext.
-// User selects an audio input device (mic, Stereo Mix, or virtual cable).
-// This ensures zero interference with audio output.
+// Two acquisition paths:
+//
+//   1. getUserMedia — selects a specific audio input device by id.
+//      Used for microphones, Bluetooth headsets, Windows Stereo Mix,
+//      or any virtual audio cable the user has installed.
+//
+//   2. getDisplayMedia + audio:'loopback' — captures the system
+//      output bus. Per Electron 30's typedef, audio:'loopback' is
+//      "currently only supported on Windows" (it wraps WASAPI
+//      loopback). macOS native system-audio capture (via
+//      ScreenCaptureKit) is on the roadmap (PR #4b) and ships via
+//      a native N-API module rather than this Electron path. The
+//      main-process setDisplayMediaRequestHandler in
+//      electron/main.ts enforces win32 + main-frame + audio-only
+//      to keep the screen from leaking on platforms / requesters
+//      where this path doesn't apply. Triggered by setting
+//      `deviceId` to the sentinel SYSTEM_AUDIO_DEVICE_ID.
+//
+// The rest of the pipeline (MediaRecorder, segment recorder, PCM
+// resampler) is identical for both paths because both yield a normal
+// MediaStream with an audio track.
 // ============================================================
+
+/**
+ * Sentinel `deviceId` value that tells the capture manager to use
+ * `getDisplayMedia({audio:'loopback'})` instead of `getUserMedia`.
+ * Anything else (including the empty string and `'default'`) is
+ * treated as a normal audio input device id.
+ */
+export const SYSTEM_AUDIO_DEVICE_ID = '__system_audio__';
 
 export interface CaptureState {
   micActive: boolean;
@@ -40,6 +66,71 @@ function mapMicError(err: unknown): string {
       return 'Selected audio device not available. Try "Refresh Devices" in Settings. / 选中的设备不可用，请在设置中刷新设备列表';
     default:
       return `Audio error: ${(err as Error)?.message || name || 'Unknown'} / 音频错误`;
+  }
+}
+
+/**
+ * Translate `getDisplayMedia` failures into actionable strings.
+ * Distinct from `mapMicError` because the failure modes are different
+ * (Screen Recording permission, no source available, user cancelled
+ * the picker if Electron's system picker is ever turned on).
+ *
+ * Exported for unit testing — each branch maps a DOMException name to
+ * a user-facing message; getting one of these wrong is a silent UX
+ * regression that's hard to catch any other way.
+ */
+export function mapSystemAudioError(err: unknown): string {
+  const name = (err as DOMException)?.name;
+  const message = (err as Error)?.message || '';
+  switch (name) {
+    case 'NotAllowedError':
+      // Permission denied at the OS / Electron layer. On Windows
+      // this is rare (loopback does not normally require a prompt);
+      // it usually indicates a session/permission policy bug. Note:
+      // we do NOT direct users to macOS Screen Recording settings
+      // here — this code path is Windows-only per Electron 30, and
+      // mis-directing macOS users to grant a permission that won't
+      // help is worse than the generic phrasing.
+      return 'System audio access denied at the OS / session layer. This Electron loopback path is Windows-only; macOS native loopback is on the roadmap (PR #4b). / 系统音频权限在 OS / 会话层被拒绝;此 Electron loopback 路径仅 Windows 支持,macOS 原生 loopback 在路线图中(PR #4b)';
+    case 'NotFoundError':
+      return 'No system audio source available. Make sure something is playing through the system output. / 未找到系统音频源';
+    case 'NotReadableError':
+      // Hardware/OS-level acquisition failure (the platform admitted
+      // the request but couldn't open the capture device — e.g. the
+      // audio engine is in an unexpected state, another process has a
+      // conflicting lock, or ScreenCaptureKit refused mid-handshake).
+      return 'System audio device is busy or unreadable. Quit any other screen-recording app (Loom, OBS, QuickTime) and try again. / 系统音频设备繁忙或不可读，请退出其它录屏/录音软件后重试';
+    case 'InvalidStateError':
+      // Most commonly fired when getDisplayMedia is called while the
+      // page is not the focused/active document or while a previous
+      // capture is still tearing down. Surface a concrete action.
+      return 'System audio cannot start in the current window state. Bring MeetU to the foreground and try again. / 当前窗口状态无法启动系统音频，请将 MeetU 切到前台后重试';
+    case 'OverconstrainedError':
+      // Our video constraints are intentionally minimal (1×1 @ 1fps)
+      // but a future change might trip this. Tell the user it's an
+      // app bug, not a permission/hardware problem.
+      return 'System audio constraints could not be satisfied by this OS. This is likely a MeetU bug — please report it. / 系统音频约束无法满足，可能是应用 bug，请反馈';
+    case 'SecurityError':
+      // Browser/origin-level block: e.g. an insecure context, an iframe
+      // without `allow="display-capture"`, or a Permissions-Policy
+      // header forbidding the call. In a packaged Electron app this is
+      // unusual but possible if the renderer is ever embedded in a
+      // sandboxed frame; we surface the generic class so users can
+      // report it without us mis-blaming the main process. (A missing
+      // setDisplayMediaRequestHandler rejects with NotSupportedError,
+      // not SecurityError — that case is handled above.)
+      return 'System audio is blocked by the browser security policy (origin, iframe, or Permissions-Policy). Please report the OS and how MeetU was launched. / 系统音频被浏览器安全策略阻止，请反馈系统信息与启动方式';
+    case 'TypeError':
+      // Wrong argument shape — should never happen with our
+      // hard-coded constraints, but DOM specs raise this when
+      // getDisplayMedia is called without any constraints at all.
+      return 'System audio call rejected by the browser (bad constraints). This is likely a MeetU bug — please report it. / 系统音频调用参数被浏览器拒绝，可能是应用 bug，请反馈';
+    case 'NotSupportedError':
+      return 'System audio capture via the Electron loopback path is supported on Windows 10+ only at this time. On macOS, route through a virtual audio cable or wait for PR #4b (native ScreenCaptureKit module). / 此 Electron loopback 路径仅 Windows 10+ 支持。macOS 用户请用虚拟音频线缆,或等待 PR #4b 上线原生 ScreenCaptureKit 模块';
+    case 'AbortError':
+      return 'System audio request was rejected by the main process (no screen sources). / 主进程未返回有效的屏幕源';
+    default:
+      return `System audio error: ${message || name || 'Unknown'} / 系统音频错误`;
   }
 }
 
@@ -192,7 +283,8 @@ class AudioCaptureManager {
 
   async start(): Promise<void> {
     if (this._state.recording) return;
-    console.log('[Audio] Starting capture (pure getUserMedia, no desktopCapturer)');
+    const useSystemAudio = this.deviceId === SYSTEM_AUDIO_DEVICE_ID;
+    console.log(`[Audio] Starting capture (path=${useSystemAudio ? 'getDisplayMedia/loopback' : 'getUserMedia'})`);
 
     // ── Diagnostics ──
     try {
@@ -222,6 +314,49 @@ class AudioCaptureManager {
       console.error('[Audio] Failed to start file recording:', err);
     }
     this.emit({ recording: true, filePath, error: null });
+
+    if (useSystemAudio) {
+      // getDisplayMedia requires a video constraint to be present even
+      // when we only want audio. We ask for the smallest possible frame
+      // (1×1 at 1 fps) and stop the video track immediately to free the
+      // GPU encoder pipeline. The audio track from `audio:'loopback'`
+      // is what we actually feed into the rest of the pipeline.
+      try {
+        this.stream = await navigator.mediaDevices.getDisplayMedia({
+          audio: true,
+          video: {
+            width: { ideal: 1 },
+            height: { ideal: 1 },
+            frameRate: { ideal: 1 },
+          },
+        });
+        // Discard video tracks — we requested them only to satisfy the
+        // getDisplayMedia spec; we never render or encode them.
+        for (const t of this.stream.getVideoTracks()) {
+          try { t.stop(); } catch { /* ignore */ }
+          try { this.stream.removeTrack(t); } catch { /* ignore */ }
+        }
+        const audioTracks = this.stream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          throw new DOMException(
+            'No audio track in display-media stream (loopback unavailable)',
+            'NotFoundError',
+          );
+        }
+        const trackLabel = audioTracks[0]?.label || 'System Audio';
+        console.log(`[Audio] System audio stream OK — ${trackLabel}`);
+        this.emit({ micActive: true, deviceLabel: `System Audio · ${trackLabel}`, error: null });
+      } catch (err) {
+        console.error('[Audio] getDisplayMedia failed:', err);
+        const msg = mapSystemAudioError(err);
+        try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+        this.stream = null;
+        try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
+        this.clearAudioSubscribers();
+        this.emit({ micActive: false, error: msg, recording: false });
+        throw new Error(msg);
+      }
+    } else {
 
     // ── Get audio stream ──
     const isDefault = !this.deviceId || this.deviceId === 'default';
@@ -271,6 +406,7 @@ class AudioCaptureManager {
         throw new Error(msg);
       }
     }
+    } // end of getUserMedia branch (useSystemAudio === false)
 
     // ── MediaRecorder ──
     try {
