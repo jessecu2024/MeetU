@@ -49,6 +49,7 @@ declare global {
             hasAnyModel: boolean;
           }>;
           downloadModel: (name: string) => Promise<{ ok: boolean; error?: string }>;
+          deleteModel: (name: string) => Promise<{ ok: boolean; error?: string }>;
           start: (opts: { model: string }) => Promise<{ ok: boolean; error?: string }>;
           transcribe: (pcm: ArrayBuffer, opts: { language?: string }) => Promise<{ ok: boolean; text?: string; error?: string }>;
           stop: () => Promise<{ ok: boolean }>;

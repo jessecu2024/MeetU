@@ -543,22 +543,37 @@ export default function SettingsModal() {
                               <div className="min-w-0">
                                 <span className="font-medium text-zinc-900 dark:text-white">ggml-{m.name}</span>
                                 {m.present && (
-                                  <span className="ml-1 text-green-600 dark:text-green-400">✓ downloaded</span>
+                                  <span className="ml-1 text-green-600 dark:text-green-400">
+                                    ✓ {m.sizeBytes ? `${(m.sizeBytes / 1024 / 1024).toFixed(0)} MB` : 'downloaded'}
+                                  </span>
                                 )}
                                 {isActive && m.present && (
                                   <span className="ml-1 text-blue-600 dark:text-blue-400">· active</span>
                                 )}
                               </div>
-                              <div className="shrink-0">
+                              <div className="shrink-0 flex items-center gap-1">
                                 {m.present ? (
-                                  <button
-                                    onClick={() => store.updateAppSettings({ localWhisperModel: m.name })}
-                                    disabled={isActive}
-                                    className={`px-2 py-1 rounded ${isActive
-                                      ? 'bg-blue-100 text-blue-400 dark:bg-blue-900/30 cursor-default'
-                                      : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
-                                    {isActive ? 'Selected' : 'Use this'}
-                                  </button>
+                                  <>
+                                    <button
+                                      onClick={() => store.updateAppSettings({ localWhisperModel: m.name })}
+                                      disabled={isActive}
+                                      className={`px-2 py-1 rounded ${isActive
+                                        ? 'bg-blue-100 text-blue-400 dark:bg-blue-900/30 cursor-default'
+                                        : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+                                      {isActive ? 'Selected' : 'Use this'}
+                                    </button>
+                                    <button
+                                      onClick={async () => {
+                                        setWhisperError(null);
+                                        const res = await window.electronAPI?.audio.localWhisper.deleteModel(m.name);
+                                        if (!res?.ok) setWhisperError(`${m.name}: ${res?.error || 'delete failed'}`);
+                                        refreshWhisperProbe();
+                                      }}
+                                      title="Delete this model to free disk space / 删除以释放磁盘"
+                                      className="px-2 py-1 rounded bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30">
+                                      Delete
+                                    </button>
+                                  </>
                                 ) : isDownloading ? (
                                   <span className="text-zinc-500">{pct}% …</span>
                                 ) : (
@@ -588,7 +603,7 @@ export default function SettingsModal() {
                       </div>
                       {whisperError && (
                         <p className="text-xs text-red-600 dark:text-red-400">
-                          ❌ Download failed — {whisperError}. Check your network and try again. / 下载失败，请检查网络后重试。
+                          ❌ {whisperError} / 操作失败，请重试。
                         </p>
                       )}
                       {!whisperProbe.hasAnyModel && (

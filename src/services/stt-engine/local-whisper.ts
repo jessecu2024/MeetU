@@ -24,11 +24,45 @@
 import type {
   STTEngine, STTEngineId, STTConfig, TranscriptResult, AudioDeliveryMode,
 } from './types';
+import { looksLikeHallucination } from './whisper-hallucinations';
 
 const SAMPLE_RATE = 16000;
 const WINDOW_SECONDS = 12;
 const WINDOW_SAMPLES = SAMPLE_RATE * WINDOW_SECONDS;
 const WINDOW_MS = Math.round((WINDOW_SAMPLES / SAMPLE_RATE) * 1000);
+// A window is treated as silence (and skipped — no IPC, no native
+// inference) only if NO short sub-frame within it reaches this RMS.
+// whisper.cpp hallucinates confident garbage on silence (the "thank
+// you for watching" failure mode), so dropping silent windows saves
+// CPU and prevents phantom captions. Normalized Float32 PCM: ambient
+// room noise sits ~0.001–0.004 RMS per sub-frame; even quiet speech is
+// well above 0.01. 0.006 is a conservative cut.
+const SILENCE_RMS_THRESHOLD = 0.006;
+// Sub-frame length for the gate: 30 ms @ 16 kHz. We gate on the PEAK
+// sub-frame, NOT the whole-window mean — otherwise a short utterance
+// (e.g. a 0.5 s "yes" in an otherwise-silent 12 s window) would be
+// averaged down below the threshold and wrongly dropped. Gating on the
+// loudest sub-frame keeps any window that contains real speech energy
+// anywhere.
+const VAD_FRAME_SAMPLES = 480;
+
+/**
+ * True if any ~30 ms sub-frame of `samples` reaches `threshold` RMS —
+ * i.e. the window contains speech-level energy somewhere and must be
+ * transcribed. Returns false only for windows that are silent
+ * throughout.
+ */
+function hasSpeechEnergy(samples: Float32Array, threshold: number): boolean {
+  const thresholdSq = threshold * threshold;
+  for (let start = 0; start < samples.length; start += VAD_FRAME_SAMPLES) {
+    const end = Math.min(start + VAD_FRAME_SAMPLES, samples.length);
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += samples[i] * samples[i];
+    // Compare mean-square to threshold² (avoids a sqrt per sub-frame).
+    if (sum / (end - start) >= thresholdSq) return true;
+  }
+  return false;
+}
 
 export class LocalWhisperEngine implements STTEngine {
   readonly id: STTEngineId = 'local_whisper';
@@ -127,6 +161,16 @@ export class LocalWhisperEngine implements STTEngine {
     const durationMs = Math.round((windowed.length / SAMPLE_RATE) * 1000);
     this.windowOffsetMs += durationMs;
 
+    // Silence gate: skip windows with no speech-level energy in ANY
+    // sub-frame, without touching native inference. This avoids wasted
+    // CPU and whisper.cpp's silence-hallucination output, while keeping
+    // windows that contain even a brief utterance. We still advance the
+    // emit cursor (synchronous skip) so timeline order stays consistent.
+    if (!hasSpeechEnergy(windowed, SILENCE_RMS_THRESHOLD)) {
+      this.deliver(offsetMs, durationMs, '');
+      return;
+    }
+
     const work = (async () => {
       try {
         // NOTE: ipcRenderer.invoke structured-clones the buffer (no
@@ -136,9 +180,17 @@ export class LocalWhisperEngine implements STTEngine {
         const res = await window.electronAPI?.audio.localWhisper.transcribe(
           windowed.buffer as ArrayBuffer, { language: this.language },
         );
-        const text = res?.ok ? (res.text || '').trim() : '';
+        let text = res?.ok ? (res.text || '').trim() : '';
         if (res && !res.ok) {
           console.error('[STT] Local Whisper transcribe failed:', res.error);
+        }
+        // Drop known Whisper silence-hallucinations (shared with the
+        // cloud Whisper API engine). The RMS gate catches most silence,
+        // but low-level non-speech noise can still slip a window through
+        // and produce a phantom "thank you for watching".
+        if (text && looksLikeHallucination(text)) {
+          console.log('[STT] Local Whisper dropping likely-hallucination text');
+          text = '';
         }
         this.deliver(offsetMs, durationMs, text);
       } catch (err) {

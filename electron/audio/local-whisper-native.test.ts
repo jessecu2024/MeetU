@@ -146,6 +146,41 @@ describe('makeLocalWhisperIpc — downloadModel', () => {
   });
 });
 
+describe('makeLocalWhisperIpc — deleteModel', () => {
+  it('deletes a present model file and reports ok', async () => {
+    const dir = path.join(tmpUserData, 'whisper-models');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'ggml-base.bin');
+    fs.writeFileSync(file, 'x');
+    const ipc = makeLocalWhisperIpc(() => null, () => tmpUserData, () => makeFakeLoader());
+    const res = await ipc.deleteModel('base');
+    expect(res.ok).toBe(true);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('is a no-op ok when the model is not present', async () => {
+    const ipc = makeLocalWhisperIpc(() => null, () => tmpUserData, () => makeFakeLoader());
+    expect(await ipc.deleteModel('base')).toEqual({ ok: true });
+  });
+
+  it('rejects an unknown model name (no arbitrary unlink)', async () => {
+    const ipc = makeLocalWhisperIpc(() => null, () => tmpUserData, () => makeFakeLoader());
+    const res = await ipc.deleteModel('../../etc/hosts');
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/unknown model/);
+  });
+
+  it('also clears a stale .part file alongside the model', async () => {
+    const dir = path.join(tmpUserData, 'whisper-models');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ggml-base.bin'), 'x');
+    fs.writeFileSync(path.join(dir, 'ggml-base.bin.part'), 'partial');
+    const ipc = makeLocalWhisperIpc(() => null, () => tmpUserData, () => makeFakeLoader());
+    await ipc.deleteModel('base');
+    expect(fs.existsSync(path.join(dir, 'ggml-base.bin.part'))).toBe(false);
+  });
+});
+
 describe('makeLocalWhisperIpc — session', () => {
   it('start fails clearly when the model is not downloaded', async () => {
     const ipc = makeLocalWhisperIpc(() => null, () => tmpUserData, () => makeFakeLoader());

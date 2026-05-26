@@ -267,6 +267,26 @@ export function makeLocalWhisperIpc(
       }
     },
 
+    /** Delete a downloaded model file to reclaim disk space. */
+    async deleteModel(name: string): Promise<{ ok: boolean; error?: string }> {
+      if (!(OFFERED_MODELS as readonly string[]).includes(name)) {
+        return { ok: false, error: `unknown model: ${name}` };
+      }
+      if (downloading.has(name)) {
+        return { ok: false, error: `cannot delete ${name} while it is downloading` };
+      }
+      const file = modelFilePath(dir(), name);
+      try {
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+        // Also clear a stale .part from an aborted download, if any.
+        const part = `${file}.part`;
+        if (fs.existsSync(part)) fs.unlinkSync(part);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
     /** Load a model for a transcription session. */
     async start(opts: { model: string }): Promise<{ ok: boolean; error?: string }> {
       const loader = loaderProvider();
