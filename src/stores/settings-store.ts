@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import type { AIProviderId, AIFunction, UserAIConfig } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
-import { migrateSTTConfig, getDefaultSTTEngineForRegion, isSelectableSTTEngine } from '../services/stt-engine/types';
+import { migrateSTTConfig, getDefaultSTTEngineForRegion, isSelectableSTTEngine, STT_ENGINE_INFO } from '../services/stt-engine/types';
 
 // Type for electron API (injected via preload)
 declare global {
@@ -447,12 +447,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setSTTApiKey: (engine, key) => {
     // Mirror the guard on setSTTEngine: even if a stray callsite tries to
-    // store an API key for a planned engine (e.g. via a debug shortcut or
-    // a future feature flag that gets shipped half-baked), refuse the
-    // write. Letting the key land would leave a secret in encrypted
-    // storage that the next migration would then have to clean up.
+    // store an API key for a non-selectable engine (e.g. via a debug
+    // shortcut or a future feature flag that gets shipped half-baked),
+    // refuse the write. Letting the key land would leave a secret in
+    // encrypted storage that the next migration would then have to clean
+    // up.
     if (!isSelectableSTTEngine(engine)) {
       console.warn(`[Settings] setSTTApiKey ignored — ${engine} is not currently selectable`);
+      return;
+    }
+    // Also refuse keyless engines (local_whisper, requiresApiKey:false):
+    // they need no key, so any value here is dead data. migrateSTTConfig
+    // already prunes such keys on load, but enforcing the invariant at
+    // the WRITE path too keeps a stray value from ever landing.
+    const info = STT_ENGINE_INFO.find(e => e.id === engine);
+    if (info && !info.requiresApiKey) {
+      console.warn(`[Settings] setSTTApiKey ignored — ${engine} is keyless`);
       return;
     }
     set((state) => ({

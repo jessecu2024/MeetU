@@ -71,6 +71,15 @@ describe('useSettingsStore.setSTTApiKey', () => {
     useSettingsStore.getState().setSTTApiKey('xfyun', 'app:key:secret');
     expect(useSettingsStore.getState().sttApiKeys.xfyun).toBe('app:key:secret');
   });
+
+  it('refuses to persist a key for a keyless engine (local_whisper) even though it is selectable', () => {
+    // local_whisper is selectable (beta) but requiresApiKey:false. A
+    // stray write must not land a dead secret in encrypted storage —
+    // the write-path guard enforces the same invariant migrate applies
+    // on load.
+    useSettingsStore.getState().setSTTApiKey('local_whisper', 'pretend-secret');
+    expect(useSettingsStore.getState().sttApiKeys.local_whisper).toBeUndefined();
+  });
 });
 
 describe('useSettingsStore.setSTTEngine', () => {
