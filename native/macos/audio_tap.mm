@@ -1,40 +1,40 @@
 // ============================================================
 // MeetU macOS ScreenCaptureKit N-API addon (Objective-C++)
 //
-// Exposes three async N-API functions to the Electron main process:
+// Exposes four async N-API functions to the Electron main process:
 //
+//   available  (boolean)         - built with SDK + running on macOS 13+
 //   listApplications() -> Promise<Array<{ pid, name, bundleId }>>
-//     Returns the SCShareableContent applications list. Renderer
-//     can use this to populate a per-app picker; bundleId is the
-//     stable key, pid is informational.
-//
-//   start({ pid?, jsCallback, errorCallback }) -> Promise<void>
-//     Begin capturing audio. If `pid` is set, capture only that
-//     application; otherwise capture the entire system output.
-//     jsCallback fires for every audio packet with a Float32Array
-//     buffer (mono, 16 kHz, deinterleaved). errorCallback fires
-//     if the underlying SCStream fails after start succeeded.
-//
+//   start({ pid?, onAudio, onError }) -> Promise<void>
 //   stop() -> Promise<void>
-//     Tear down the stream. Safe to call when not running.
 //
-// The audio path:
-//   SCStream -> CMSampleBuffer (canonical mono Float32 PCM)
-//             -> linear resample to 16 kHz
+// Audio path:
+//   SCStream -> CMSampleBuffer (validated Float32 PCM)
+//             -> downmix to mono + linear resample to 16 kHz
 //             -> ThreadSafeFunction -> renderer subscriber
 //
-// Why this exists: Electron 30's `setDisplayMediaRequestHandler`
-// + audio:'loopback' is Windows-only (per Electron typedef). On
-// macOS we go through ScreenCaptureKit directly via a native
-// module — same Apple API the Electron wrapper would have used,
-// but we bind it from N-API ourselves so it actually works on
-// macOS 13+ and so we can use SCContentFilter(applications:)
-// for per-app capture (the unique feature this native path
-// brings).
+// ── Concurrency / lifecycle model ──
+// All session state lives in `Session` behind a single mutex and a
+// 4-state machine (Idle/Starting/Running/Stopping). The two
+// long-lived ThreadSafeFunctions (audio + error) have EXACTLY ONE
+// release point, guarded by `tsfnReleased` so no path can
+// double-release or leak them. Promise resolution for the async
+// start/stop operations uses a SEPARATE short-lived TSFN created on
+// the JS thread and released once after the single resolve/reject —
+// it never aliases the audio/error TSFNs.
 //
-// Compile guard: the entire ScreenCaptureKit-touching surface
-// only compiles on macOS 13+. Older SDK builds (or non-Apple
-// builds) get a stub that reports `available: false`.
+// Races handled:
+//   - stop() during Starting: sets `cancelRequested`; the in-flight
+//     start completion observes it (under the same mutex), stops the
+//     stream it just created, tears down, and rejects start. stop()
+//     resolves immediately because teardown is guaranteed by that
+//     completion.
+//   - fatal SCStream error (didStopWithError) during Running: forwards
+//     the error, then tears down to Idle so a subsequent start() does
+//     not alias a stale session.
+//   - audio callbacks after teardown: BlockingCall on a released TSFN
+//     returns non-ok; we drop the frame instead of dereferencing
+//     freed state.
 // ============================================================
 
 #include <napi.h>
@@ -56,47 +56,56 @@
 #import <CoreMedia/CoreMedia.h>
 #import <AVFoundation/AVFoundation.h>
 
-// Forward decls. API_AVAILABLE is only valid on an interface /
-// protocol / implementation definition, not on a `@class` forward
-// declaration — Apple clang rejects that combination.
 @class MeetUAudioCapture;
 
 namespace meetu {
 
-// ── Shared state ────────────────────────────────────────────
-// One global capture instance is enough: the renderer can only
-// be recording one session at a time, and SCStream is heavy.
-// Guarded by a mutex so start/stop from different JS calls
-// don't race the Objective-C lifecycle.
+enum class State { Idle, Starting, Running, Stopping };
 
-struct Globals {
+struct Session {
   std::mutex mutex;
+  State state = State::Idle;
+  // Set by stop() when it arrives mid-Starting; observed by the start
+  // completion to abort cleanly.
+  bool cancelRequested = false;
+
   MeetUAudioCapture* capture API_AVAILABLE(macos(13.0)) = nil;
-  // ThreadSafeFunction lives for the duration of one capture
-  // session — owned by start() and released by stop() so the
-  // N-API runtime can quit cleanly even if JS holds no
-  // references.
+  SCStream* stream API_AVAILABLE(macos(13.0)) = nil;
+
+  // Long-lived streaming TSFNs. Released exactly once via
+  // releaseStreamTsfnsLocked() (idempotent through tsfnReleased).
   Napi::ThreadSafeFunction tsfnAudio;
   Napi::ThreadSafeFunction tsfnError;
-  std::atomic<bool> running{false};
+  bool tsfnReleased = true;
+
+  void releaseStreamTsfnsLocked() {
+    if (!tsfnReleased) {
+      tsfnAudio.Release();
+      tsfnError.Release();
+      tsfnReleased = true;
+    }
+  }
+
+  // Caller MUST hold `mutex`. Drops references to the stream/capture
+  // and releases the streaming TSFNs. Leaves `state` for the caller
+  // to set (usually Idle).
+  void teardownLocked() {
+    releaseStreamTsfnsLocked();
+    if (@available(macOS 13.0, *)) {
+      capture = nil;
+      stream = nil;
+    }
+    cancelRequested = false;
+  }
 };
 
-static Globals& globals() {
-  static Globals g;
-  return g;
+static Session& session() {
+  static Session s;
+  return s;
 }
 
-// PCM frame delivered from the SCStream audio queue to JS.
-// Allocated on the audio thread, freed on the JS thread when
-// the TSFN finalize callback runs.
-struct AudioFrame {
-  std::vector<float> samples; // mono, 16 kHz
-};
-
-struct ErrorPayload {
-  std::string message;
-  int code;
-};
+struct AudioFrame { std::vector<float> samples; }; // mono, 16 kHz
+struct ErrorPayload { std::string message; int code; };
 
 } // namespace meetu
 
@@ -104,11 +113,10 @@ struct ErrorPayload {
 
 API_AVAILABLE(macos(13.0))
 @interface MeetUAudioCapture : NSObject <SCStreamDelegate, SCStreamOutput>
-@property (nonatomic, strong, nullable) SCStream* stream;
 @property (nonatomic, assign) double sourceSampleRate; // typically 48000
 @property (nonatomic, assign) double targetSampleRate; // 16000
-@property (nonatomic, assign) double resamplePhase;    // index into the merged buffer for next pick
-@property (nonatomic, strong) NSMutableData* carryBuffer; // un-consumed Float32 samples from previous frames
+@property (nonatomic, assign) double resamplePhase;
+@property (nonatomic, strong) NSMutableData* carryBuffer; // leftover mono Float32 samples
 @end
 
 @implementation MeetUAudioCapture
@@ -116,77 +124,96 @@ API_AVAILABLE(macos(13.0))
 - (instancetype)init {
   if ((self = [super init])) {
     _targetSampleRate = 16000.0;
-    _sourceSampleRate = 48000.0; // default; the real value comes from the buffer's format
+    _sourceSampleRate = 48000.0;
     _resamplePhase = 0.0;
     _carryBuffer = [NSMutableData data];
   }
   return self;
 }
 
-// SCStreamOutput: called on the audio sample queue for every
-// audio packet. The format is canonical AudioStreamBasicDescription
-// from ScreenCaptureKit: Float32, mono (we configured channelCount=1),
-// non-interleaved at the device's native sample rate (typically
-// 48 kHz on Apple Silicon). We resample to 16 kHz Float32 mono
-// here and ship the result to JS via the TSFN.
 - (void)stream:(SCStream*)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type {
   if (type != SCStreamOutputTypeAudio) return;
   if (!CMSampleBufferIsValid(sampleBuffer)) return;
 
-  // Pull the format. SCStream gives us an AudioStreamBasicDescription
-  // pointer via CMAudioFormatDescription.
   CMFormatDescriptionRef fmt = CMSampleBufferGetFormatDescription(sampleBuffer);
   if (!fmt) return;
   const AudioStreamBasicDescription* asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmt);
   if (!asbd) return;
+
+  // ── Format validation ──
+  // ScreenCaptureKit canonically delivers PCM Float32; we configured
+  // channelCount=1 in the stream config. But we must not blindly
+  // reinterpret bytes: validate Float32 + 32-bit, and handle the
+  // (rare) case where we still receive interleaved multichannel by
+  // downmixing. Anything we can't interpret as float is dropped with
+  // a one-time warning rather than emitting garbage PCM.
+  const bool isFloat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
+  const bool is32bit = (asbd->mBitsPerChannel == 32);
+  if (!isFloat || !is32bit) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      NSLog(@"[MeetU] Unsupported audio format (flags=%u bits=%u) — dropping frames", asbd->mFormatFlags, asbd->mBitsPerChannel);
+    });
+    return;
+  }
+  const bool isNonInterleaved = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+  const UInt32 channels = asbd->mChannelsPerFrame > 0 ? asbd->mChannelsPerFrame : 1;
   if (asbd->mSampleRate > 0) self.sourceSampleRate = asbd->mSampleRate;
 
-  // Pull the AudioBufferList. SCStream delivers float32 mono in
-  // the first buffer when we set channelCount=1 in the stream config.
   size_t blockSize = 0;
   AudioBufferList abl;
   CMBlockBufferRef block = nullptr;
   OSStatus st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-    sampleBuffer,
-    &blockSize,
-    &abl,
-    sizeof(abl),
-    /*blockBufferAllocator*/ nullptr,
-    /*blockBufferMemoryAllocator*/ nullptr,
-    /*flags*/ 0,
-    &block
-  );
+    sampleBuffer, &blockSize, &abl, sizeof(abl),
+    nullptr, nullptr, 0, &block);
   if (st != noErr || abl.mNumberBuffers == 0) {
     if (block) CFRelease(block);
     return;
   }
-  AudioBuffer* buf = &abl.mBuffers[0];
-  const float* src = static_cast<const float*>(buf->mData);
-  const NSUInteger srcCount = buf->mDataByteSize / sizeof(float);
-  if (!src || srcCount == 0) {
-    if (block) CFRelease(block);
-    return;
-  }
 
-  // Concatenate with carry buffer (samples we didn't consume last
-  // frame because the resample phase fell past the end). This is
-  // the same carry-buffer pattern as the AudioWorklet resampler
-  // in src/services/audio/pcm-worklet.ts.
+  // Build a mono Float32 vector from the buffer list, regardless of
+  // interleaved/non-interleaved layout.
+  std::vector<float> mono;
+  if (isNonInterleaved) {
+    // Each channel is a separate AudioBuffer. Average across channels.
+    const UInt32 nbuf = abl.mNumberBuffers;
+    const float* ch0 = static_cast<const float*>(abl.mBuffers[0].mData);
+    if (!ch0) { if (block) CFRelease(block); return; }
+    const size_t frames = abl.mBuffers[0].mDataByteSize / sizeof(float);
+    mono.resize(frames, 0.0f);
+    for (UInt32 b = 0; b < nbuf; ++b) {
+      const float* ch = static_cast<const float*>(abl.mBuffers[b].mData);
+      if (!ch) continue;
+      const size_t n = std::min<size_t>(frames, abl.mBuffers[b].mDataByteSize / sizeof(float));
+      for (size_t i = 0; i < n; ++i) mono[i] += ch[i];
+    }
+    if (nbuf > 1) { for (auto& s : mono) s /= static_cast<float>(nbuf); }
+  } else {
+    // Single interleaved buffer with `channels` samples per frame.
+    const float* src = static_cast<const float*>(abl.mBuffers[0].mData);
+    if (!src) { if (block) CFRelease(block); return; }
+    const size_t totalSamples = abl.mBuffers[0].mDataByteSize / sizeof(float);
+    const size_t frames = channels > 0 ? totalSamples / channels : totalSamples;
+    mono.resize(frames, 0.0f);
+    for (size_t f = 0; f < frames; ++f) {
+      float acc = 0.0f;
+      for (UInt32 c = 0; c < channels; ++c) acc += src[f * channels + c];
+      mono[f] = acc / static_cast<float>(channels);
+    }
+  }
+  if (block) CFRelease(block);
+  if (mono.empty()) return;
+
+  // ── Carry-buffer linear decimation to 16 kHz ──
   const NSUInteger carryCount = self.carryBuffer.length / sizeof(float);
   std::vector<float> merged;
-  merged.reserve(carryCount + srcCount);
+  merged.reserve(carryCount + mono.size());
   if (carryCount > 0) {
     const float* carryPtr = static_cast<const float*>(self.carryBuffer.bytes);
     merged.insert(merged.end(), carryPtr, carryPtr + carryCount);
   }
-  merged.insert(merged.end(), src, src + srcCount);
+  merged.insert(merged.end(), mono.begin(), mono.end());
 
-  if (block) CFRelease(block);
-
-  // Linear decimation to 16 kHz. We pick floor(phase + i*ratio)
-  // for i = 0..N and advance phase by ratio each pick. The phase
-  // is kept relative to the start of `merged` and reset after
-  // dropping the consumed prefix.
   const double ratio = self.sourceSampleRate / self.targetSampleRate;
   std::vector<float> out;
   out.reserve(static_cast<size_t>(merged.size() / ratio) + 1);
@@ -197,9 +224,6 @@ API_AVAILABLE(macos(13.0))
     out.push_back(merged[idx]);
     phase += ratio;
   }
-
-  // Save the un-consumed tail as the next carry buffer. Shift
-  // phase so it lands in [0, 1) at the start of the new buffer.
   const size_t drop = static_cast<size_t>(phase);
   if (drop < merged.size()) {
     const size_t tailSize = merged.size() - drop;
@@ -209,18 +233,16 @@ API_AVAILABLE(macos(13.0))
   } else {
     [self.carryBuffer setLength:0];
     double newPhase = phase - static_cast<double>(merged.size());
-    if (newPhase < 0) newPhase = 0; // numerical safety
+    if (newPhase < 0) newPhase = 0;
     self.resamplePhase = newPhase;
   }
-
   if (out.empty()) return;
 
-  // Hand off to JS via ThreadSafeFunction. The lambda runs on the
-  // JS thread; we own the AudioFrame allocation here.
   auto frame = new meetu::AudioFrame();
   frame->samples = std::move(out);
-
-  auto status = meetu::globals().tsfnAudio.BlockingCall(frame, [](Napi::Env env, Napi::Function jsCallback, meetu::AudioFrame* data) {
+  // BlockingCall returns non-ok if the TSFN was released/aborted
+  // (teardown happened) — in that case we own the frame and free it.
+  auto status = meetu::session().tsfnAudio.BlockingCall(frame, [](Napi::Env env, Napi::Function jsCallback, meetu::AudioFrame* data) {
     if (env && jsCallback) {
       const size_t byteLen = data->samples.size() * sizeof(float);
       auto buf = Napi::ArrayBuffer::New(env, byteLen);
@@ -230,23 +252,23 @@ API_AVAILABLE(macos(13.0))
     }
     delete data;
   });
-
-  // If the queue is full or closed, drop the frame rather than
-  // blocking the audio thread. This matches Apple's expectation
-  // that SCStream callbacks return promptly.
-  if (status != napi_ok) {
-    delete frame;
-  }
+  if (status != napi_ok) delete frame;
 }
 
 - (void)stream:(SCStream*)stream didStopWithError:(NSError*)error {
-  // Forward the failure to JS so the renderer can fall back to
-  // mock/virtual-cable capture instead of staring at a dead stream.
+  auto& s = meetu::session();
+  // Forward the error then tear down to Idle so a fatal stop doesn't
+  // leave a half-alive session that the next start() would alias.
+  {
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (s.state != meetu::State::Running) return; // already stopping/idle
+    s.state = meetu::State::Stopping;
+  }
   auto payload = new meetu::ErrorPayload{
     .message = error.localizedDescription ? std::string(error.localizedDescription.UTF8String) : "unknown",
     .code = static_cast<int>(error.code),
   };
-  auto status = meetu::globals().tsfnError.BlockingCall(payload, [](Napi::Env env, Napi::Function jsCallback, meetu::ErrorPayload* data) {
+  auto status = s.tsfnError.BlockingCall(payload, [](Napi::Env env, Napi::Function jsCallback, meetu::ErrorPayload* data) {
     if (env && jsCallback) {
       auto obj = Napi::Object::New(env);
       obj.Set("message", Napi::String::New(env, data->message));
@@ -255,10 +277,12 @@ API_AVAILABLE(macos(13.0))
     }
     delete data;
   });
-  if (status != napi_ok) {
-    delete payload;
+  if (status != napi_ok) delete payload;
+  {
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.teardownLocked();
+    s.state = meetu::State::Idle;
   }
-  meetu::globals().running = false;
 }
 
 @end
@@ -267,32 +291,20 @@ API_AVAILABLE(macos(13.0))
 
 namespace meetu {
 
+// Resolve/reject a Promise::Deferred from a background thread via a
+// short-lived TSFN created on the JS thread (passed in). Releases the
+// TSFN after the single call. `tsfnOp` and `deferred` are owned by the
+// operation and used exactly once.
 API_AVAILABLE(macos(13.0))
-static void startCaptureWithFilter(SCContentFilter* filter, std::function<void(NSError*)> done) {
-  auto config = [[SCStreamConfiguration alloc] init];
-  config.capturesAudio = YES;
-  config.sampleRate = 48000;     // request native; the resampler still runs in case the OS overrides
-  config.channelCount = 1;       // mono — we deinterleave & downmix in CoreAudio
-  config.width = 2;              // minimise the video plane we have to ignore
-  config.height = 2;
-  // 1 fps is the lowest SCStreamConfiguration accepts; we don't
-  // care about video frames but the stream must produce them.
-  config.minimumFrameInterval = CMTimeMake(1, 1);
-
-  MeetUAudioCapture* capture = [[MeetUAudioCapture alloc] init];
-  NSError* addErr = nil;
-  SCStream* stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:capture];
-  BOOL added = [stream addStreamOutput:capture type:SCStreamOutputTypeAudio sampleHandlerQueue:dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0) error:&addErr];
-  if (!added) {
-    done(addErr ?: [NSError errorWithDomain:@"MeetU" code:-1 userInfo:@{ NSLocalizedDescriptionKey: @"addStreamOutput failed" }]);
-    return;
-  }
-  capture.stream = stream;
-  globals().capture = capture;
-
-  [stream startCaptureWithCompletionHandler:^(NSError* _Nullable startErr) {
-    done(startErr);
-  }];
+static void settleStart(std::shared_ptr<Napi::Promise::Deferred> deferred,
+                        std::shared_ptr<Napi::ThreadSafeFunction> tsfnOp,
+                        bool resolve, std::string errMsg) {
+  auto status = tsfnOp->BlockingCall([deferred, resolve, errMsg](Napi::Env env, Napi::Function) {
+    if (resolve) deferred->Resolve(env.Undefined());
+    else deferred->Reject(Napi::Error::New(env, errMsg).Value());
+  });
+  if (status != napi_ok) { /* JS env gone */ }
+  tsfnOp->Release();
 }
 
 API_AVAILABLE(macos(13.0))
@@ -300,8 +312,6 @@ static Napi::Value StartCapture(const Napi::CallbackInfo& info) {
   auto env = info.Env();
   auto deferred = Napi::Promise::Deferred::New(env);
 
-  // Validate arguments. Expected shape:
-  //   start({ pid?: number, onAudio: Function, onError: Function })
   if (info.Length() < 1 || !info[0].IsObject()) {
     deferred.Reject(Napi::Error::New(env, "start() requires an options object").Value());
     return deferred.Promise();
@@ -313,102 +323,127 @@ static Napi::Value StartCapture(const Napi::CallbackInfo& info) {
     deferred.Reject(Napi::Error::New(env, "start() requires onAudio and onError functions").Value());
     return deferred.Promise();
   }
-
   pid_t targetPid = 0;
   auto pidVal = opts.Get("pid");
-  if (pidVal.IsNumber()) {
-    targetPid = static_cast<pid_t>(pidVal.As<Napi::Number>().Int32Value());
-  }
+  if (pidVal.IsNumber()) targetPid = static_cast<pid_t>(pidVal.As<Napi::Number>().Int32Value());
 
+  auto& s = session();
   {
-    std::lock_guard<std::mutex> lock(globals().mutex);
-    if (globals().running.load()) {
-      deferred.Reject(Napi::Error::New(env, "capture already running; call stop() first").Value());
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (s.state != State::Idle) {
+      deferred.Reject(Napi::Error::New(env, "capture already active; call stop() first").Value());
       return deferred.Promise();
     }
-    globals().running = true;
-
-    globals().tsfnAudio = Napi::ThreadSafeFunction::New(
-      env, onAudio.As<Napi::Function>(), "meetu-audio-tsfn", 0, 1);
-    globals().tsfnError = Napi::ThreadSafeFunction::New(
-      env, onError.As<Napi::Function>(), "meetu-error-tsfn", 0, 1);
+    s.state = State::Starting;
+    s.cancelRequested = false;
+    s.tsfnAudio = Napi::ThreadSafeFunction::New(env, onAudio.As<Napi::Function>(), "meetu-audio-tsfn", 0, 1);
+    s.tsfnError = Napi::ThreadSafeFunction::New(env, onError.As<Napi::Function>(), "meetu-error-tsfn", 0, 1);
+    s.tsfnReleased = false;
   }
 
-  // The SCShareableContent fetch + filter construction is async.
-  // We capture the deferred in a block-stored Napi::Reference-ish
-  // shim... actually Napi::Promise::Deferred isn't move-only across
-  // a block, but it's safe to capture by copy because it's a
-  // shared pointer underneath. Bridge via a heap-allocated copy
-  // to be explicit.
   auto deferredPtr = std::make_shared<Napi::Promise::Deferred>(deferred);
+  // Short-lived op TSFN for resolving THIS start promise. Created on
+  // the JS thread; released once inside settleStart.
+  auto tsfnStart = std::make_shared<Napi::ThreadSafeFunction>(
+    Napi::ThreadSafeFunction::New(env, Napi::Function::New(env, [](const Napi::CallbackInfo&) {}), "meetu-start-op", 0, 1));
 
   [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent* _Nullable content, NSError* _Nullable err) {
-    auto cleanupAndReject = [deferredPtr](NSError* e) {
-      auto status = globals().tsfnAudio.BlockingCall([deferredPtr, e](Napi::Env env, Napi::Function) {
-        deferredPtr->Reject(Napi::Error::New(env, e.localizedDescription ? std::string(e.localizedDescription.UTF8String) : "unknown").Value());
-      });
-      if (status != napi_ok) {
-        // best effort — the JS env is gone
+    auto abortToIdle = [deferredPtr, tsfnStart](const std::string& msg) {
+      {
+        std::lock_guard<std::mutex> lock(session().mutex);
+        session().teardownLocked();
+        session().state = State::Idle;
       }
-      globals().tsfnAudio.Release();
-      globals().tsfnError.Release();
-      globals().running = false;
+      settleStart(deferredPtr, tsfnStart, false, msg);
     };
 
+    // Honor a stop() that arrived while we were fetching content.
+    {
+      std::lock_guard<std::mutex> lock(session().mutex);
+      if (session().cancelRequested) {
+        session().teardownLocked();
+        session().state = State::Idle;
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(session().mutex);
+      if (session().state == State::Idle) { // was cancelled above
+        settleStart(deferredPtr, tsfnStart, false, "capture cancelled before start");
+        return;
+      }
+    }
+
     if (err || !content) {
-      cleanupAndReject(err ?: [NSError errorWithDomain:@"MeetU" code:-2 userInfo:@{ NSLocalizedDescriptionKey: @"no shareable content" }]);
+      abortToIdle(err && err.localizedDescription ? std::string(err.localizedDescription.UTF8String) : "no shareable content");
       return;
     }
 
     SCContentFilter* filter = nil;
+    SCDisplay* anyDisplay = content.displays.firstObject;
+    if (!anyDisplay) { abortToIdle("no displays available"); return; }
     if (targetPid > 0) {
-      // Per-app capture: find the running application whose pid
-      // matches. We use SCContentFilter(desktopIndependentWindow:)
-      // or the application list variant — the cleanest match here
-      // is `initWithDisplay:includingApplications:exceptingWindows:`,
-      // which captures audio produced BY the target apps anywhere
-      // on the screen (independent of window visibility).
       SCRunningApplication* target = nil;
       for (SCRunningApplication* a in content.applications) {
         if (a.processID == targetPid) { target = a; break; }
       }
-      if (!target) {
-        cleanupAndReject([NSError errorWithDomain:@"MeetU" code:-3 userInfo:@{ NSLocalizedDescriptionKey: @"target pid not found in shareable applications" }]);
-        return;
-      }
-      SCDisplay* anyDisplay = content.displays.firstObject;
-      if (!anyDisplay) {
-        cleanupAndReject([NSError errorWithDomain:@"MeetU" code:-4 userInfo:@{ NSLocalizedDescriptionKey: @"no displays available" }]);
-        return;
-      }
+      if (!target) { abortToIdle("target pid not found in shareable applications"); return; }
       filter = [[SCContentFilter alloc] initWithDisplay:anyDisplay includingApplications:@[target] exceptingWindows:@[]];
     } else {
-      // Full-system capture: any display works; capturesAudio=YES
-      // in the config is what actually pulls the system mix.
-      SCDisplay* anyDisplay = content.displays.firstObject;
-      if (!anyDisplay) {
-        cleanupAndReject([NSError errorWithDomain:@"MeetU" code:-5 userInfo:@{ NSLocalizedDescriptionKey: @"no displays available" }]);
-        return;
-      }
       filter = [[SCContentFilter alloc] initWithDisplay:anyDisplay excludingWindows:@[]];
     }
 
-    startCaptureWithFilter(filter, [deferredPtr](NSError* startErr) {
-      if (startErr) {
-        auto status = globals().tsfnAudio.BlockingCall([deferredPtr, startErr](Napi::Env env, Napi::Function) {
-          deferredPtr->Reject(Napi::Error::New(env, startErr.localizedDescription ? std::string(startErr.localizedDescription.UTF8String) : "start failed").Value());
-        });
-        if (status != napi_ok) { /* JS gone */ }
-        globals().tsfnAudio.Release();
-        globals().tsfnError.Release();
-        globals().running = false;
+    auto config = [[SCStreamConfiguration alloc] init];
+    config.capturesAudio = YES;
+    config.sampleRate = 48000;
+    config.channelCount = 1;
+    config.width = 2;
+    config.height = 2;
+    config.minimumFrameInterval = CMTimeMake(1, 1);
+
+    MeetUAudioCapture* capture = [[MeetUAudioCapture alloc] init];
+    SCStream* stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:capture];
+    NSError* addErr = nil;
+    BOOL added = [stream addStreamOutput:capture type:SCStreamOutputTypeAudio
+                      sampleHandlerQueue:dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0) error:&addErr];
+    if (!added) {
+      abortToIdle(addErr && addErr.localizedDescription ? std::string(addErr.localizedDescription.UTF8String) : "addStreamOutput failed");
+      return;
+    }
+
+    [stream startCaptureWithCompletionHandler:^(NSError* _Nullable startErr) {
+      // stop() during start → cancel: stop the stream we just created.
+      bool cancelled = false;
+      {
+        std::lock_guard<std::mutex> lock(session().mutex);
+        cancelled = session().cancelRequested;
+      }
+      if (cancelled) {
+        [stream stopCaptureWithCompletionHandler:^(NSError* _Nullable) {}];
+        {
+          std::lock_guard<std::mutex> lock(session().mutex);
+          session().teardownLocked();
+          session().state = State::Idle;
+        }
+        settleStart(deferredPtr, tsfnStart, false, "capture cancelled during start");
         return;
       }
-      auto status = globals().tsfnAudio.BlockingCall([deferredPtr](Napi::Env env, Napi::Function) {
-        deferredPtr->Resolve(env.Undefined());
-      });
-      if (status != napi_ok) { /* JS gone */ }
-    });
+      if (startErr) {
+        {
+          std::lock_guard<std::mutex> lock(session().mutex);
+          session().teardownLocked();
+          session().state = State::Idle;
+        }
+        settleStart(deferredPtr, tsfnStart, false, startErr.localizedDescription ? std::string(startErr.localizedDescription.UTF8String) : "start failed");
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(session().mutex);
+        session().capture = capture;
+        session().stream = stream;
+        session().state = State::Running;
+      }
+      settleStart(deferredPtr, tsfnStart, true, "");
+    }];
   }];
 
   return deferred.Promise();
@@ -418,38 +453,58 @@ API_AVAILABLE(macos(13.0))
 static Napi::Value StopCapture(const Napi::CallbackInfo& info) {
   auto env = info.Env();
   auto deferred = Napi::Promise::Deferred::New(env);
+  auto& s = session();
 
-  MeetUAudioCapture* capture = nil;
+  SCStream* streamToStop = nil;
   {
-    std::lock_guard<std::mutex> lock(globals().mutex);
-    capture = globals().capture;
-    globals().capture = nil;
+    std::lock_guard<std::mutex> lock(s.mutex);
+    switch (s.state) {
+      case State::Idle:
+        // Nothing to do.
+        deferred.Resolve(env.Undefined());
+        return deferred.Promise();
+      case State::Starting:
+        // Ask the in-flight start completion to abort + teardown. We
+        // resolve immediately; teardown is guaranteed by that path.
+        s.cancelRequested = true;
+        deferred.Resolve(env.Undefined());
+        return deferred.Promise();
+      case State::Stopping:
+        // A stop is already in progress (e.g. fatal error teardown).
+        deferred.Resolve(env.Undefined());
+        return deferred.Promise();
+      case State::Running:
+        streamToStop = s.stream;
+        s.state = State::Stopping;
+        break;
+    }
   }
 
-  if (!capture || !capture.stream) {
-    globals().running = false;
+  if (!streamToStop) {
+    // Defensive: Running but no stream — just go Idle.
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.teardownLocked();
+    s.state = State::Idle;
     deferred.Resolve(env.Undefined());
     return deferred.Promise();
   }
 
   auto deferredPtr = std::make_shared<Napi::Promise::Deferred>(deferred);
-  [capture.stream stopCaptureWithCompletionHandler:^(NSError* _Nullable err) {
-    // Release the ThreadSafeFunctions now that no more audio
-    // callbacks will fire. If we released them in startCapture's
-    // error path AND the stream still managed to fire a frame
-    // before stopping, we'd deref a freed function. Releasing in
-    // the stop callback closes that race.
-    auto status = globals().tsfnAudio.BlockingCall([deferredPtr, err](Napi::Env env, Napi::Function) {
-      if (err) {
-        deferredPtr->Reject(Napi::Error::New(env, err.localizedDescription ? std::string(err.localizedDescription.UTF8String) : "stop failed").Value());
-      } else {
-        deferredPtr->Resolve(env.Undefined());
-      }
+  auto tsfnStop = std::make_shared<Napi::ThreadSafeFunction>(
+    Napi::ThreadSafeFunction::New(env, Napi::Function::New(env, [](const Napi::CallbackInfo&) {}), "meetu-stop-op", 0, 1));
+
+  [streamToStop stopCaptureWithCompletionHandler:^(NSError* _Nullable err) {
+    {
+      std::lock_guard<std::mutex> lock(session().mutex);
+      session().teardownLocked();
+      session().state = State::Idle;
+    }
+    auto status = tsfnStop->BlockingCall([deferredPtr, err](Napi::Env env, Napi::Function) {
+      if (err) deferredPtr->Reject(Napi::Error::New(env, err.localizedDescription ? std::string(err.localizedDescription.UTF8String) : "stop failed").Value());
+      else deferredPtr->Resolve(env.Undefined());
     });
     if (status != napi_ok) { /* JS gone */ }
-    globals().tsfnAudio.Release();
-    globals().tsfnError.Release();
-    globals().running = false;
+    tsfnStop->Release();
   }];
 
   return deferred.Promise();
@@ -459,42 +514,30 @@ API_AVAILABLE(macos(13.0))
 static Napi::Value ListApplications(const Napi::CallbackInfo& info) {
   auto env = info.Env();
   auto deferred = Napi::Promise::Deferred::New(env);
-
-  // We need a thread-safe way to resolve the promise from the
-  // SCShareableContent completion handler (which fires on a
-  // background queue). Wrap a TSFN around an anonymous JS
-  // resolver — same pattern as start().
-  auto resolver = Napi::Function::New(env, [](const Napi::CallbackInfo&) {
-    return Napi::Value();
-  });
-  auto tsfn = Napi::ThreadSafeFunction::New(env, resolver, "meetu-list-tsfn", 0, 1);
+  auto resolver = Napi::Function::New(env, [](const Napi::CallbackInfo&) {});
+  auto tsfn = std::make_shared<Napi::ThreadSafeFunction>(
+    Napi::ThreadSafeFunction::New(env, resolver, "meetu-list-tsfn", 0, 1));
   auto deferredPtr = std::make_shared<Napi::Promise::Deferred>(deferred);
 
   [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent* _Nullable content, NSError* _Nullable err) {
     if (err || !content) {
-      tsfn.BlockingCall([deferredPtr, err](Napi::Env env, Napi::Function) {
-        deferredPtr->Reject(Napi::Error::New(env, err.localizedDescription ? std::string(err.localizedDescription.UTF8String) : "no content").Value());
+      tsfn->BlockingCall([deferredPtr, err](Napi::Env env, Napi::Function) {
+        deferredPtr->Reject(Napi::Error::New(env, err && err.localizedDescription ? std::string(err.localizedDescription.UTF8String) : "no content").Value());
       });
-      tsfn.Release();
+      tsfn->Release();
       return;
     }
-
-    // Hop to the JS thread to build the result array.
-    NSArray<SCRunningApplication*>* apps = content.applications;
-    // Copy data out of NSArray here so the block can capture
-    // POD values for the JS-thread lambda; SCRunningApplication
-    // is not necessarily JS-thread safe.
     struct AppEntry { int pid; std::string name; std::string bundleId; };
     auto entries = std::make_shared<std::vector<AppEntry>>();
-    entries->reserve(apps.count);
-    for (SCRunningApplication* a in apps) {
+    entries->reserve(content.applications.count);
+    for (SCRunningApplication* a in content.applications) {
       entries->push_back({
-        .pid = static_cast<int>(a.processID),
-        .name = a.applicationName ? std::string(a.applicationName.UTF8String) : std::string(""),
-        .bundleId = a.bundleIdentifier ? std::string(a.bundleIdentifier.UTF8String) : std::string(""),
+        static_cast<int>(a.processID),
+        a.applicationName ? std::string(a.applicationName.UTF8String) : std::string(""),
+        a.bundleIdentifier ? std::string(a.bundleIdentifier.UTF8String) : std::string(""),
       });
     }
-    tsfn.BlockingCall([deferredPtr, entries](Napi::Env env, Napi::Function) {
+    tsfn->BlockingCall([deferredPtr, entries](Napi::Env env, Napi::Function) {
       auto arr = Napi::Array::New(env, entries->size());
       for (size_t i = 0; i < entries->size(); ++i) {
         auto obj = Napi::Object::New(env);
@@ -505,7 +548,7 @@ static Napi::Value ListApplications(const Napi::CallbackInfo& info) {
       }
       deferredPtr->Resolve(arr);
     });
-    tsfn.Release();
+    tsfn->Release();
   }];
 
   return deferred.Promise();
@@ -525,7 +568,6 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("stop", Napi::Function::New(env, meetu::StopCapture));
     exports.Set("listApplications", Napi::Function::New(env, meetu::ListApplications));
   } else {
-    // Built against the macOS 13+ SDK but running on an older OS.
     exports.Set("available", Napi::Boolean::New(env, false));
     exports.Set("reason", Napi::String::New(env, "macOS 13 or newer required at runtime"));
   }

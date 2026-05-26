@@ -831,8 +831,17 @@ class AudioCaptureManager {
       } catch { /* worklet torn down mid-flight */ }
     });
     this.nativeErrorUnsub = macos.onError((err: { message: string; code: number }) => {
-      console.error('[Audio] macOS native capture error:', err);
+      // Fatal SCStream error (permission revoked mid-session, target
+      // app quit, etc.). The native session has already torn itself
+      // down on the main side (didStopWithError → Idle). The renderer
+      // pipeline would otherwise keep recording silence, so we tear
+      // the whole capture down here. stop() is re-entrancy-guarded, so
+      // a near-simultaneous user-initiated stop won't double-run.
+      console.error('[Audio] macOS native capture error — stopping session:', err);
       this.emit({ error: `System audio capture stopped: ${err.message} (code ${err.code}) / 系统音频捕获中断` });
+      if (this._state.recording) {
+        void this.stop().catch((e) => console.error('[Audio] stop() after native error failed:', e));
+      }
     });
 
     // Ask the main process to start ScreenCaptureKit. If this rejects
@@ -900,7 +909,18 @@ class AudioCaptureManager {
     this.pcmAudioContext = null;
   }
 
+  // Guards stop() against re-entrancy: a fatal native-error handler
+  // and a user-initiated stop can fire near-simultaneously. The first
+  // call owns teardown; the second awaits the same promise.
+  private stopInFlight: Promise<string> | null = null;
+
   async stop(): Promise<string> {
+    if (this.stopInFlight) return this.stopInFlight;
+    this.stopInFlight = this.doStop().finally(() => { this.stopInFlight = null; });
+    return this.stopInFlight;
+  }
+
+  private async doStop(): Promise<string> {
     if (this.volumeInterval) { clearInterval(this.volumeInterval); this.volumeInterval = null; }
 
     // Disable scheduling of further segments BEFORE we trigger the

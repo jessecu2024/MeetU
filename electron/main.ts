@@ -308,15 +308,48 @@ function registerIPC(): void {
   });
 
   // ── macOS native ScreenCaptureKit capture (PR #4b) ──
-  // These channels are only meaningful on macOS 13+ with the native
-  // addon built. On any other platform the IPC wrapper returns
-  // { ok:false, error } because the loader reports unavailable, and
-  // the renderer never reaches here (the probe gates the UI). PCM
-  // frames are pushed to the renderer on 'macos-system-audio:pcm-frame'.
+  // These channels start ScreenCaptureKit (which can trigger the TCC
+  // permission prompt and capture system audio), so they get the same
+  // main-frame hardening as the Windows setDisplayMediaRequestHandler:
+  // a request from any iframe / webview / popup is rejected. Without
+  // this, embedded or compromised content reaching ipcRenderer could
+  // enumerate running apps or start system-audio capture. PCM frames
+  // are pushed back on 'macos-system-audio:pcm-frame'.
   const macNativeIpc = makeMacOSNativeCaptureIpc(() => mainWindow);
-  ipcMain.handle('macos-system-audio:list-apps', () => macNativeIpc.listApplications());
-  ipcMain.handle('macos-system-audio:start', (_event, opts: { pid?: number }) => macNativeIpc.start(opts || {}));
-  ipcMain.handle('macos-system-audio:stop', () => macNativeIpc.stop());
+  // Returns true only when the request originates from the trusted
+  // top-level frame of our own window.
+  const isTrustedMacRequest = (event: Electron.IpcMainInvokeEvent): boolean => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return false;
+    const trusted = win.webContents.mainFrame;
+    // event.senderFrame is the WebFrameMain that issued the IPC.
+    return !!event.senderFrame
+      && event.senderFrame.frameTreeNodeId === trusted.frameTreeNodeId;
+  };
+  ipcMain.handle('macos-system-audio:list-apps', (event) => {
+    if (!isTrustedMacRequest(event)) {
+      console.warn('[Main] Rejected macos-system-audio:list-apps from untrusted frame');
+      return { ok: false, apps: [], error: 'rejected: untrusted frame' };
+    }
+    return macNativeIpc.listApplications();
+  });
+  ipcMain.handle('macos-system-audio:start', (event, opts: { pid?: number }) => {
+    if (!isTrustedMacRequest(event)) {
+      console.warn('[Main] Rejected macos-system-audio:start from untrusted frame');
+      return { ok: false, error: 'rejected: untrusted frame' };
+    }
+    // Validate the pid argument shape — only a non-negative integer is
+    // meaningful (0/undefined = whole system).
+    const pid = typeof opts?.pid === 'number' && Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : undefined;
+    return macNativeIpc.start({ pid });
+  });
+  ipcMain.handle('macos-system-audio:stop', (event) => {
+    if (!isTrustedMacRequest(event)) {
+      console.warn('[Main] Rejected macos-system-audio:stop from untrusted frame');
+      return { ok: false, error: 'rejected: untrusted frame' };
+    }
+    return macNativeIpc.stop();
+  });
 
   // ── Database ──
   ipcMain.handle('db:query', async (_event, sql: string, params?: unknown[]) => {
