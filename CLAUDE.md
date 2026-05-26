@@ -109,8 +109,10 @@ Electron 本身是 MIT 许可，可商用。但内置 Chromium 的 ffmpeg 包含
 1. 录音合规责任
 本应用通过您在操作系统中选择的音频输入设备（默认为麦克风）进行录制。
 如需同时录制其他参与者的声音，需要在系统层启用 loopback（Windows: Stereo Mix；
-macOS: 非 GPL 虚拟音频线缆），并在应用内选择该设备。原生 ScreenCaptureKit /
-WASAPI Loopback 在路线图中尚未发布。
+macOS: 非 GPL 虚拟音频线缆），并在应用内选择该设备。Windows 10+ 用户也
+可在设置中启用"System Audio (native loopback)"使用 Electron 包装的
+WASAPI loopback(无需 Stereo Mix);macOS 原生 ScreenCaptureKit 在 PR
+#4b 路线图中。
 您有责任确保：
 - 已遵守您所在地区关于录音的法律法规
 - 已获得所有会议参与者的知情同意（如适用法律要求）
@@ -258,8 +260,8 @@ meetu/
 5. 实现 STT 引擎选择（含本地 whisper.cpp 离线方案）
 
 ### Phase 2: 音频捕获 + 录音（零 GPL 依赖）
-1. macOS: 实现 ScreenCaptureKit N-API 原生模块
-2. Windows: 实现 WASAPI Loopback N-API 原生模块
+1. Windows: 整机 WASAPI loopback (Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`,无需 N-API,已在 PR #4a 上线)
+2. macOS: ScreenCaptureKit 整机 + per-app capture(原生 N-API,Swift + ObjC++ 桥;PR #4b)
 3. 双通道音频流（系统音频 + 麦克风）
 4. WAV 录音（Web Audio API，不依赖 ffmpeg）
 5. 每次录音前显示 RecordingConsent
