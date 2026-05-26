@@ -105,12 +105,16 @@ function createWindow(): void {
     if (/^https?:\/\//i.test(url)) { void shell.openExternal(url); }
     return { action: 'deny' };
   });
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  const blockOffOriginNav = (event: Electron.Event, url: string) => {
     if (!isTrustedAppUrl(url)) {
       event.preventDefault();
       if (/^https?:\/\//i.test(url)) { void shell.openExternal(url); }
     }
-  });
+  };
+  // Cover both user/script navigations AND server/meta redirects, so a
+  // redirect can't sneak the top frame off the app origin.
+  mainWindow.webContents.on('will-navigate', blockOffOriginNav);
+  mainWindow.webContents.on('will-redirect', blockOffOriginNav);
 
   // Forward renderer console logs to main process terminal for debugging
   mainWindow.webContents.on('console-message', (_event, _level, message) => {
@@ -205,10 +209,16 @@ function registerDisplayMediaHandler(): void {
       const requestFrameId = request.frame?.frameTreeNodeId;
       const trustedFrameId = win?.webContents?.mainFrame?.frameTreeNodeId;
       const isMainFrame = !!win && !win.isDestroyed() && requestFrameId !== undefined && requestFrameId === trustedFrameId;
-      if (!isMainFrame) {
+      // Belt-and-suspenders, matching the macOS native IPC check: the
+      // top frame must also be on our own app origin. Navigation
+      // lockdown already prevents the top frame leaving the app origin,
+      // but re-checking here means a redirect / lockdown regression
+      // can't turn an off-origin top frame into a screen-capture grant.
+      const isTrustedFrameUrl = !!request.frame && isTrustedAppUrl(request.frame.url);
+      if (!isMainFrame || !isTrustedFrameUrl) {
         console.warn(
-          `[Display] Rejected getDisplayMedia from non-main-frame request`,
-          { origin: request.securityOrigin, audioRequested: request.audioRequested, videoRequested: request.videoRequested },
+          `[Display] Rejected getDisplayMedia from untrusted frame`,
+          { origin: request.securityOrigin, url: request.frame?.url, audioRequested: request.audioRequested, videoRequested: request.videoRequested },
         );
         callback(denyShape);
         return;
