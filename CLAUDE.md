@@ -283,6 +283,7 @@ meetu/
 - [ ] 营销材料不含"Zoom 插件""Teams 集成"等措辞
 - [ ] LEGAL_NOTICE.md 包含所有第三方许可证归属
 - [ ] 用户协议/EULA 由律师审核
+- [ ] **真机验证** —— 按 `docs/MANUAL_VERIFICATION.md` 逐项确认 CI 覆盖不到的功能(macOS 系统音频、Local Whisper 完整链路、Windows loopback、云端 STT 真 Key)
 
 ## 营销定位指南
 
