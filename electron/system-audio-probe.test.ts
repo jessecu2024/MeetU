@@ -38,6 +38,35 @@ describe('probeSystemAudioSupport', () => {
     expect(r.reason).toMatch(/macOS 13/);
   });
 
+  it('rejects darwin with "13-beta" (lenient parseInt would have allowed it)', () => {
+    // parseInt('13-beta') === 13, which the previous implementation
+    // would have accepted. The strict regex must reject it because
+    // "-beta" is neither a dot nor end-of-string after the digit run.
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: '13-beta' });
+    expect(r.supported).toBe(false);
+    expect(r.reason).toMatch(/macOS 13/);
+    expect(r.reason).toMatch(/13-beta/);
+  });
+
+  it('rejects darwin with "v13.0.0" leading non-digit', () => {
+    // parseInt('v13.0.0') === NaN; lenient `NaN < 13` is false, so the
+    // previous implementation mis-marked this as supported. The strict
+    // parser must reject.
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'v13.0.0' });
+    expect(r.supported).toBe(false);
+  });
+
+  it('rejects darwin with garbage version (only non-digits)', () => {
+    const r = probeSystemAudioSupport({ platform: 'darwin', macOsVersion: 'unknown' });
+    expect(r.supported).toBe(false);
+  });
+
+  it('rejects win32 with "10-rc" suffix (parseInt would silently accept)', () => {
+    const r = probeSystemAudioSupport({ platform: 'win32', winRelease: '10-rc' });
+    expect(r.supported).toBe(false);
+    expect(r.reason).toMatch(/Windows 10/);
+  });
+
   it('surfaces the screen-recording permission status verbatim when granted', () => {
     const r = probeSystemAudioSupport({
       platform: 'darwin',

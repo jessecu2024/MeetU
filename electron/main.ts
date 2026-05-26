@@ -79,34 +79,6 @@ function createWindow(): void {
     return true;
   });
 
-  // ── System audio loopback via getDisplayMedia ──
-  // Electron 30+ on macOS 13+ wraps ScreenCaptureKit; on Windows 10+ it
-  // wraps WASAPI loopback. The renderer requests it via
-  // `navigator.mediaDevices.getDisplayMedia({audio:true, video:{...}})`
-  // and we must register a handler that picks the source and tells
-  // Electron to deliver the system loopback audio. Without this the
-  // call rejects with NotSupportedError. We always pick the primary
-  // screen for the video source (the renderer immediately discards
-  // the video track — we only want the audio).
-  session.defaultSession.setDisplayMediaRequestHandler(
-    async (_request, callback) => {
-      try {
-        const sources = await desktopCapturer.getSources({ types: ['screen'] });
-        if (sources.length === 0) {
-          console.error('[Display] No screen sources available for loopback');
-          // Cast to satisfy the callback shape — passing {} (or any falsy
-          // video/audio) tells Electron the request was rejected.
-          (callback as (s: { video?: never; audio?: never }) => void)({});
-          return;
-        }
-        callback({ video: sources[0], audio: 'loopback' });
-      } catch (err) {
-        console.error('[Display] setDisplayMediaRequestHandler failed:', err);
-        (callback as (s: { video?: never; audio?: never }) => void)({});
-      }
-    },
-  );
-
   // ── Bypass CORS for AI API endpoints ──
   // Desktop apps don't need CORS restrictions; AI providers don't set CORS headers for browser origins
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -133,6 +105,45 @@ function createWindow(): void {
       callback({ responseHeaders: details.responseHeaders });
     }
   });
+}
+
+/**
+ * Register the global session handler that lets the renderer call
+ * `navigator.mediaDevices.getDisplayMedia({audio:true, ...})` and
+ * receive system-audio loopback. Without this, Electron rejects every
+ * such call with `NotSupportedError`.
+ *
+ * Lives in its own function (not inside `createWindow`) because it
+ * mutates the default Session — global state that should be configured
+ * exactly once during `app.whenReady`, not re-applied each time a
+ * window is rebuilt. Setting it inside `createWindow` would not leak
+ * memory (Electron's API replaces the handler rather than stacking
+ * listeners), but it would muddle the lifecycle semantics and risk
+ * subtle bugs if a future change ever shipped multi-window or
+ * window-reopen flows.
+ *
+ * Always picks the primary screen for the video source; the renderer
+ * immediately discards the video track because we only need the audio.
+ */
+function registerDisplayMediaHandler(): void {
+  session.defaultSession.setDisplayMediaRequestHandler(
+    async (_request, callback) => {
+      try {
+        const sources = await desktopCapturer.getSources({ types: ['screen'] });
+        if (sources.length === 0) {
+          console.error('[Display] No screen sources available for loopback');
+          // Cast to satisfy the callback shape — passing {} (or any falsy
+          // video/audio) tells Electron the request was rejected.
+          (callback as (s: { video?: never; audio?: never }) => void)({});
+          return;
+        }
+        callback({ video: sources[0], audio: 'loopback' });
+      } catch (err) {
+        console.error('[Display] setDisplayMediaRequestHandler failed:', err);
+        (callback as (s: { video?: never; audio?: never }) => void)({});
+      }
+    },
+  );
 }
 
 /** Register global shortcuts */
@@ -536,6 +547,7 @@ app.whenReady().then(async () => {
 
   await initDatabase();
   registerIPC();
+  registerDisplayMediaHandler();
   registerShortcuts();
   createWindow();
 

@@ -65,6 +65,40 @@ describe('mapSystemAudioError', () => {
     expect(msg).toMatch(/主进程/);
   });
 
+  it('maps NotReadableError to "device busy" with concrete other-app guidance', () => {
+    const msg = mapSystemAudioError(domException('NotReadableError'));
+    expect(msg).toMatch(/busy/i);
+    // Names real apps that commonly hold the screen-capture engine on
+    // macOS so the user can find and quit them.
+    expect(msg).toMatch(/Loom|OBS|QuickTime/);
+    expect(msg).toMatch(/繁忙|不可读/);
+  });
+
+  it('maps InvalidStateError to a "bring window to foreground" hint', () => {
+    const msg = mapSystemAudioError(domException('InvalidStateError'));
+    expect(msg).toMatch(/foreground/i);
+    expect(msg).toMatch(/前台/);
+  });
+
+  it('maps OverconstrainedError to "constraints not satisfied — likely a bug"', () => {
+    const msg = mapSystemAudioError(domException('OverconstrainedError'));
+    expect(msg).toMatch(/constraints/i);
+    expect(msg).toMatch(/bug/i);
+    expect(msg).toMatch(/约束/);
+  });
+
+  it('maps SecurityError to "main process missing handler — reinstall"', () => {
+    const msg = mapSystemAudioError(domException('SecurityError'));
+    expect(msg).toMatch(/security/i);
+    expect(msg).toMatch(/reinstall/i);
+  });
+
+  it('maps TypeError to "bad constraints — likely a bug"', () => {
+    const msg = mapSystemAudioError(domException('TypeError'));
+    expect(msg).toMatch(/bad constraints/i);
+    expect(msg).toMatch(/bug/i);
+  });
+
   it('falls back to a generic message for unknown DOMException names', () => {
     const msg = mapSystemAudioError(domException('SomeFutureDOMError', 'oops'));
     expect(msg).toMatch(/System audio error/);

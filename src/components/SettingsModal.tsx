@@ -63,8 +63,22 @@ export default function SettingsModal() {
       // gate the dropdown option on the result so users on macOS 12 /
       // Linux see an explanation instead of a silent failure when they
       // try to record.
+      //
+      // If the user previously persisted SYSTEM_AUDIO_DEVICE_ID on a
+      // supported OS and is now on an unsupported one (downgrade, new
+      // machine, etc.), auto-reset to the default microphone so the
+      // user does not have to deduce that the persisted-but-disabled
+      // sentinel is the reason their next recording fails.
       window.electronAPI?.audio.probeSystemAudio()
-        .then(setSystemAudioProbe)
+        .then((probe) => {
+          setSystemAudioProbe(probe);
+          if (!probe.supported && useSettingsStore.getState().appSettings.micDeviceId === SYSTEM_AUDIO_DEVICE_ID) {
+            useSettingsStore.getState().updateAppSettings({
+              micDeviceId: 'default',
+              micDeviceLabel: 'Default Microphone',
+            });
+          }
+        })
         .catch(() => setSystemAudioProbe({ supported: false, reason: 'Probe failed' }));
     }
   }, [activeTab]);

@@ -28,13 +28,39 @@ export interface SystemAudioProbeResult {
   version?: string;
 }
 
+/**
+ * Strict major-version extractor. Returns `NaN` for any input that
+ * does not start with one or more digits followed by either a dot
+ * separator or end-of-string. This is intentional:
+ *
+ *   "13.4.0"   -> 13
+ *   "13"       -> 13
+ *   "10.0.226" -> 10
+ *   ""         -> NaN   (cannot confirm — must reject)
+ *   "v13.0"    -> NaN   (leading non-digit — must reject)
+ *   "13-beta"  -> NaN   (suffix is not a dot/EOS — must reject)
+ *
+ * The previous implementation used `parseInt(s.split('.')[0])` which
+ * lenient-parsed `"13-beta"` as 13 (parseInt strips trailing junk)
+ * and was hostile to `"v13.0.0"` (returned NaN, but then `NaN < 13`
+ * is `false`, mis-marking the platform as supported).
+ */
+function parseMajor(version: string): number {
+  const m = /^(\d+)(?:\.|$)/.exec(version);
+  return m ? parseInt(m[1], 10) : NaN;
+}
+
 export function probeSystemAudioSupport(inputs: SystemAudioProbeInputs): SystemAudioProbeResult {
   const { platform, macOsVersion, winRelease, screenPermission } = inputs;
 
   if (platform === 'darwin') {
     const versionStr = macOsVersion ?? '';
-    const major = parseInt(versionStr.split('.')[0] || '0', 10);
-    if (major < 13) {
+    const major = parseMajor(versionStr);
+    // Number.isFinite is the only safe predicate here: `NaN >= 13`,
+    // `NaN < 13`, and `NaN === NaN` are all false. We must explicitly
+    // reject the unparseable case so a malformed `process.getSystemVersion()`
+    // does not slip past as "supported".
+    if (!Number.isFinite(major) || major < 13) {
       return {
         supported: false,
         reason: `macOS 13 (Ventura) or newer required for ScreenCaptureKit; detected ${versionStr || '(unknown)'}. / 需要 macOS 13 或更新版本，当前 ${versionStr || '未知'}`,
@@ -49,8 +75,8 @@ export function probeSystemAudioSupport(inputs: SystemAudioProbeInputs): SystemA
 
   if (platform === 'win32') {
     const releaseStr = winRelease ?? '';
-    const major = parseInt(releaseStr.split('.')[0] || '0', 10);
-    if (major < 10) {
+    const major = parseMajor(releaseStr);
+    if (!Number.isFinite(major) || major < 10) {
       return {
         supported: false,
         reason: `Windows 10 or newer required for WASAPI loopback; detected ${releaseStr || '(unknown)'}. / 需要 Windows 10 或更新版本，当前 ${releaseStr || '未知'}`,

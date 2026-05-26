@@ -81,9 +81,38 @@ export function mapSystemAudioError(err: unknown): string {
   const message = (err as Error)?.message || '';
   switch (name) {
     case 'NotAllowedError':
+      // The most common failure on macOS: Screen Recording permission
+      // not granted (or revoked) for this app. Chrome / Electron raise
+      // NotAllowedError in this case, identical to a denied prompt.
       return 'System audio access denied. macOS 13+: grant Screen Recording permission in System Settings → Privacy & Security → Screen & System Audio Recording, then restart the app. / 系统音频权限被拒绝，请到 系统设置 → 隐私与安全 → 屏幕与系统录制 中授权后重启应用';
     case 'NotFoundError':
       return 'No system audio source available. Make sure something is playing through the system output. / 未找到系统音频源';
+    case 'NotReadableError':
+      // Hardware/OS-level acquisition failure (the platform admitted
+      // the request but couldn't open the capture device — e.g. the
+      // audio engine is in an unexpected state, another process has a
+      // conflicting lock, or ScreenCaptureKit refused mid-handshake).
+      return 'System audio device is busy or unreadable. Quit any other screen-recording app (Loom, OBS, QuickTime) and try again. / 系统音频设备繁忙或不可读，请退出其它录屏/录音软件后重试';
+    case 'InvalidStateError':
+      // Most commonly fired when getDisplayMedia is called while the
+      // page is not the focused/active document or while a previous
+      // capture is still tearing down. Surface a concrete action.
+      return 'System audio cannot start in the current window state. Bring MeetU to the foreground and try again. / 当前窗口状态无法启动系统音频，请将 MeetU 切到前台后重试';
+    case 'OverconstrainedError':
+      // Our video constraints are intentionally minimal (1×1 @ 1fps)
+      // but a future change might trip this. Tell the user it's an
+      // app bug, not a permission/hardware problem.
+      return 'System audio constraints could not be satisfied by this OS. This is likely a MeetU bug — please report it. / 系统音频约束无法满足，可能是应用 bug，请反馈';
+    case 'SecurityError':
+      // The origin doesn't have permission to call getDisplayMedia.
+      // Inside Electron this generally means the main process did not
+      // register setDisplayMediaRequestHandler — a regression in main.ts.
+      return 'System audio is blocked by security policy. The main process may be missing setDisplayMediaRequestHandler — please reinstall MeetU. / 系统音频被安全策略阻止，主进程可能缺少配置，请重装';
+    case 'TypeError':
+      // Wrong argument shape — should never happen with our
+      // hard-coded constraints, but DOM specs raise this when
+      // getDisplayMedia is called without any constraints at all.
+      return 'System audio call rejected by the browser (bad constraints). This is likely a MeetU bug — please report it. / 系统音频调用参数被浏览器拒绝，可能是应用 bug，请反馈';
     case 'NotSupportedError':
       return 'System audio capture is not supported on this OS version (requires macOS 13+ or Windows 10+). / 当前系统版本不支持系统音频捕获，需要 macOS 13+ 或 Windows 10+';
     case 'AbortError':
