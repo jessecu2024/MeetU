@@ -10,7 +10,7 @@ import { useSettingsStore } from '../stores/settings-store';
 import type { TestResult } from '../stores/settings-store';
 import { providerRegistry } from '../services/ai-provider';
 import { sttRegistry } from '../services/stt-engine/engine-registry';
-import { listAudioDevices, listAudioOutputDevices } from '../services/audio/capture';
+import { listAudioDevices, listAudioOutputDevices, SYSTEM_AUDIO_DEVICE_ID } from '../services/audio/capture';
 import type { AudioInputDevice, AudioOutputDevice } from '../services/audio/capture';
 import type { AIProviderId } from '../services/ai-provider/types';
 import type { STTEngineId } from '../services/stt-engine/types';
@@ -44,6 +44,12 @@ export default function SettingsModal() {
   const [audioDevices, setAudioDevices] = useState<AudioInputDevice[]>([]);
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([]);
   const [showStereoMixGuide, setShowStereoMixGuide] = useState(false);
+  const [systemAudioProbe, setSystemAudioProbe] = useState<{
+    supported: boolean;
+    reason?: string;
+    permission?: string;
+    version?: string;
+  } | null>(null);
 
   // Read test results from store (persists across modal open/close)
   const aiTestResults = useSettingsStore((s) => s.aiTestResults);
@@ -53,6 +59,13 @@ export default function SettingsModal() {
     if (activeTab === 'app') {
       listAudioDevices().then(setAudioDevices);
       listAudioOutputDevices().then(setOutputDevices);
+      // Probe whether system-audio loopback is available on this OS. We
+      // gate the dropdown option on the result so users on macOS 12 /
+      // Linux see an explanation instead of a silent failure when they
+      // try to record.
+      window.electronAPI?.audio.probeSystemAudio()
+        .then(setSystemAudioProbe)
+        .catch(() => setSystemAudioProbe({ supported: false, reason: 'Probe failed' }));
     }
   }, [activeTab]);
 
@@ -599,19 +612,68 @@ export default function SettingsModal() {
                 </div>
               </div>
 
+              {/* System Audio (loopback) — native ScreenCaptureKit on
+                  macOS 13+ / WASAPI loopback on Windows 10+. Driverless;
+                  no Stereo Mix needed; requires Screen Recording permission
+                  on macOS. */}
+              {systemAudioProbe && (
+                <div className={`rounded-lg border p-2.5 ${
+                  systemAudioProbe.supported
+                    ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20'
+                    : 'border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/30 opacity-70'
+                }`}>
+                  <button
+                    onClick={() => {
+                      if (!systemAudioProbe.supported) return;
+                      store.updateAppSettings({
+                        micDeviceId: SYSTEM_AUDIO_DEVICE_ID,
+                        micDeviceLabel: 'System Audio (loopback)',
+                      });
+                    }}
+                    disabled={!systemAudioProbe.supported}
+                    className="w-full text-left text-xs disabled:cursor-not-allowed">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-zinc-900 dark:text-white">
+                        🔊 System Audio (native loopback) / 系统音频（原生 loopback）
+                      </span>
+                      {store.appSettings.micDeviceId === SYSTEM_AUDIO_DEVICE_ID && systemAudioProbe.supported && (
+                        <span className="text-emerald-600 dark:text-emerald-400 font-bold">✓ selected</span>
+                      )}
+                    </div>
+                    <p className="text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      {systemAudioProbe.supported
+                        ? 'macOS 13+ uses ScreenCaptureKit · Windows 10+ uses WASAPI loopback · no driver needed / macOS 13+ 使用 ScreenCaptureKit，Windows 10+ 使用 WASAPI loopback，无需安装驱动'
+                        : systemAudioProbe.reason || 'Not supported on this OS'}
+                    </p>
+                    {systemAudioProbe.supported && systemAudioProbe.permission === 'denied' && (
+                      <p className="mt-1 text-amber-700 dark:text-amber-400">
+                        ⚠ macOS Screen Recording permission is denied. Open System Settings → Privacy & Security → Screen & System Audio Recording. / 系统录屏权限被拒绝
+                      </p>
+                    )}
+                  </button>
+                </div>
+              )}
+
               {/* Audio Input Device selector */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
                   Audio Input Device <span className="text-zinc-400 font-normal">/ 音频输入设备</span>
                 </label>
                 <select
-                  value={store.appSettings.micDeviceId}
+                  value={
+                    store.appSettings.micDeviceId === SYSTEM_AUDIO_DEVICE_ID
+                      ? ''
+                      : store.appSettings.micDeviceId
+                  }
                   onChange={(e) => {
                     const d = audioDevices.find(x => x.deviceId === e.target.value);
                     store.updateAppSettings({ micDeviceId: e.target.value, micDeviceLabel: d?.label || 'Default' });
                   }}
                   className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600
                     bg-white dark:bg-zinc-800 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  {store.appSettings.micDeviceId === SYSTEM_AUDIO_DEVICE_ID && (
+                    <option value="" disabled>(System Audio selected above)</option>
+                  )}
                   {audioDevices.map(d => (
                     <option key={d.deviceId} value={d.deviceId}>
                       {d.badge} {d.label}

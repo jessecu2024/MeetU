@@ -53,7 +53,7 @@ MeetU is a cross-platform desktop app that sits beside your meeting window, prov
                              └───────────────────┘
 ```
 
-> **Audio capture today:** MeetU records the audio input device you select via `getUserMedia` — by default, the microphone — on both macOS and Windows. To capture other participants' voices, route the meeting app's output through a loopback device (Windows: Stereo Mix; macOS: a non-GPL virtual audio cable) and pick that device as the input. Native driverless system-audio capture (macOS ScreenCaptureKit per-app; Windows WASAPI Loopback full-system) is on the roadmap but not yet integrated.
+> **Audio capture today:** MeetU offers two recording paths. (1) Microphone or loopback device via `getUserMedia` — pick any audio input including Windows Stereo Mix or a macOS virtual audio cable. (2) **Native system-audio loopback** via Electron's `getDisplayMedia` + `audio:'loopback'` — driverless full-system capture using ScreenCaptureKit on macOS 13+ and WASAPI loopback on Windows 10+. Settings → Audio → "System Audio (native loopback)". macOS requires granting *Screen & System Audio Recording* permission once. Per-application audio capture (record only Zoom, ignore everything else) is on the roadmap and requires a native module that ships in a later release.
 
 **Key architecture principles:**
 - **BYOK (Bring Your Own Key)** — You use your own AI & STT API keys. We never see them.
@@ -149,7 +149,8 @@ We welcome contributions! Please note:
 ## Roadmap
 
 - [ ] Local Whisper (whisper.cpp) integration for fully offline STT
-- [ ] macOS ScreenCaptureKit native audio capture
+- [x] System-wide audio loopback (macOS 13+ ScreenCaptureKit / Windows 10+ WASAPI via Electron)
+- [ ] Per-application audio capture (native ScreenCaptureKit N-API module — record only Zoom, etc.)
 - [ ] Multi-language support beyond EN/中 (Japanese, Korean, etc.)
 - [ ] Meeting history browser with search
 - [ ] Plugin system for custom AI workflows
@@ -199,7 +200,7 @@ MeetU（开会啦）是一款跨平台桌面应用，在你开会时提供实时
                                └───────────────────┘
 ```
 
-> **当前音频捕获说明：** 应用通过 `getUserMedia` 捕获你选择的麦克风。如需录制对方声音，需要在系统中启用 loopback（Windows：立体声混音；macOS：虚拟音频线缆，例如 BlackHole 的替代品）。macOS ScreenCaptureKit 原生系统音频捕获在路线图中，目前尚未集成。
+> **当前音频捕获说明：** 应用支持两种录音路径。(1) 通过 `getUserMedia` 捕获你选择的音频输入设备 —— 麦克风、Windows 立体声混音、或 macOS 虚拟音频线缆。(2) **原生系统音频 loopback**：通过 Electron `getDisplayMedia` + `audio:'loopback'` 实现，macOS 13+ 内部使用 ScreenCaptureKit，Windows 10+ 内部使用 WASAPI loopback，**无需安装任何驱动**。设置 → Audio → "System Audio (native loopback)"。macOS 需要在 *系统设置 → 隐私与安全 → 屏幕与系统录制* 中授权一次。按应用捕获音频（只录 Zoom 一个应用）在路线图中，需后续版本的原生模块支持。
 
 **核心架构原则：**
 - **纯 BYOK** — 使用你自己的 AI 和 STT API Key，我们永远看不到它们
@@ -295,7 +296,8 @@ MeetU 采用 **Business Source License 1.1** 许可证。详见 [LICENSE](LICENS
 ## 路线图
 
 - [ ] 本地 Whisper（whisper.cpp）集成，支持完全离线转写
-- [ ] macOS ScreenCaptureKit 原生音频捕获
+- [x] 整机系统音频 loopback（macOS 13+ ScreenCaptureKit / Windows 10+ WASAPI，via Electron）
+- [ ] 按应用音频捕获（原生 ScreenCaptureKit N-API 模块 —— 只录 Zoom 等单个应用）
 - [ ] 更多语言支持（日语、韩语等）
 - [ ] 会议历史浏览与搜索
 - [ ] 插件系统，支持自定义 AI 工作流

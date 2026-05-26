@@ -26,7 +26,7 @@
 
 **MeetU（开会啦）** 是一款跨平台桌面 AI 会议助手。在线上会议期间运行本应用，即可获得：
 
-- **实时语音转文字** — 转写你选择的音频输入设备（默认麦克风；如需捕获会议中其他参与者的声音，需在系统层启用 Stereo Mix / 虚拟音频线缆 loopback）
+- **实时语音转文字** — 转写你选择的音频输入设备(默认麦克风);要捕获会议中其他参与者的声音,可选择 macOS 13+ / Windows 10+ 的**系统音频 loopback**(原生 ScreenCaptureKit / WASAPI,无需驱动),或在系统层启用 Stereo Mix / 虚拟音频线缆作为输入
 - **实时翻译** — 中英双向即时翻译
 - **@检测与智能回复建议** — 检测到有人叫你时，自动生成三种风格的回复建议
 - **实时摘要** — 每隔几分钟自动提取会议要点
@@ -71,7 +71,7 @@ MeetU 采用 **100% BYOK** 模式：
 1. 下载 `MeetU-1.1.0.dmg`
 2. 打开 DMG，将 MeetU 拖入 Applications 文件夹
 3. 首次打开时，如遇到"无法验证开发者"提示，请在 **系统设置 → 隐私与安全性** 中点击"仍要打开"
-4. macOS 会提示授予麦克风权限（用于录音），请允许。若日后启用 ScreenCaptureKit 原生捕获（路线图中），届时会另外申请屏幕录制权限
+4. macOS 会提示授予麦克风权限（用于录音），请允许。**首次选择"System Audio (native loopback)"时,系统会要求授予屏幕与系统录制权限** — 在 *系统设置 → 隐私与安全 → 屏幕与系统录制* 中授权后重启应用方可生效
 
 ### 方法二：从源码构建
 
@@ -183,15 +183,20 @@ npm run build        # 构建发布版
 
 ### 音频捕获方式
 
-当前版本通过浏览器 `getUserMedia` 捕获选定的音频输入设备。若需要录制会议中**其他**参与者的声音（而不仅是你自己的麦克风），需要在系统层面启用 loopback。
+应用有两条录音路径,在 设置 → 偏好设置 → 音频输入设备 中选择:
+
+1. **系统音频 loopback（推荐,无需驱动）** — 录制整个系统输出。macOS 13+ 内部使用 ScreenCaptureKit；Windows 10+ 内部使用 WASAPI loopback。设置面板中选中"🔊 System Audio (native loopback)"按钮即可。macOS 首次使用时会弹出系统级"屏幕与系统录制"权限对话框,需要在 *系统设置 → 隐私与安全 → 屏幕与系统录制* 中授权后重启应用。
+2. **麦克风 / 第三方 loopback 设备** — 通过浏览器 `getUserMedia` 选择任一音频输入,包括麦克风、Windows Stereo Mix、或 macOS 虚拟音频线缆。
 
 | 平台 | 当前实际方案 | 状态 |
 |------|------------|------|
 | 所有平台 | `getUserMedia` 选择麦克风（默认） | ✅ 可用 |
-| Windows 10+ | 在系统中启用 **Stereo Mix**（设置 → 系统 → 声音 → 录制设备），再在应用内选择此设备 | ✅ 可用，需用户启用 |
-| macOS 13+ | 安装虚拟音频线缆（如非 GPL 替代品），把会议应用输出路由到该设备，再在应用内选择 | ✅ 可用，需用户配置 |
-| Windows 10+ | WASAPI Loopback 原生捕获 | 🔜 计划中（`native/windows/` 尚未创建） |
-| macOS 13+ | ScreenCaptureKit 原生捕获 | 🔜 计划中（`native/macos/` 有 Swift 草稿但 N-API 绑定为 placeholder） |
+| macOS 13+ | **整机系统音频 loopback**（Electron `getDisplayMedia` + `audio:'loopback'`,内部用 ScreenCaptureKit） | ✅ 可用,需授权系统录屏权限 |
+| Windows 10+ | **整机系统音频 loopback**（Electron `getDisplayMedia` + `audio:'loopback'`,内部用 WASAPI loopback） | ✅ 可用 |
+| macOS 12 及以下 | 系统音频选项不可用（系统不支持 ScreenCaptureKit） | 用虚拟音频线缆替代 |
+| Windows 10+ 备用 | 在系统中启用 **Stereo Mix**（设置 → 系统 → 声音 → 录制设备） | ✅ 可用,需用户启用 |
+| macOS 12 备用 | 安装非 GPL 虚拟音频线缆,把会议应用输出路由到该设备 | ✅ 可用,需用户配置 |
+| macOS 13+ | **按应用 ScreenCaptureKit 捕获**（原生 N-API,只录 Zoom 等单个应用） | 🔜 计划中（PR #4b — `native/macos/` 有 Swift 草稿但 N-API 绑定为 placeholder） |
 
 ### 转写界面
 

@@ -1,10 +1,33 @@
 // ============================================================
 // Audio Capture Manager (Renderer Process)
 //
-// Pure getUserMedia approach — no desktopCapturer, no AudioContext.
-// User selects an audio input device (mic, Stereo Mix, or virtual cable).
-// This ensures zero interference with audio output.
+// Two acquisition paths:
+//
+//   1. getUserMedia — selects a specific audio input device by id.
+//      Used for microphones, Bluetooth headsets, Windows Stereo Mix,
+//      or any virtual audio cable the user has installed.
+//
+//   2. getDisplayMedia + audio:'loopback' — captures the system
+//      output bus. On macOS 13+ Electron wraps ScreenCaptureKit and on
+//      Windows 10+ it wraps WASAPI loopback. Requires the main process
+//      to register a `setDisplayMediaRequestHandler` (see
+//      electron/main.ts) and, on macOS, the user must grant Screen
+//      Recording permission in System Settings. This path is
+//      triggered by setting `deviceId` to the sentinel
+//      SYSTEM_AUDIO_DEVICE_ID.
+//
+// The rest of the pipeline (MediaRecorder, segment recorder, PCM
+// resampler) is identical for both paths because both yield a normal
+// MediaStream with an audio track.
 // ============================================================
+
+/**
+ * Sentinel `deviceId` value that tells the capture manager to use
+ * `getDisplayMedia({audio:'loopback'})` instead of `getUserMedia`.
+ * Anything else (including the empty string and `'default'`) is
+ * treated as a normal audio input device id.
+ */
+export const SYSTEM_AUDIO_DEVICE_ID = '__system_audio__';
 
 export interface CaptureState {
   micActive: boolean;
@@ -40,6 +63,33 @@ function mapMicError(err: unknown): string {
       return 'Selected audio device not available. Try "Refresh Devices" in Settings. / 选中的设备不可用，请在设置中刷新设备列表';
     default:
       return `Audio error: ${(err as Error)?.message || name || 'Unknown'} / 音频错误`;
+  }
+}
+
+/**
+ * Translate `getDisplayMedia` failures into actionable strings.
+ * Distinct from `mapMicError` because the failure modes are different
+ * (Screen Recording permission, no source available, user cancelled
+ * the picker if Electron's system picker is ever turned on).
+ *
+ * Exported for unit testing — each branch maps a DOMException name to
+ * a user-facing message; getting one of these wrong is a silent UX
+ * regression that's hard to catch any other way.
+ */
+export function mapSystemAudioError(err: unknown): string {
+  const name = (err as DOMException)?.name;
+  const message = (err as Error)?.message || '';
+  switch (name) {
+    case 'NotAllowedError':
+      return 'System audio access denied. macOS 13+: grant Screen Recording permission in System Settings → Privacy & Security → Screen & System Audio Recording, then restart the app. / 系统音频权限被拒绝，请到 系统设置 → 隐私与安全 → 屏幕与系统录制 中授权后重启应用';
+    case 'NotFoundError':
+      return 'No system audio source available. Make sure something is playing through the system output. / 未找到系统音频源';
+    case 'NotSupportedError':
+      return 'System audio capture is not supported on this OS version (requires macOS 13+ or Windows 10+). / 当前系统版本不支持系统音频捕获，需要 macOS 13+ 或 Windows 10+';
+    case 'AbortError':
+      return 'System audio request was rejected by the main process (no screen sources). / 主进程未返回有效的屏幕源';
+    default:
+      return `System audio error: ${message || name || 'Unknown'} / 系统音频错误`;
   }
 }
 
@@ -192,7 +242,8 @@ class AudioCaptureManager {
 
   async start(): Promise<void> {
     if (this._state.recording) return;
-    console.log('[Audio] Starting capture (pure getUserMedia, no desktopCapturer)');
+    const useSystemAudio = this.deviceId === SYSTEM_AUDIO_DEVICE_ID;
+    console.log(`[Audio] Starting capture (path=${useSystemAudio ? 'getDisplayMedia/loopback' : 'getUserMedia'})`);
 
     // ── Diagnostics ──
     try {
@@ -222,6 +273,49 @@ class AudioCaptureManager {
       console.error('[Audio] Failed to start file recording:', err);
     }
     this.emit({ recording: true, filePath, error: null });
+
+    if (useSystemAudio) {
+      // getDisplayMedia requires a video constraint to be present even
+      // when we only want audio. We ask for the smallest possible frame
+      // (1×1 at 1 fps) and stop the video track immediately to free the
+      // GPU encoder pipeline. The audio track from `audio:'loopback'`
+      // is what we actually feed into the rest of the pipeline.
+      try {
+        this.stream = await navigator.mediaDevices.getDisplayMedia({
+          audio: true,
+          video: {
+            width: { ideal: 1 },
+            height: { ideal: 1 },
+            frameRate: { ideal: 1 },
+          },
+        });
+        // Discard video tracks — we requested them only to satisfy the
+        // getDisplayMedia spec; we never render or encode them.
+        for (const t of this.stream.getVideoTracks()) {
+          try { t.stop(); } catch { /* ignore */ }
+          try { this.stream.removeTrack(t); } catch { /* ignore */ }
+        }
+        const audioTracks = this.stream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          throw new DOMException(
+            'No audio track in display-media stream (loopback unavailable)',
+            'NotFoundError',
+          );
+        }
+        const trackLabel = audioTracks[0]?.label || 'System Audio';
+        console.log(`[Audio] System audio stream OK — ${trackLabel}`);
+        this.emit({ micActive: true, deviceLabel: `System Audio · ${trackLabel}`, error: null });
+      } catch (err) {
+        console.error('[Audio] getDisplayMedia failed:', err);
+        const msg = mapSystemAudioError(err);
+        try { this.stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+        this.stream = null;
+        try { await window.electronAPI?.audio.stopRecording(); } catch { /* ignore */ }
+        this.clearAudioSubscribers();
+        this.emit({ micActive: false, error: msg, recording: false });
+        throw new Error(msg);
+      }
+    } else {
 
     // ── Get audio stream ──
     const isDefault = !this.deviceId || this.deviceId === 'default';
@@ -271,6 +365,7 @@ class AudioCaptureManager {
         throw new Error(msg);
       }
     }
+    } // end of getUserMedia branch (useSystemAudio === false)
 
     // ── MediaRecorder ──
     try {

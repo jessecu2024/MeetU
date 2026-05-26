@@ -3,7 +3,8 @@
 // Creates floating window, registers IPC handlers, manages lifecycle
 // ============================================================
 
-import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, shell, desktopCapturer } from 'electron';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSetting, setSetting } from './store';
@@ -14,6 +15,7 @@ import {
 import { initDatabase, runQuery } from './database';
 import { renderMinutesDocx } from './export/docx-generator';
 import { sanitizeFilenameForExport } from './export/sanitize-filename';
+import { probeSystemAudioSupport } from './system-audio-probe';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,6 +78,34 @@ function createWindow(): void {
   session.defaultSession.setPermissionCheckHandler(() => {
     return true;
   });
+
+  // ── System audio loopback via getDisplayMedia ──
+  // Electron 30+ on macOS 13+ wraps ScreenCaptureKit; on Windows 10+ it
+  // wraps WASAPI loopback. The renderer requests it via
+  // `navigator.mediaDevices.getDisplayMedia({audio:true, video:{...}})`
+  // and we must register a handler that picks the source and tells
+  // Electron to deliver the system loopback audio. Without this the
+  // call rejects with NotSupportedError. We always pick the primary
+  // screen for the video source (the renderer immediately discards
+  // the video track — we only want the audio).
+  session.defaultSession.setDisplayMediaRequestHandler(
+    async (_request, callback) => {
+      try {
+        const sources = await desktopCapturer.getSources({ types: ['screen'] });
+        if (sources.length === 0) {
+          console.error('[Display] No screen sources available for loopback');
+          // Cast to satisfy the callback shape — passing {} (or any falsy
+          // video/audio) tells Electron the request was rejected.
+          (callback as (s: { video?: never; audio?: never }) => void)({});
+          return;
+        }
+        callback({ video: sources[0], audio: 'loopback' });
+      } catch (err) {
+        console.error('[Display] setDisplayMediaRequestHandler failed:', err);
+        (callback as (s: { video?: never; audio?: never }) => void)({});
+      }
+    },
+  );
 
   // ── Bypass CORS for AI API endpoints ──
   // Desktop apps don't need CORS restrictions; AI providers don't set CORS headers for browser origins
@@ -168,6 +198,34 @@ function registerIPC(): void {
   // ── Audio: Legacy ──
   ipcMain.handle('audio:get-devices', async () => {
     return [];
+  });
+
+  // ── System audio loopback: support probe ──
+  // The renderer calls this before offering the "System Audio" device
+  // option, so users on macOS 12 / Linux see an explanation instead of
+  // a silent failure when they try to record. Backed by Electron's
+  // getDisplayMedia + setDisplayMediaRequestHandler path which wraps
+  // ScreenCaptureKit (macOS 13+) and WASAPI loopback (Windows 10+).
+  ipcMain.handle('system-audio:probe', async () => {
+    // On darwin we additionally surface the Screen Recording permission
+    // status — macOS will not deliver loopback audio without it. The
+    // call would appear to succeed but the audio track would be silent.
+    let screenPermission: string | undefined;
+    if (process.platform === 'darwin') {
+      try {
+        const { systemPreferences } = await import('electron');
+        screenPermission = systemPreferences.getMediaAccessStatus('screen');
+      } catch { /* legacy macOS without that API */ }
+    }
+    return probeSystemAudioSupport({
+      platform: process.platform,
+      // Electron augments NodeJS.Process with getSystemVersion(); on
+      // macOS it returns the real OS version (e.g. "13.4.0"), unlike
+      // os.release() which returns the Darwin kernel version.
+      macOsVersion: process.platform === 'darwin' ? process.getSystemVersion() : undefined,
+      winRelease: process.platform === 'win32' ? os.release() : undefined,
+      screenPermission,
+    });
   });
 
   // ── Database ──

@@ -7,8 +7,8 @@
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | 麦克风录音（`getUserMedia`） | ✅ Stable | 单声道麦克风 + Windows Stereo Mix / macOS 虚拟声卡 loopback 路径走通 |
-| macOS ScreenCaptureKit 原生捕获 | 🔜 Planned | `native/macos/` 有 Swift 草稿与 binding.gyp，但 `audio_tap.mm` 的 N-API 绑定仍是 placeholder，未参与构建 |
-| Windows WASAPI Loopback 原生捕获 | 🔜 Planned | `native/windows/` 尚未创建 |
+| 系统音频 loopback (整机捕获) | ✅ Stable | macOS 13+ / Windows 10+ via Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`(内部用 ScreenCaptureKit / WASAPI loopback)。`SettingsModal` 里新增"🔊 System Audio (native loopback)"开关;`SYSTEM_AUDIO_DEVICE_ID` 哨兵触发 `capture.ts` 走 `getDisplayMedia` 分支,旁路 `getUserMedia`。零 GPL 驱动 |
+| macOS ScreenCaptureKit 按 app 捕获(per-app) | 🔜 Planned (PR #4b) | `native/macos/` 有 Swift 草稿与 binding.gyp,但 `audio_tap.mm` 的 N-API 绑定仍是 placeholder。整机 loopback 已由 Electron 包装路径解决;per-app capture 需要原生 SCContentFilter(applications:),将作为 power-user 特性补上 |
 | Deepgram STT | ✅ Stable | WebSocket 经主进程 IPC，已可用 |
 | OpenAI Whisper API STT | ✅ Stable | 引擎以 segment 模式 (`audioMode='segment'`, `segmentDurationMs=5000`) 工作;capture.ts 用并行 MediaRecorder 每 5 秒产出一个完整 webm 文件直接 POST `/v1/audio/transcriptions`;内置 hallucination 过滤丢弃 silence 时的 "Thank you for watching" / 字幕组 类幻觉 |
 | 讯飞 STT | ✅ Stable | WebSocket 鉴权:`xfyun-signature.ts` 用 WebCrypto API 计算 HMAC-SHA256;音频管线:`audioMode='pcm-stream'`,capture.ts 启 AudioWorklet 输出 16-kHz 单声道 Float32 PCM,engine 内部转 Int16 + base64 发 `audio/L16;rate=16000` 帧 |
@@ -27,7 +27,7 @@
 本产品的法律定位是：**个人会议笔记辅助工具**。
 
 核心原则：
-1. **我们是录音笔记工具，不是会议平台插件** — 不调用任何会议平台（Zoom/Teams/腾讯会议）的 API，不以机器人身份加入会议；当前版本通过 `getUserMedia` 捕获用户在系统中选择的音频输入设备（默认麦克风；用户可手动启用 Stereo Mix / 虚拟音频线缆以捕获系统输出），等同于用户自己按下录音键
+1. **我们是录音笔记工具，不是会议平台插件** — 不调用任何会议平台（Zoom/Teams/腾讯会议）的 API，不以机器人身份加入会议；当前版本通过 `getUserMedia`（麦克风/Stereo Mix/虚拟音频线缆）或 Electron `getDisplayMedia({audio:'loopback'})`（macOS 13+ / Windows 10+ 整机系统音频）捕获,等同于用户自己按下录音键
 2. **用户自带一切（纯 BYOK）** — 用户必须使用自己的 AI API Key 和 STT API Key，我们不代理、不转售任何 AI 服务。应用本身是纯工具软件
 3. **用户承担录音合规责任** — 首次使用前必须展示法律声明，用户确认知晓并遵守当地录音法规后才能使用
 4. **零 GPL 依赖** — 不使用 BlackHole 或任何 GPL 许可的组件，确保闭源商业发布合规
@@ -48,16 +48,18 @@
 
 **禁止使用 BlackHole(GPL-3.0)、Soundflower(GPL) 或任何 GPL 许可的虚拟音频驱动。**
 
-| 平台 | 目标方案 | 当前状态 |
-|------|---------|---------|
-| macOS 13+ | **ScreenCaptureKit** | 🔜 计划中 — `native/macos/` 已有 Swift 草稿和 binding.gyp，但 N-API 绑定 (`audio_tap.mm`) 仍是占位符；运行时尚未挂载 |
-| macOS 12及以下 | 暂不支持 | 要求最低 macOS 13 Ventura |
-| Windows 10+ | **WASAPI Loopback** | 🔜 计划中 — `native/windows/` 尚未创建 |
-| 当前所有平台 | **`getUserMedia` 麦克风 + loopback 指引** | ✅ 已落地 — 渲染层使用 `navigator.mediaDevices.getUserMedia`，UI 引导用户在 Windows 启用 Stereo Mix 或在 macOS 路由虚拟音频线缆 |
+| 平台 | 方案 | 当前状态 |
+|------|------|---------|
+| macOS 13+ | **ScreenCaptureKit 整机 loopback**(via Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`) | ✅ 已落地 — `electron/main.ts` 注册 handler,`capture.ts` 见到 `SYSTEM_AUDIO_DEVICE_ID` 哨兵时走 `getDisplayMedia` 分支 |
+| macOS 13+ | **ScreenCaptureKit 按 app capture**(原生 N-API,`native/macos/` 路径) | 🔜 计划中 (PR #4b) — Swift 草稿和 binding.gyp 已就位,N-API 绑定 (`audio_tap.mm`) 仍为占位符 |
+| macOS 12 及以下 | 整机 loopback 不支持(`system-audio:probe` IPC 返回 `supported:false`) | UI 自动 gray out 系统音频选项;用户仍可走 `getUserMedia` + 虚拟音频线缆 |
+| Windows 10+ | **WASAPI Loopback** (via Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`) | ✅ 已落地 — 与 macOS 共用同一 IPC + 渲染层分支 |
+| Windows 9 及以下 | 整机 loopback 不支持 | UI gray out 系统音频选项;用户走 Stereo Mix |
+| 所有平台 | **`getUserMedia` 麦克风/Stereo Mix/虚拟音频线缆** | ✅ 已落地 — 始终可作为 fallback 路径 |
 
-macOS ScreenCaptureKit 是目标方案：Apple 官方 API 无许可证问题；可选择捕获特定应用（如 Zoom）的音频而非全系统；不需要用户安装任何额外驱动；macOS 13+ 覆盖主流用户群。
+整机系统音频 loopback 通过 Electron 30+ 官方 `setDisplayMediaRequestHandler` 实现,内部就是 ScreenCaptureKit / WASAPI Loopback。无需 node-gyp 编译,无需用户安装驱动,跨 macOS+Windows 复用同一份代码。
 
-> **开发注意：** ScreenCaptureKit 需通过 Node.js 原生模块（N-API addon）在 Electron 主进程中调用 Swift/ObjC 代码。`native/macos/` 已有目录骨架，但 `audio_tap.mm` 中的 N-API 绑定仍为 TODO，需要补全后才能真正捕获系统音频。在此之前，README 与 UI 不应承诺"系统音频自动捕获"。
+> **开发注意:** macOS 首次使用系统音频会弹出系统级 *Screen & System Audio Recording* 权限对话框;主进程 `system-audio:probe` IPC 会附带 `systemPreferences.getMediaAccessStatus('screen')` 状态供 UI 展示。被拒绝时设置面板里的"System Audio"按钮上会显示去授权的指引。`native/macos/` 仍保留作为未来"按 app 捕获"(Electron 包装路径覆盖不到)的实现位置。
 
 ### AI 提供商：纯 BYOK 模式
 

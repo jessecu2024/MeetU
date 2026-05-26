@@ -20,6 +20,12 @@ declare global {
         isRecording: () => Promise<boolean>;
         getRecordingsPath: () => Promise<string>;
         getDevices: () => Promise<unknown[]>;
+        probeSystemAudio: () => Promise<{
+          supported: boolean;
+          reason?: string;
+          permission?: string;
+          version?: string;
+        }>;
         onChunk: (cb: (chunk: ArrayBuffer) => void) => void;
         onLevel: (cb: (level: number) => void) => void;
       };
