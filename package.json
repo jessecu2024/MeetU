@@ -18,7 +18,8 @@
     "test:watch": "vitest",
     "generate-icons": "node scripts/generate-icons.cjs",
     "check-licenses": "node scripts/check-licenses.cjs",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 2>/dev/null || true"
+    "build:macos-native": "node scripts/build-macos-native.cjs",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 2>/dev/null || true; node scripts/build-macos-native.cjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",
@@ -49,6 +50,8 @@
     "globals": "^15.0.0",
     "jszip": "^3.10.1",
     "license-checker": "^25.0.1",
+    "node-addon-api": "^8.8.0",
+    "node-gyp": "^12.3.0",
     "postcss": "^8.4.0",
     "sharp": "^0.34.5",
     "tailwindcss": "^3.4.0",
@@ -101,6 +104,15 @@
         "filter": [
           "icon.png",
           "icon.ico"
+        ]
+      },
+      {
+        "from": "native/macos/",
+        "to": "native/macos/",
+        "filter": [
+          "index.cjs",
+          "index.d.ts",
+          "build/Release/*.node"
         ]
       }
     ],

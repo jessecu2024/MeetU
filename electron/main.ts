@@ -16,6 +16,7 @@ import { initDatabase, runQuery } from './database';
 import { renderMinutesDocx } from './export/docx-generator';
 import { sanitizeFilenameForExport } from './export/sanitize-filename';
 import { probeSystemAudioSupport } from './system-audio-probe';
+import { getMacOSNativeCapture, makeMacOSNativeCaptureIpc } from './audio/macos-native-capture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -275,20 +276,23 @@ function registerIPC(): void {
   // ScreenCaptureKit is on the roadmap and ships through a native
   // N-API module (PR #4b) rather than this Electron wrapper path.
   ipcMain.handle('system-audio:probe', async () => {
-    // On darwin we read the Screen Recording permission state purely
-    // for diagnostics. It is informational only on this PR — darwin
-    // returns `supported:false` regardless of the permission value
-    // (per Electron 30 typedef, this loopback path is Windows-only).
-    // When PR #4b lands the native ScreenCaptureKit module, the same
-    // permission status will gate the macOS path; we surface it now
-    // so the renderer and the future native path read a consistent
-    // value.
+    // On darwin we read the Screen Recording permission state and
+    // probe the native ScreenCaptureKit addon. The probe function
+    // selects the backend:
+    //   - win32  -> 'electron-loopback' (getDisplayMedia)
+    //   - darwin -> 'macos-native' when the addon loaded, else
+    //               unsupported with an actionable reason
     let screenPermission: string | undefined;
+    let macOSNativeAvailable: boolean | undefined;
+    let macOSNativeReason: string | undefined;
     if (process.platform === 'darwin') {
       try {
         const { systemPreferences } = await import('electron');
         screenPermission = systemPreferences.getMediaAccessStatus('screen');
       } catch { /* legacy macOS without that API */ }
+      const native = getMacOSNativeCapture();
+      macOSNativeAvailable = native.available;
+      macOSNativeReason = native.available ? undefined : native.reason;
     }
     return probeSystemAudioSupport({
       platform: process.platform,
@@ -298,8 +302,21 @@ function registerIPC(): void {
       macOsVersion: process.platform === 'darwin' ? process.getSystemVersion() : undefined,
       winRelease: process.platform === 'win32' ? os.release() : undefined,
       screenPermission,
+      macOSNativeAvailable,
+      macOSNativeReason,
     });
   });
+
+  // ── macOS native ScreenCaptureKit capture (PR #4b) ──
+  // These channels are only meaningful on macOS 13+ with the native
+  // addon built. On any other platform the IPC wrapper returns
+  // { ok:false, error } because the loader reports unavailable, and
+  // the renderer never reaches here (the probe gates the UI). PCM
+  // frames are pushed to the renderer on 'macos-system-audio:pcm-frame'.
+  const macNativeIpc = makeMacOSNativeCaptureIpc(() => mainWindow);
+  ipcMain.handle('macos-system-audio:list-apps', () => macNativeIpc.listApplications());
+  ipcMain.handle('macos-system-audio:start', (_event, opts: { pid?: number }) => macNativeIpc.start(opts || {}));
+  ipcMain.handle('macos-system-audio:stop', () => macNativeIpc.stop());
 
   // ── Database ──
   ipcMain.handle('db:query', async (_event, sql: string, params?: unknown[]) => {

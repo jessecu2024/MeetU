@@ -139,6 +139,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     // demo audio. Probing here closes that gap.
     if (useRealAudio) {
       let micDeviceId = useSettingsStore.getState().appSettings.micDeviceId;
+      // Default backend = electron-loopback (Windows getDisplayMedia).
+      // The probe upgrades this to 'macos-native' on macOS 13+ with the
+      // native addon loaded. Reset to null when not using system audio.
+      let backend: 'electron-loopback' | 'macos-native' | null = null;
       if (micDeviceId === SYSTEM_AUDIO_DEVICE_ID) {
         const resetToDefault = (reasonLog: string, detail?: unknown) => {
           console.warn(`[MeetingStore] ${reasonLog}`, detail ?? '');
@@ -147,6 +151,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
             micDeviceLabel: 'Default Microphone',
           });
           micDeviceId = 'default';
+          backend = null;
         };
         try {
           const probe = await window.electronAPI?.audio.probeSystemAudio();
@@ -155,6 +160,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
               'System-audio sentinel selected but probe says unsupported; resetting to default mic before record start',
               probe,
             );
+          } else if (probe) {
+            // Carry the probe's chosen backend into capture so it knows
+            // whether to drive getDisplayMedia (Windows) or the native
+            // ScreenCaptureKit IPC (macOS).
+            backend = probe.mode ?? 'electron-loopback';
           }
         } catch (err) {
           // Probe IPC failed — be safe and fall back. Better to record
@@ -163,6 +173,10 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
           resetToDefault('System-audio probe failed before record start; falling back to default mic', err);
         }
       }
+      // The macOS native pid (per-app capture) is read from settings;
+      // 0 / undefined means whole-system capture.
+      const macAppPid = useSettingsStore.getState().appSettings.sysAudioMacAppPid;
+      captureManager.setSystemAudioBackend(backend, backend === 'macos-native' ? macAppPid : null);
       captureManager.setDevice(micDeviceId);
     }
 

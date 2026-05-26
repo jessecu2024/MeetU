@@ -8,7 +8,7 @@
 |------|------|------|
 | 麦克风录音（`getUserMedia`） | ✅ Stable | 单声道麦克风 + Windows Stereo Mix / macOS 虚拟声卡 loopback 路径走通 |
 | Windows 系统音频 loopback (整机捕获) | ✅ Stable | Windows 10+ via Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`(内部用 WASAPI loopback)。`SettingsModal` 里"🔊 System Audio (native loopback)"开关在 Windows 上 enabled;`SYSTEM_AUDIO_DEVICE_ID` 哨兵触发 `capture.ts` 走 `getDisplayMedia` 分支,旁路 `getUserMedia`。零 GPL 驱动 |
-| macOS 系统音频 loopback (整机/per-app) | 🔜 Planned (PR #4b) | Electron 30 的 `setDisplayMediaRequestHandler` typedef 明确写明 `audio:'loopback'` "currently only supported on Windows" — 不能用 Electron 包装路径覆盖 macOS。`native/macos/` 有 Swift 草稿与 binding.gyp,但 `audio_tap.mm` 的 N-API 绑定仍是 placeholder。macOS 用户当前需用非 GPL 虚拟音频线缆作为替代;PR #4b 将上线原生 ScreenCaptureKit N-API 模块同时覆盖整机和 per-app 捕获 |
+| macOS 系统音频捕获 (整机 + per-app) | ✅ Stable (需授权) | `native/macos/audio_tap.mm` 原生 N-API (Objective-C++) 模块直接调 ScreenCaptureKit:`listApplications`/`start({pid?})`/`stop`。整机或按 app(`SCContentFilter(includingApplications:)`)捕获,输出 16-kHz 单声道 Float32 PCM 经 ThreadSafeFunction → IPC → renderer。`capture.ts` 用 playback AudioWorklet (`pcm-playback-worklet.ts`) 把 PCM 重建成 `MediaStream`,复用现有 MediaRecorder/segment/resampler 管线,所以三个 STT 引擎和文件录制全部沿用。`system-audio:probe` 在 darwin 上探测 addon 是否 load 成功来决定 `mode:'macos-native'`。需用户在 *系统设置 → 隐私与安全 → 屏幕与系统录制* 授权;**注:原生音频质量需在授权后的真机上验证,自动化环境无法测**。零 GPL 驱动 |
 | Deepgram STT | ✅ Stable | WebSocket 经主进程 IPC，已可用 |
 | OpenAI Whisper API STT | ✅ Stable | 引擎以 segment 模式 (`audioMode='segment'`, `segmentDurationMs=5000`) 工作;capture.ts 用并行 MediaRecorder 每 5 秒产出一个完整 webm 文件直接 POST `/v1/audio/transcriptions`;内置 hallucination 过滤丢弃 silence 时的 "Thank you for watching" / 字幕组 类幻觉 |
 | 讯飞 STT | ✅ Stable | WebSocket 鉴权:`xfyun-signature.ts` 用 WebCrypto API 计算 HMAC-SHA256;音频管线:`audioMode='pcm-stream'`,capture.ts 启 AudioWorklet 输出 16-kHz 单声道 Float32 PCM,engine 内部转 Int16 + base64 发 `audio/L16;rate=16000` 帧 |
@@ -50,17 +50,21 @@
 
 | 平台 | 方案 | 当前状态 |
 |------|------|---------|
-| Windows 10+ | **WASAPI Loopback** (via Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`) | ✅ 已落地 — `electron/main.ts` 注册 handler,`capture.ts` 见到 `SYSTEM_AUDIO_DEVICE_ID` 哨兵时走 `getDisplayMedia` 分支 |
+| Windows 10+ | **WASAPI Loopback** (via Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`) | ✅ 已落地 — `electron/main.ts` 注册 handler,`capture.ts` 见到 `SYSTEM_AUDIO_DEVICE_ID` 哨兵 + `backend==='electron-loopback'` 时走 `getDisplayMedia` 分支 |
 | Windows 9 及以下 | 不支持 | UI 自动 gray out 系统音频选项;用户走 Stereo Mix |
-| macOS 13+ | **ScreenCaptureKit 整机 + 按 app capture**(原生 N-API,`native/macos/` 路径) | 🔜 计划中 (PR #4b) — Electron 30 的 `audio:'loopback'` 仅 Windows 支持(per Electron typedef),所以 macOS 必须走原生 N-API。Swift 草稿和 binding.gyp 已就位,N-API 绑定 (`audio_tap.mm`) 仍为占位符 |
-| macOS 12 及以下 | 不支持 | ScreenCaptureKit 自身要求 macOS 13+;用户走 `getUserMedia` + 虚拟音频线缆 |
+| macOS 13+ | **ScreenCaptureKit 整机 + 按 app capture**(原生 N-API,`native/macos/audio_tap.mm`) | ✅ 已落地 — ObjC++ N-API 模块直调 ScreenCaptureKit;`capture.ts` `backend==='macos-native'` 时通过 IPC 启动原生捕获并把 PCM 重建成 MediaStream。需用户授权系统录屏权限 |
+| macOS 12 及以下 | 不支持 | ScreenCaptureKit 自身要求 macOS 13+;probe 返回 `supported:false`;用户走 `getUserMedia` + 虚拟音频线缆 |
 | 所有平台 | **`getUserMedia` 麦克风/Stereo Mix/虚拟音频线缆** | ✅ 已落地 — 始终可作为 fallback 路径 |
 
-Windows 系统音频 loopback 通过 Electron 30+ 官方 `setDisplayMediaRequestHandler` + `audio:'loopback'` 实现,内部就是 WASAPI Loopback。无需 node-gyp 编译,无需用户安装驱动。
+系统音频捕获有两个后端,由 `system-audio:probe` 的 `mode` 字段选择:
+- **Windows (`electron-loopback`)**:Electron 30+ 官方 `setDisplayMediaRequestHandler` + `audio:'loopback'`,内部就是 WASAPI Loopback。无需 node-gyp 编译。仅整机捕获。
+- **macOS (`macos-native`)**:`native/macos/` 的 ObjC++ N-API 模块直调 ScreenCaptureKit。`postinstall` 里 `scripts/build-macos-native.cjs` 编译(非致命:失败则 probe 报 unavailable,降级到虚拟线缆)。整机 **和** 按 app 捕获(per-app 是这条原生路径独有的能力,Electron 包装路径做不到)。纯 N-API (NAPI_VERSION=8) ABI 稳定,system-node 编译的 `.node` 也能在 Electron 30 主进程 load。
 
-> **关键约束:** Electron 30 的官方 typedef (node_modules/electron/electron.d.ts) 写得非常明确:`audio:'loopback'` "currently only supported on Windows"。我们不能在 macOS 上声称已经做完整机 loopback —— renderer 调 `getDisplayMedia({audio:'loopback'})` 会被 Electron 自身拒绝或返回静默音轨。所以 `system-audio:probe` IPC 在 darwin 上直接返回 `supported:false`,UI gray out 选项,把用户引导到虚拟音频线缆 / PR #4b 的原生 ScreenCaptureKit 模块。
+> **关键约束:** Electron 30 的官方 typedef 写明 `audio:'loopback'` "currently only supported on Windows" —— 所以 macOS **不能**走 Electron getDisplayMedia 包装路径,必须用原生 N-API 模块(本 PR #4b 落地)。
 >
-> **安全 hardening:** `setDisplayMediaRequestHandler` 内部三道检查:(1) `request.frame === mainWindow.webContents.mainFrame` —— 拒绝任何 iframe / webview / popup 发出的请求;(2) `request.audioRequested === true` —— 拒绝纯视频请求,避免泄漏屏幕;(3) `process.platform === 'win32'` —— 即使是被信任的 main frame,在非 Windows 上也一律拒绝,防止未来 UI bug 误调 `getDisplayMedia` 时静默泄屏。
+> **安全 hardening (Windows getDisplayMedia 路径):** `setDisplayMediaRequestHandler` 内部三道检查:(1) `request.frame === mainWindow.webContents.mainFrame` —— 拒绝任何 iframe / webview / popup;(2) `request.audioRequested === true` —— 拒绝纯视频请求;(3) `process.platform === 'win32'` —— 即使被信任的 main frame,在非 Windows 上也一律拒绝,防止未来 UI bug 静默泄屏。
+>
+> **macOS 验证状态:** 原生模块已编译、load、`listApplications` 走通(会触发 TCC 权限对话框,证明确实在调 ScreenCaptureKit)。但**完整的音频捕获质量需要在授予屏幕录制权限的真机上验证** —— 自动化/CI 环境拿不到 TCC 授权,无法端到端验证音质。代码路径、IPC 拼接、PCM→MediaStream 重建逻辑均已就位并通过单测。
 
 ### AI 提供商：纯 BYOK 模式
 
@@ -111,8 +115,8 @@ Electron 本身是 MIT 许可，可商用。但内置 Chromium 的 ffmpeg 包含
 如需同时录制其他参与者的声音，需要在系统层启用 loopback（Windows: Stereo Mix；
 macOS: 非 GPL 虚拟音频线缆），并在应用内选择该设备。Windows 10+ 用户也
 可在设置中启用"System Audio (native loopback)"使用 Electron 包装的
-WASAPI loopback(无需 Stereo Mix);macOS 原生 ScreenCaptureKit 在 PR
-#4b 路线图中。
+WASAPI loopback(无需 Stereo Mix);macOS 13+ 用户启用同一开关使用原生
+ScreenCaptureKit(需授权系统录屏权限,支持按 app 捕获)。
 您有责任确保：
 - 已遵守您所在地区关于录音的法律法规
 - 已获得所有会议参与者的知情同意（如适用法律要求）
@@ -175,13 +179,13 @@ meetu/
 ├── vite.config.ts
 ├── tailwind.config.js
 ├── native/                            # ⭐ 原生音频模块（零 GPL）
-│   ├── macos/
-│   │   ├── screencapture.swift        # ScreenCaptureKit Swift 封装
-│   │   ├── audio_tap.mm              # Objective-C++ 桥接
-│   │   └── binding.gyp
-│   └── windows/
-│       ├── wasapi_loopback.cpp        # WASAPI C++ 封装
-│       └── binding.gyp
+│   └── macos/                          # ScreenCaptureKit 系统音频捕获 (PR #4b)
+│       ├── audio_tap.mm               # ObjC++ N-API 模块：直调 ScreenCaptureKit
+│       ├── binding.gyp                # node-gyp 构建配置 (NAPI_VERSION=8)
+│       ├── index.cjs                  # JS loader：容错地 require .node
+│       └── index.d.ts                 # loader 的 TS 类型
+│       # Windows 系统音频走 Electron getDisplayMedia 包装路径,
+│       # 无需原生模块,所以没有 native/windows/。
 ├── electron/
 │   ├── main.ts                        # Electron 主进程入口
 │   ├── preload.ts                     # contextBridge
@@ -260,8 +264,8 @@ meetu/
 5. 实现 STT 引擎选择（含本地 whisper.cpp 离线方案）
 
 ### Phase 2: 音频捕获 + 录音（零 GPL 依赖）
-1. Windows: 整机 WASAPI loopback (Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`,无需 N-API,已在 PR #4a 上线)
-2. macOS: ScreenCaptureKit 整机 + per-app capture(原生 N-API,Swift + ObjC++ 桥;PR #4b)
+1. Windows: 整机 WASAPI loopback (Electron `setDisplayMediaRequestHandler` + `audio:'loopback'`,无需 N-API,PR #4a 已上线)
+2. macOS: ScreenCaptureKit 整机 + per-app capture(原生 ObjC++ N-API,`native/macos/audio_tap.mm`,PR #4b 已上线)
 3. 双通道音频流（系统音频 + 麦克风）
 4. WAV 录音（Web Audio API，不依赖 ffmpeg）
 5. 每次录音前显示 RecordingConsent
