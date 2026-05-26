@@ -603,7 +603,7 @@ export default function SettingsModal() {
                       </div>
                       {whisperError && (
                         <p className="text-xs text-red-600 dark:text-red-400">
-                          ❌ Download failed — {whisperError}. Check your network and try again. / 下载失败，请检查网络后重试。
+                          ❌ {whisperError} / 操作失败，请重试。
                         </p>
                       )}
                       {!whisperProbe.hasAnyModel && (

@@ -198,6 +198,27 @@ describe('LocalWhisperEngine quality gates', () => {
     expect(results).toEqual([]);
   });
 
+  it('does NOT skip a short utterance in otherwise-silence — and this is specifically the peak-gate, not a mean-gate', async () => {
+    // 0.15 s of speech (0.04 RMS) in an otherwise near-silent 12 s
+    // window. Whole-window MEAN RMS here is
+    //   sqrt(0.15/12 · 0.04² + 11.85/12 · 0.0005²) ≈ 0.0045  (< 0.006)
+    // so a naive mean-gate would WRONGLY skip this window. The peak
+    // sub-frame RMS is 0.04 (≫ 0.006), so the per-sub-frame gate keeps
+    // it. This test fails if the gate ever regresses to a window mean.
+    const stub = installStub();
+    const e = new LocalWhisperEngine();
+    const results: TranscriptResult[] = [];
+    e.onTranscript((r) => results.push(r));
+    await e.startSession({ sampleRate: SAMPLE_RATE });
+    const buf = new Float32Array(WINDOW_SAMPLES).fill(0.0005); // near-silent floor
+    for (let i = 0; i < Math.round(SAMPLE_RATE * 0.15); i++) buf[i] = 0.04; // 0.15 s burst
+    e.feedAudio(buf.buffer);
+    expect(stub.transcribeCalls.length).toBe(1); // NOT skipped
+    stub.transcribeCalls[0].resolve('yes');
+    await e.stopSession();
+    expect(results.map(r => r.text)).toEqual(['yes']);
+  });
+
   it('still transcribes a loud window and keeps the timeline cursor consistent across a silent gap', async () => {
     const stub = installStub();
     const e = new LocalWhisperEngine();

@@ -30,21 +30,38 @@ const SAMPLE_RATE = 16000;
 const WINDOW_SECONDS = 12;
 const WINDOW_SAMPLES = SAMPLE_RATE * WINDOW_SECONDS;
 const WINDOW_MS = Math.round((WINDOW_SAMPLES / SAMPLE_RATE) * 1000);
-// RMS energy below which a window is treated as silence and skipped
-// entirely (no IPC, no native inference). whisper.cpp hallucinates
-// confident garbage on silence (the "thank you for watching" failure
-// mode), so dropping silent windows both saves CPU and prevents those
-// phantom captions. Normalized Float32 PCM: ambient room noise sits
-// around 0.001–0.004 RMS; even quiet speech is well above 0.01. 0.006
-// is a conservative cut that won't clip real (if soft) speech.
+// A window is treated as silence (and skipped — no IPC, no native
+// inference) only if NO short sub-frame within it reaches this RMS.
+// whisper.cpp hallucinates confident garbage on silence (the "thank
+// you for watching" failure mode), so dropping silent windows saves
+// CPU and prevents phantom captions. Normalized Float32 PCM: ambient
+// room noise sits ~0.001–0.004 RMS per sub-frame; even quiet speech is
+// well above 0.01. 0.006 is a conservative cut.
 const SILENCE_RMS_THRESHOLD = 0.006;
+// Sub-frame length for the gate: 30 ms @ 16 kHz. We gate on the PEAK
+// sub-frame, NOT the whole-window mean — otherwise a short utterance
+// (e.g. a 0.5 s "yes" in an otherwise-silent 12 s window) would be
+// averaged down below the threshold and wrongly dropped. Gating on the
+// loudest sub-frame keeps any window that contains real speech energy
+// anywhere.
+const VAD_FRAME_SAMPLES = 480;
 
-/** Root-mean-square amplitude of a Float32 PCM window. */
-function rms(samples: Float32Array): number {
-  if (samples.length === 0) return 0;
-  let sum = 0;
-  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
-  return Math.sqrt(sum / samples.length);
+/**
+ * True if any ~30 ms sub-frame of `samples` reaches `threshold` RMS —
+ * i.e. the window contains speech-level energy somewhere and must be
+ * transcribed. Returns false only for windows that are silent
+ * throughout.
+ */
+function hasSpeechEnergy(samples: Float32Array, threshold: number): boolean {
+  const thresholdSq = threshold * threshold;
+  for (let start = 0; start < samples.length; start += VAD_FRAME_SAMPLES) {
+    const end = Math.min(start + VAD_FRAME_SAMPLES, samples.length);
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += samples[i] * samples[i];
+    // Compare mean-square to threshold² (avoids a sqrt per sub-frame).
+    if (sum / (end - start) >= thresholdSq) return true;
+  }
+  return false;
 }
 
 export class LocalWhisperEngine implements STTEngine {
@@ -144,11 +161,12 @@ export class LocalWhisperEngine implements STTEngine {
     const durationMs = Math.round((windowed.length / SAMPLE_RATE) * 1000);
     this.windowOffsetMs += durationMs;
 
-    // Silence gate: skip near-silent windows without touching native
-    // inference. This avoids both wasted CPU and whisper.cpp's
-    // silence-hallucination output. We still advance the emit cursor
-    // (via a synchronous skip) so timeline order stays consistent.
-    if (rms(windowed) < SILENCE_RMS_THRESHOLD) {
+    // Silence gate: skip windows with no speech-level energy in ANY
+    // sub-frame, without touching native inference. This avoids wasted
+    // CPU and whisper.cpp's silence-hallucination output, while keeping
+    // windows that contain even a brief utterance. We still advance the
+    // emit cursor (synchronous skip) so timeline order stays consistent.
+    if (!hasSpeechEnergy(windowed, SILENCE_RMS_THRESHOLD)) {
       this.deliver(offsetMs, durationMs, '');
       return;
     }
