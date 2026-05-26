@@ -48,25 +48,24 @@ function makeFakeLoader(opts: { transcribeText?: string; throwOnConstruct?: bool
   } as unknown as LocalWhisperLoader;
 }
 
-// fetch that streams `bytes` with a content-length header.
+// fetch that streams `bytes` via a real web ReadableStream (so the
+// production code's Readable.fromWeb + pipeline works) with a
+// content-length header.
 function fakeFetch(bytes: Uint8Array, ok = true, status = 200): typeof fetch {
   return (async () => {
-    let sent = false;
+    const body = ok
+      ? new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        })
+      : null;
     return {
       ok,
       status,
       headers: { get: (h: string) => (h.toLowerCase() === 'content-length' ? String(bytes.length) : null) },
-      body: ok ? {
-        getReader() {
-          return {
-            async read() {
-              if (sent) return { done: true, value: undefined };
-              sent = true;
-              return { done: false, value: bytes };
-            },
-          };
-        },
-      } : null,
+      body,
     };
   }) as unknown as typeof fetch;
 }

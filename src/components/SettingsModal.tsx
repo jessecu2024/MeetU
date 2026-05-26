@@ -64,6 +64,7 @@ export default function SettingsModal() {
   } | null>(null);
   const [whisperDownloading, setWhisperDownloading] = useState<string | null>(null);
   const [whisperProgress, setWhisperProgress] = useState<{ received: number; total: number }>({ received: 0, total: 0 });
+  const [whisperError, setWhisperError] = useState<string | null>(null);
 
   // Read test results from store (persists across modal open/close)
   const aiTestResults = useSettingsStore((s) => s.aiTestResults);
@@ -565,10 +566,13 @@ export default function SettingsModal() {
                                     onClick={async () => {
                                       setWhisperDownloading(m.name);
                                       setWhisperProgress({ received: 0, total: 0 });
+                                      setWhisperError(null);
                                       const res = await window.electronAPI?.audio.localWhisper.downloadModel(m.name);
                                       setWhisperDownloading(null);
                                       if (res?.ok) {
                                         store.updateAppSettings({ localWhisperModel: m.name });
+                                      } else {
+                                        setWhisperError(`${m.name}: ${res?.error || 'download failed'}`);
                                       }
                                       refreshWhisperProbe();
                                     }}
@@ -582,6 +586,11 @@ export default function SettingsModal() {
                           );
                         })}
                       </div>
+                      {whisperError && (
+                        <p className="text-xs text-red-600 dark:text-red-400">
+                          ❌ Download failed — {whisperError}. Check your network and try again. / 下载失败，请检查网络后重试。
+                        </p>
+                      )}
                       {!whisperProbe.hasAnyModel && (
                         <p className="text-xs text-amber-600 dark:text-amber-400">
                           ⚠ No model downloaded yet — recording will fall back to demo mode until you download one. / 尚未下载模型，录音将进入演示模式直到下载完成。

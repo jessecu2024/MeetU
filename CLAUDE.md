@@ -89,7 +89,7 @@
 | 阿里语音 | 商业 API（BYOK） | ✅ 用户自己付费 | ❌ 尚未实现，已暂时从 `STTEngineId` 类型中移除 |
 | whisper.cpp (本地,via smart-whisper) | **MIT 许可** | ✅ 可安全嵌入分发 | 🟡 Beta — `smart-whisper` (MIT) N-API binding;`local-whisper.ts` 走 pcm-stream 窗口化 + IPC 到主进程转写;模型按需下载。转写核心已端到端验证 |
 
-> **whisper.cpp** 是 Georgi Gerganov 用 C/C++ 重写的 Whisper 推理引擎，MIT 许可，可安全嵌入闭源商业产品。本地运行，零网络依赖，隐私最佳。已通过 `smart-whisper`(MIT,只依赖 node-addon-api,vendors whisper.cpp,作为 optionalDependency — 构建失败不阻断 `npm install`,loader 容错报 unavailable)集成到主进程。模型(ggml `.bin`,MIT)按需从 HuggingFace 下载到 `userData/whisper-models`。`scripts/build-macos-native.cjs` 之外,smart-whisper 自带 install 钩子编译 whisper.cpp(N-API,ABI 稳定,system-node 编译产物也能在 Electron load)。**转写核心已用 tiny 模型 + JFK 样本端到端验证通过**。
+> **whisper.cpp** 是 Georgi Gerganov 用 C/C++ 重写的 Whisper 推理引擎，MIT 许可，可安全嵌入闭源商业产品。本地运行，零网络依赖，隐私最佳。已通过 `smart-whisper`(MIT,只依赖 node-addon-api,vendors whisper.cpp,作为 optionalDependency — 构建失败不阻断 `npm install`,loader 容错报 unavailable)集成到主进程。模型(ggml `.bin`,MIT)按需从 HuggingFace 下载到 `userData/whisper-models`。smart-whisper 自带 install 钩子编译 whisper.cpp;`postinstall` 的 `electron-rebuild -w better-sqlite3,smart-whisper` 再针对 Electron ABI 重建一次,确保打包产物在 Electron 主进程能 load(虽然 N-API 本身 ABI 稳定,但显式 rebuild 消除任何 ABI 疑虑)。注:CI 的 verify job 用 `npm ci --ignore-scripts`,故 CI 不构建原生模块,单测全部用注入的 fake loader;原生构建只在真正的 release(electron-builder)流程跑。**转写核心已用 tiny 模型 + JFK 样本端到端验证通过**。
 
 ### Electron 构建：排除 GPL ffmpeg
 

@@ -135,17 +135,16 @@ describe('migrateSTTConfig', () => {
     expect(r.prunedKeys).toEqual(['aliyun_speech']);
   });
 
-  it('keeps a local_whisper key now that the engine is selectable (it is keyless, but a stored value is no longer pruned)', () => {
-    // While local_whisper was planned, any stored value was pruned.
-    // Now it's selectable, so migrate retains whatever is there (the
-    // engine ignores it — local Whisper needs no key). The pruning
-    // path is still covered by the aliyun_speech (removed-id) test.
+  it('prunes a stored key for the keyless local_whisper engine (selectable, but needs no key — storage hygiene)', () => {
+    // local_whisper is selectable now, but it is keyless
+    // (requiresApiKey:false), so a stored value there is dead data and
+    // is pruned even though the engine itself stays usable.
     const r = migrateSTTConfig('deepgram', {
       deepgram: 'sk-xxx',
-      local_whisper: 'unused-but-kept',
+      local_whisper: 'unused-dead-value',
     }, 'global');
-    expect(r.apiKeys).toEqual({ deepgram: 'sk-xxx', local_whisper: 'unused-but-kept' });
-    expect(r.prunedKeys).toEqual([]);
+    expect(r.apiKeys).toEqual({ deepgram: 'sk-xxx' });
+    expect(r.prunedKeys).toEqual(['local_whisper']);
   });
 
   it('does not report empty orphan keys as pruned (no point persisting a no-op deletion)', () => {
@@ -163,26 +162,25 @@ describe('migrateSTTConfig', () => {
     expect(r.prunedKeys).toEqual([]);
   });
 
-  it('handles the legacy case (removed-id orphan key + selectable engines + no region)', () => {
+  it('handles the legacy case (removed-id orphan key + keyless-engine key + selectable engines + no region)', () => {
     const r = migrateSTTConfig('local_whisper', {
       aliyun_speech: 'old1',            // removed from union → pruned
-      local_whisper: 'old2',            // selectable now → kept (unused)
+      local_whisper: 'old2',            // selectable but keyless → key pruned
       xfyun: 'app:key:secret',          // stable, key kept
       whisper_api: 'sk-also-valid',     // stable, key kept
       deepgram: 'sk-real',              // stable, key kept
     }, null);
-    // local_whisper is selectable now, so the stored selection is kept
-    // (it's a local engine — region-independent).
+    // local_whisper is selectable now, so the stored SELECTION is kept
+    // (it's a local engine — region-independent)...
     expect(r.engine).toBe('local_whisper');
     expect(r.engineChanged).toBe(false);
-    // Only the truly-unusable removed id (aliyun_speech) is pruned.
+    // ...but its (dead) KEY is pruned along with the removed id.
     expect(r.apiKeys).toEqual({
       deepgram: 'sk-real',
       whisper_api: 'sk-also-valid',
       xfyun: 'app:key:secret',
-      local_whisper: 'old2',
     });
-    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech']);
+    expect(r.prunedKeys.sort()).toEqual(['aliyun_speech', 'local_whisper']);
   });
 });
 

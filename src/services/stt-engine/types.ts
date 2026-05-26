@@ -271,7 +271,15 @@ export function migrateSTTConfig(
   const apiKeys: Partial<Record<STTEngineId, string>> = {};
   const prunedKeys: string[] = [];
   for (const [id, key] of Object.entries(storedKeys || {})) {
-    if (isSelectableSTTEngine(id)) {
+    // Keep keys only for selectable, KEY-BASED engines. A keyless engine
+    // (local_whisper, requiresApiKey:false) never needs a stored key, so
+    // any value there is dead data — prune it for storage hygiene even
+    // though the engine itself is selectable. Removed-from-union ids are
+    // also pruned. Only non-empty values are reported (no-op deletions
+    // aren't worth persisting).
+    const info = STT_ENGINE_INFO.find(e => e.id === id);
+    const keep = isSelectableSTTEngine(id) && !!info && info.requiresApiKey;
+    if (keep) {
       apiKeys[id] = key;
     } else if (key) {
       prunedKeys.push(id);

@@ -30,8 +30,20 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import type { BrowserWindow } from 'electron';
+
+// Hard cap on a single transcribe window. The renderer submits ~12 s
+// windows (16 kHz Float32 = 768 KB), but a buggy/compromised caller
+// could send an arbitrarily large buffer straight into native
+// inference. Reject anything over 60 s of audio.
+const MAX_TRANSCRIBE_SAMPLES = 16000 * 60;
+// Whisper language codes are short ascii tokens (e.g. "en", "zh") or
+// "auto". Sanitize to that shape so opts.language can't smuggle
+// anything odd into the native params.
+const LANGUAGE_RE = /^[a-z]{2,5}(-[a-z]{2,5})?$/i;
 
 // smart-whisper's public surface (subset we use). Typed loosely
 // because the package is an optionalDependency that may be absent.
@@ -148,10 +160,37 @@ export function makeLocalWhisperIpc(
   // Guards against overlapping downloads of the same model.
   const downloading = new Set<string>();
 
+  // Serialize ALL session operations (start / transcribe / stop) onto a
+  // single promise chain. whisper.cpp's model context is not safe for
+  // concurrent use, and — critically — without serialization a stop()
+  // or a second start() could free() the model instance while a
+  // transcribe() is still running native inference on it (use-after-
+  // free / crash). Running each op exclusively guarantees: a transcribe
+  // captured `active` at the moment it runs (so it can't see a freed
+  // instance), and free() in stop/start only runs once no transcribe is
+  // in flight.
+  let opChain: Promise<unknown> = Promise.resolve();
+  function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = opChain.then(fn, fn);
+    // Keep the chain alive regardless of this op's outcome.
+    opChain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   function dir(): string {
     const d = modelsDir(getUserDataPath);
     fs.mkdirSync(d, { recursive: true });
     return d;
+  }
+
+  // Free the active instance (if any). Caller MUST hold the op chain
+  // (i.e. call from inside runExclusive) so no transcribe is in flight.
+  async function freeActiveLocked(): Promise<void> {
+    if (active) {
+      const inst = active;
+      active = null;
+      try { await inst.free(); } catch { /* ignore */ }
+    }
   }
 
   return {
@@ -188,25 +227,31 @@ export function makeLocalWhisperIpc(
         }
         const totalBytes = Number(res.headers.get('content-length') || 0);
         let receivedBytes = 0;
-        const out = fs.createWriteStream(tmpPath);
-        const reader = res.body.getReader();
         let lastEmit = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          out.write(Buffer.from(value));
-          receivedBytes += value.byteLength;
-          // Throttle progress pushes to ~4/sec to avoid flooding IPC.
-          const now = Date.now();
-          if (now - lastEmit > 250) {
-            lastEmit = now;
-            const win = getWindow();
-            if (win && !win.isDestroyed()) {
-              win.webContents.send('local-whisper:download-progress', { model: name, receivedBytes, totalBytes });
+        // A counting passthrough so we can report progress while
+        // `pipeline` owns backpressure + error propagation + stream
+        // teardown. The previous hand-rolled `out.write()` loop ignored
+        // write-stream errors (ENOSPC/EACCES surface asynchronously on
+        // the stream, not from write()), which could crash the main
+        // process or resolve as success on a partial file.
+        const counter = new Transform({
+          transform(chunk, _enc, cb) {
+            receivedBytes += chunk.length;
+            const now = Date.now();
+            if (now - lastEmit > 250) { // throttle to ~4/sec
+              lastEmit = now;
+              const win = getWindow();
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('local-whisper:download-progress', { model: name, receivedBytes, totalBytes });
+              }
             }
-          }
-        }
-        await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => err ? reject(err) : resolve()));
+            cb(null, chunk);
+          },
+        });
+        // pipeline rejects (and destroys all streams) on any error from
+        // the source, the counter, or the file write — including async
+        // backpressure/disk errors — so the catch below always runs.
+        await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), counter, fs.createWriteStream(tmpPath));
         fs.renameSync(tmpPath, finalPath);
         // Final 100% progress tick.
         const win = getWindow();
@@ -234,45 +279,64 @@ export function makeLocalWhisperIpc(
       if (!fs.existsSync(file)) {
         return { ok: false, error: `model not downloaded: ${name}. Download it in Settings first.` };
       }
-      try {
-        // Free any prior instance (defensive — stop() should have).
-        if (active) { try { await active.free(); } catch { /* ignore */ } active = null; }
-        active = new loader.module.Whisper(file, { gpu: true, offload: 300 });
-        return { ok: true };
-      } catch (err) {
-        active = null;
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
+      // Exclusive: frees any prior instance (after its transcribes
+      // drain) before loading the new one.
+      return runExclusive(async () => {
+        await freeActiveLocked();
+        try {
+          active = new loader.module.Whisper(file, { gpu: true, offload: 300 });
+          return { ok: true };
+        } catch (err) {
+          active = null;
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      });
     },
 
     /** Transcribe one 16-kHz mono Float32 PCM window. */
-    async transcribe(pcm: ArrayBuffer, opts: { language?: string }): Promise<{ ok: boolean; text?: string; error?: string }> {
-      if (!active) return { ok: false, error: 'no active whisper session' };
-      try {
-        const samples = new Float32Array(pcm);
-        const task = await active.transcribe(samples, {
-          language: opts?.language || 'auto',
-          n_threads: Math.max(2, Math.min(8, (os.cpus()?.length || 4) - 1)),
-          no_timestamps: true,
-          single_segment: false,
-          suppress_blank: true,
-          suppress_non_speech_tokens: true,
-        });
-        const results = await task.result;
-        const text = results.map(r => r.text).join(' ').trim();
-        return { ok: true, text };
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
+    async transcribe(pcm: unknown, opts: { language?: string }): Promise<{ ok: boolean; text?: string; error?: string }> {
+      // Argument validation — this feeds native inference, so reject
+      // anything that isn't a sane Float32 PCM window before it gets
+      // there. (The renderer is trusted-ish, but a bug shouldn't be
+      // able to push a detached/huge/misaligned buffer into whisper.)
+      if (!(pcm instanceof ArrayBuffer)) return { ok: false, error: 'transcribe: pcm must be an ArrayBuffer' };
+      if (pcm.byteLength === 0) return { ok: false, error: 'transcribe: empty pcm' };
+      if (pcm.byteLength % 4 !== 0) return { ok: false, error: 'transcribe: pcm byte length not Float32-aligned' };
+      if (pcm.byteLength / 4 > MAX_TRANSCRIBE_SAMPLES) return { ok: false, error: 'transcribe: window too large' };
+      const language = opts?.language && LANGUAGE_RE.test(opts.language) ? opts.language : 'auto';
+      const samples = new Float32Array(pcm);
+
+      return runExclusive(async () => {
+        // Capture under the lock: if a stop()/start() ran first, active
+        // is null (or the new instance) — never a freed one.
+        const inst = active;
+        if (!inst) return { ok: false, error: 'no active whisper session' };
+        try {
+          const task = await inst.transcribe(samples, {
+            language,
+            n_threads: Math.max(2, Math.min(8, (os.cpus()?.length || 4) - 1)),
+            no_timestamps: true,
+            single_segment: false,
+            suppress_blank: true,
+            suppress_non_speech_tokens: true,
+          });
+          const results = await task.result;
+          const text = results.map(r => r.text).join(' ').trim();
+          return { ok: true, text };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      });
     },
 
     /** Free the model instance. Safe to call when nothing is loaded. */
     async stop(): Promise<{ ok: boolean }> {
-      if (active) {
-        try { await active.free(); } catch { /* ignore */ }
-        active = null;
-      }
-      return { ok: true };
+      // Exclusive: waits for any in-flight transcribe to finish before
+      // freeing, so we never free() a model under active inference.
+      return runExclusive(async () => {
+        await freeActiveLocked();
+        return { ok: true };
+      });
     },
   };
 }

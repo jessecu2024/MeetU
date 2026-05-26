@@ -40,6 +40,7 @@ export class LocalWhisperEngine implements STTEngine {
   readonly audioMode: AudioDeliveryMode = 'pcm-stream';
 
   private running = false;
+  private stopping = false; // set at the top of stopSession; makes stop idempotent
   private callback: ((result: TranscriptResult) => void) | null = null;
   private model = 'base';
   private language = 'auto';
@@ -93,6 +94,7 @@ export class LocalWhisperEngine implements STTEngine {
     this.nextEmitMs = 0;
     this.pending.clear();
     this.inflight.clear();
+    this.stopping = false;
 
     const res = await window.electronAPI?.audio.localWhisper.start({ model: this.model });
     if (!res?.ok) {
@@ -108,25 +110,30 @@ export class LocalWhisperEngine implements STTEngine {
     if (frame.length === 0) return;
     this.buffer.push(frame);
     this.bufferedSamples += frame.length;
-    if (this.bufferedSamples >= WINDOW_SAMPLES) {
-      this.flushWindow();
+    // Emit as many FIXED-size windows as we now have. A single large
+    // frame (or a scheduler stall that batches several frames) must not
+    // produce one giant >WINDOW window — that would balloon latency and
+    // native workload. We slice exactly WINDOW_SAMPLES per window and
+    // keep the remainder buffered for the next one.
+    while (this.bufferedSamples >= WINDOW_SAMPLES) {
+      this.submitWindow(this.takeSamples(WINDOW_SAMPLES));
     }
   }
 
-  /** Coalesce the buffered frames into one window and transcribe it. */
-  private flushWindow(): void {
-    if (this.bufferedSamples === 0) return;
-    const windowed = this.coalesce();
+  /** Submit one window (any length) for transcription. */
+  private submitWindow(windowed: Float32Array): void {
+    if (windowed.length === 0) return;
     const offsetMs = this.windowOffsetMs;
     const durationMs = Math.round((windowed.length / SAMPLE_RATE) * 1000);
     this.windowOffsetMs += durationMs;
 
     const work = (async () => {
       try {
-        // Transfer the underlying buffer to avoid a copy across IPC.
+        // NOTE: ipcRenderer.invoke structured-clones the buffer (no
+        // transfer list), so this is a copy across the boundary, not a
+        // zero-copy transfer. windowed is freshly allocated, so .buffer
+        // is a plain ArrayBuffer (never SharedArrayBuffer) — cast safe.
         const res = await window.electronAPI?.audio.localWhisper.transcribe(
-          // windowed is freshly allocated above, so .buffer is a plain
-          // ArrayBuffer (never SharedArrayBuffer) — the cast is safe.
           windowed.buffer as ArrayBuffer, { language: this.language },
         );
         const text = res?.ok ? (res.text || '').trim() : '';
@@ -143,12 +150,27 @@ export class LocalWhisperEngine implements STTEngine {
     void work.finally(() => this.inflight.delete(work));
   }
 
-  private coalesce(): Float32Array {
-    const out = new Float32Array(this.bufferedSamples);
-    let offset = 0;
-    for (const f of this.buffer) { out.set(f, offset); offset += f.length; }
-    this.buffer = [];
-    this.bufferedSamples = 0;
+  /**
+   * Remove and return exactly `n` samples from the front of the buffered
+   * frames, leaving any remainder buffered. `n` must be ≤ bufferedSamples.
+   */
+  private takeSamples(n: number): Float32Array {
+    const out = new Float32Array(n);
+    let filled = 0;
+    while (filled < n && this.buffer.length > 0) {
+      const head = this.buffer[0];
+      const need = n - filled;
+      if (head.length <= need) {
+        out.set(head, filled);
+        filled += head.length;
+        this.buffer.shift();
+      } else {
+        out.set(head.subarray(0, need), filled);
+        this.buffer[0] = head.subarray(need); // keep the tail buffered
+        filled += need;
+      }
+    }
+    this.bufferedSamples -= filled;
     return out;
   }
 
@@ -187,10 +209,15 @@ export class LocalWhisperEngine implements STTEngine {
   }
 
   async stopSession(): Promise<void> {
+    // Idempotent: a fatal-error stop and a user stop can both fire.
+    if (this.stopping) return;
+    this.stopping = true;
     this.running = false;
     // Flush any partial trailing window so the meeting's last words
-    // aren't dropped.
-    if (this.bufferedSamples > 0) this.flushWindow();
+    // aren't dropped. takeSamples drains the buffer fully.
+    if (this.bufferedSamples > 0) {
+      this.submitWindow(this.takeSamples(this.bufferedSamples));
+    }
     // Wait for every in-flight transcription to land + emit.
     if (this.inflight.size > 0) {
       await Promise.allSettled(Array.from(this.inflight));
