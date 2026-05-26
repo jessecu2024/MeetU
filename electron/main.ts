@@ -17,6 +17,7 @@ import { renderMinutesDocx } from './export/docx-generator';
 import { sanitizeFilenameForExport } from './export/sanitize-filename';
 import { probeSystemAudioSupport } from './system-audio-probe';
 import { getMacOSNativeCapture, makeMacOSNativeCaptureIpc } from './audio/macos-native-capture';
+import { makeLocalWhisperIpc } from './audio/local-whisper-native';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -380,8 +381,10 @@ function registerIPC(): void {
   // are pushed back on 'macos-system-audio:pcm-frame'.
   const macNativeIpc = makeMacOSNativeCaptureIpc(() => mainWindow);
   // Returns true only when the request originates from the trusted
-  // top-level frame of our own window.
-  const isTrustedMacRequest = (event: Electron.IpcMainInvokeEvent): boolean => {
+  // top-level frame of our own window, on our own app origin. Used to
+  // gate every privileged audio channel (macOS native capture AND
+  // local-whisper, which can read files / spawn heavy native work).
+  const isTrustedRequest = (event: Electron.IpcMainInvokeEvent): boolean => {
     const win = mainWindow;
     if (!win || win.isDestroyed()) return false;
     const trusted = win.webContents.mainFrame;
@@ -398,14 +401,14 @@ function registerIPC(): void {
       && isTrustedAppUrl(sender.url);
   };
   ipcMain.handle('macos-system-audio:list-apps', (event) => {
-    if (!isTrustedMacRequest(event)) {
+    if (!isTrustedRequest(event)) {
       console.warn('[Main] Rejected macos-system-audio:list-apps from untrusted frame');
       return { ok: false, apps: [], error: 'rejected: untrusted frame' };
     }
     return macNativeIpc.listApplications();
   });
   ipcMain.handle('macos-system-audio:start', (event, opts: { pid?: number }) => {
-    if (!isTrustedMacRequest(event)) {
+    if (!isTrustedRequest(event)) {
       console.warn('[Main] Rejected macos-system-audio:start from untrusted frame');
       return { ok: false, error: 'rejected: untrusted frame' };
     }
@@ -415,11 +418,37 @@ function registerIPC(): void {
     return macNativeIpc.start({ pid });
   });
   ipcMain.handle('macos-system-audio:stop', (event) => {
-    if (!isTrustedMacRequest(event)) {
+    if (!isTrustedRequest(event)) {
       console.warn('[Main] Rejected macos-system-audio:stop from untrusted frame');
       return { ok: false, error: 'rejected: untrusted frame' };
     }
     return macNativeIpc.stop();
+  });
+
+  // ── Local Whisper (offline, smart-whisper / whisper.cpp) ──
+  // Same trusted-frame gating: download-model fetches hundreds of MB
+  // and transcribe runs heavy native work; neither should be reachable
+  // from untrusted content. Model files live under userData.
+  const localWhisperIpc = makeLocalWhisperIpc(() => mainWindow, () => app.getPath('userData'));
+  ipcMain.handle('local-whisper:probe', (event) => {
+    if (!isTrustedRequest(event)) return { available: false, reason: 'rejected: untrusted frame', models: [], hasAnyModel: false };
+    return localWhisperIpc.probe();
+  });
+  ipcMain.handle('local-whisper:download-model', (event, name: string) => {
+    if (!isTrustedRequest(event)) return { ok: false, error: 'rejected: untrusted frame' };
+    return localWhisperIpc.downloadModel(String(name));
+  });
+  ipcMain.handle('local-whisper:start', (event, opts: { model: string }) => {
+    if (!isTrustedRequest(event)) return { ok: false, error: 'rejected: untrusted frame' };
+    return localWhisperIpc.start({ model: String(opts?.model ?? '') });
+  });
+  ipcMain.handle('local-whisper:transcribe', (event, pcm: ArrayBuffer, opts: { language?: string }) => {
+    if (!isTrustedRequest(event)) return { ok: false, error: 'rejected: untrusted frame' };
+    return localWhisperIpc.transcribe(pcm, opts || {});
+  });
+  ipcMain.handle('local-whisper:stop', (event) => {
+    if (!isTrustedRequest(event)) return { ok: false };
+    return localWhisperIpc.stop();
   });
 
   // ── Database ──

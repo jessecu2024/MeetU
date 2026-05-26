@@ -19,7 +19,7 @@
     "generate-icons": "node scripts/generate-icons.cjs",
     "check-licenses": "node scripts/check-licenses.cjs",
     "build:macos-native": "node scripts/build-macos-native.cjs",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 2>/dev/null || true; node scripts/build-macos-native.cjs"
+    "postinstall": "electron-rebuild -f -w better-sqlite3,smart-whisper 2>/dev/null || true; node scripts/build-macos-native.cjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",
@@ -95,7 +95,12 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "resources/icons/**/*"
+      "resources/icons/**/*",
+      "node_modules/smart-whisper/**/*"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/smart-whisper/**"
     ],
     "extraResources": [
       {
@@ -117,5 +122,8 @@
       }
     ],
     "afterPack": "./scripts/replace-ffmpeg.cjs"
+  },
+  "optionalDependencies": {
+    "smart-whisper": "^0.8.1"
   }
 }

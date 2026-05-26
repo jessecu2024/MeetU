@@ -41,6 +41,19 @@ declare global {
           onPcmFrame: (cb: (buf: ArrayBuffer) => void) => () => void;
           onError: (cb: (err: { message: string; code: number }) => void) => () => void;
         };
+        localWhisper: {
+          probe: () => Promise<{
+            available: boolean;
+            reason?: string;
+            models: Array<{ name: string; present: boolean; url: string; sizeBytes?: number }>;
+            hasAnyModel: boolean;
+          }>;
+          downloadModel: (name: string) => Promise<{ ok: boolean; error?: string }>;
+          start: (opts: { model: string }) => Promise<{ ok: boolean; error?: string }>;
+          transcribe: (pcm: ArrayBuffer, opts: { language?: string }) => Promise<{ ok: boolean; text?: string; error?: string }>;
+          stop: () => Promise<{ ok: boolean }>;
+          onDownloadProgress: (cb: (p: { model: string; receivedBytes: number; totalBytes: number }) => void) => () => void;
+        };
       };
       settings: {
         get: (key: string) => Promise<unknown>;
@@ -94,6 +107,11 @@ interface AppSettings {
   sysAudioMacAppLabel: string;
   outputDeviceId: string;
   outputDeviceLabel: string;
+  // Local Whisper (offline) — which ggml model the engine loads. Must
+  // be one downloaded via the Settings model manager; defaults to
+  // 'base' but the engine errors clearly if the chosen model isn't on
+  // disk yet.
+  localWhisperModel: string;
 }
 
 /** Connection status for each AI provider */
@@ -219,6 +237,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     sysAudioMacAppLabel: '',
     outputDeviceId: 'default',
     outputDeviceLabel: 'Default Speaker',
+    localWhisperModel: 'base',
   },
 
   // ── Glossary ──

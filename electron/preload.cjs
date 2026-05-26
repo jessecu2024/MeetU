@@ -38,6 +38,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return () => ipcRenderer.removeListener('macos-system-audio:error', listener);
       },
     },
+
+    // ── Local Whisper (offline whisper.cpp) ──
+    localWhisper: {
+      probe: () => ipcRenderer.invoke('local-whisper:probe'),
+      downloadModel: (name) => ipcRenderer.invoke('local-whisper:download-model', name),
+      start: (opts) => ipcRenderer.invoke('local-whisper:start', opts),
+      transcribe: (pcm, opts) => ipcRenderer.invoke('local-whisper:transcribe', pcm, opts),
+      stop: () => ipcRenderer.invoke('local-whisper:stop'),
+      onDownloadProgress: (cb) => {
+        const listener = (_e, p) => cb(p);
+        ipcRenderer.on('local-whisper:download-progress', listener);
+        return () => ipcRenderer.removeListener('local-whisper:download-progress', listener);
+      },
+    },
   },
 
   // ── STT ──

@@ -29,11 +29,15 @@ describe('isSelectableSTTEngine', () => {
     expect(isSelectableSTTEngine('xfyun')).toBe(true);
   });
 
-  it('rejects planned engines (local_whisper) — silently falls back to demo otherwise', () => {
-    expect(isSelectableSTTEngine('local_whisper')).toBe(false);
+  it('accepts local_whisper now that the smart-whisper (whisper.cpp) binding + model download ship', () => {
+    // Was 'planned' for a long while (engine was a stub). Now it's
+    // 'beta' — a real smart-whisper binding in the main process, driven
+    // by the pcm-stream pipeline, gated on a one-time model download.
+    // 'beta' is selectable (only 'planned' is blocked).
+    expect(isSelectableSTTEngine('local_whisper')).toBe(true);
   });
 
-  it('rejects engine IDs that were removed from the union (aliyun_speech)', () => {
+  it('rejects engine IDs that were removed from the union (aliyun_speech) — the only non-selectable class left now that no engine is planned', () => {
     expect(isSelectableSTTEngine('aliyun_speech')).toBe(false);
   });
 
@@ -95,16 +99,19 @@ describe('migrateSTTConfig', () => {
     expect(r.prunedKeys).toEqual([]);
   });
 
-  it('rewrites a stored local_whisper selection to the region default and reports the change', () => {
+  it('keeps a stored local_whisper selection now that the engine is selectable (beta)', () => {
+    // Was rewritten to the region default while local_whisper was
+    // 'planned'. Now it ships (beta), so a user who picked offline
+    // Whisper keeps that selection across launches.
     const r = migrateSTTConfig('local_whisper', {}, 'global');
-    expect(r.engine).toBe('deepgram');
-    expect(r.engineChanged).toBe(true);
+    expect(r.engine).toBe('local_whisper');
+    expect(r.engineChanged).toBe(false);
   });
 
-  it('rewrites local_whisper to the China region default (xfyun today)', () => {
+  it('keeps local_whisper for a China user too (region-independent — it is a local engine)', () => {
     const r = migrateSTTConfig('local_whisper', {}, 'china');
-    expect(r.engine).toBe('xfyun');
-    expect(r.engineChanged).toBe(true);
+    expect(r.engine).toBe('local_whisper');
+    expect(r.engineChanged).toBe(false);
   });
 
   it('rewrites a removed engine ID (aliyun_speech) to the region fallback (xfyun for China)', () => {
@@ -128,10 +135,13 @@ describe('migrateSTTConfig', () => {
     expect(r.prunedKeys).toEqual(['aliyun_speech']);
   });
 
-  it('prunes API keys for planned engines so they cannot survive in encrypted storage', () => {
+  it('prunes a stored key for the keyless local_whisper engine (selectable, but needs no key — storage hygiene)', () => {
+    // local_whisper is selectable now, but it is keyless
+    // (requiresApiKey:false), so a stored value there is dead data and
+    // is pruned even though the engine itself stays usable.
     const r = migrateSTTConfig('deepgram', {
       deepgram: 'sk-xxx',
-      local_whisper: 'some-old-value',
+      local_whisper: 'unused-dead-value',
     }, 'global');
     expect(r.apiKeys).toEqual({ deepgram: 'sk-xxx' });
     expect(r.prunedKeys).toEqual(['local_whisper']);
@@ -152,19 +162,19 @@ describe('migrateSTTConfig', () => {
     expect(r.prunedKeys).toEqual([]);
   });
 
-  it('handles the worst legacy case (planned engine + orphan keys + no region)', () => {
+  it('handles the legacy case (removed-id orphan key + keyless-engine key + selectable engines + no region)', () => {
     const r = migrateSTTConfig('local_whisper', {
-      aliyun_speech: 'old1',
-      local_whisper: 'old2',
-      xfyun: 'app:key:secret',          // xfyun is stable now, key kept
-      whisper_api: 'sk-also-valid',     // whisper_api stable, key kept
-      deepgram: 'sk-real',              // deepgram stable, key kept
+      aliyun_speech: 'old1',            // removed from union → pruned
+      local_whisper: 'old2',            // selectable but keyless → key pruned
+      xfyun: 'app:key:secret',          // stable, key kept
+      whisper_api: 'sk-also-valid',     // stable, key kept
+      deepgram: 'sk-real',              // stable, key kept
     }, null);
-    expect(r.engine).toBe('deepgram');               // region null → global default
-    expect(r.engineChanged).toBe(true);
-    // Three stable-engine keys retained; only truly-unusable engine
-    // keys (aliyun_speech removed, local_whisper still planned) are
-    // pruned from encrypted storage.
+    // local_whisper is selectable now, so the stored SELECTION is kept
+    // (it's a local engine — region-independent)...
+    expect(r.engine).toBe('local_whisper');
+    expect(r.engineChanged).toBe(false);
+    // ...but its (dead) KEY is pruned along with the removed id.
     expect(r.apiKeys).toEqual({
       deepgram: 'sk-real',
       whisper_api: 'sk-also-valid',
