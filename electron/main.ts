@@ -6,7 +6,7 @@
 import { app, BrowserWindow, ipcMain, screen, globalShortcut, session, shell, desktopCapturer } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getSetting, setSetting } from './store';
 import {
   startRecording, stopRecording, appendChunk,
@@ -23,16 +23,27 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 
-// The origin the renderer is allowed to run at: the dev server in dev,
-// file:// in production. Set in createWindow and consulted by both the
-// navigation lockdown and the trusted-IPC frame check, so a top frame
-// navigated off-origin (shouldn't happen — we block it — but defense
+// What the renderer is allowed to run at. Set in createWindow and
+// consulted by both the navigation lockdown and the trusted-IPC frame
+// check, so a top frame navigated off-origin (we block it, but defense
 // in depth) cannot invoke privileged native-audio IPC.
-let trustedAppOrigin = 'file://';
+//
+// Dev:  exact dev-server origin (e.g. http://localhost:5173).
+// Prod: a file:// prefix scoped to the bundled `dist/` directory — NOT
+//       all of file://. Trusting any local file URL would let a top
+//       frame navigated to some other on-disk HTML reach the privileged
+//       channels.
+let trustedDevOrigin: string | null = null;
+let trustedFilePrefix: string | null = null;
 function isTrustedAppUrl(url: string): boolean {
   if (!url) return false;
-  if (trustedAppOrigin === 'file://') return url.startsWith('file://');
-  try { return new URL(url).origin === trustedAppOrigin; } catch { return false; }
+  if (trustedDevOrigin) {
+    try { return new URL(url).origin === trustedDevOrigin; } catch { return false; }
+  }
+  if (trustedFilePrefix) {
+    return url.startsWith(trustedFilePrefix);
+  }
+  return false;
 }
 
 /** Create main window (floating mode) */
@@ -64,11 +75,12 @@ function createWindow(): void {
   });
 
   const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL'];
+  const prodIndexPath = path.join(__dirname, '../dist/index.html');
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(prodIndexPath);
   }
 
   // ── Navigation lockdown (security hardening) ──
@@ -79,7 +91,16 @@ function createWindow(): void {
   //   2. Block in-page navigation away from our own app origin; any
   //      external link goes to the user's browser via shell.openExternal.
   // The trusted origin is the dev server URL in dev, or file:// in prod.
-  trustedAppOrigin = VITE_DEV_SERVER_URL ? new URL(VITE_DEV_SERVER_URL).origin : 'file://';
+  if (VITE_DEV_SERVER_URL) {
+    trustedDevOrigin = new URL(VITE_DEV_SERVER_URL).origin;
+    trustedFilePrefix = null;
+  } else {
+    trustedDevOrigin = null;
+    // Scope trust to the bundled dist/ directory file-URL prefix, so
+    // only our own packaged HTML (not arbitrary on-disk files) counts
+    // as the app origin.
+    trustedFilePrefix = pathToFileURL(path.join(__dirname, '../dist/')).href;
+  }
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) { void shell.openExternal(url); }
     return { action: 'deny' };

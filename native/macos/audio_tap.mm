@@ -277,9 +277,34 @@ API_AVAILABLE(macos(13.0))
 
   auto frame = new meetu::AudioFrame();
   frame->samples = std::move(out);
-  // BlockingCall returns non-ok if the TSFN was released/aborted
-  // (teardown happened) — in that case we own the frame and free it.
-  auto status = meetu::session().tsfnAudio.BlockingCall(frame, [](Napi::Env env, Napi::Function jsCallback, meetu::AudioFrame* data) {
+  // Re-check generation AND grab the TSFN handle under the SAME mutex,
+  // immediately before the call. The early lock-free check at the top
+  // of this method is only an optimization to skip work for obviously
+  // stale captures; it is NOT sufficient on its own, because teardown
+  // could bump the generation + release the TSFN + a new start could
+  // reassign session().tsfnAudio during the format-parse/resample work
+  // in between — a check-then-use TOCTOU that would deliver stale audio
+  // into the NEW session's callback.
+  //
+  // Doing the generation re-check + handle copy under the mutex closes
+  // it: a new start cannot have installed a fresh tsfnAudio without a
+  // prior teardown bumping the generation, which we observe here. We
+  // copy the ThreadSafeFunction HANDLE (a refcounted wrapper) under the
+  // lock, then BlockingCall on the local copy OUTSIDE the lock (calling
+  // a TSFN while holding the mutex risks deadlock). If teardown races
+  // in after the copy, the copy refers to the now-released TSFN and
+  // BlockingCall returns non-ok → we free the frame. It can NEVER refer
+  // to a different session's TSFN.
+  Napi::ThreadSafeFunction tsfnLocal;
+  {
+    std::lock_guard<std::mutex> lock(meetu::session().mutex);
+    if (self.generation != meetu::session().generation.load() || meetu::session().tsfnReleased) {
+      delete frame;
+      return;
+    }
+    tsfnLocal = meetu::session().tsfnAudio;
+  }
+  auto status = tsfnLocal.BlockingCall(frame, [](Napi::Env env, Napi::Function jsCallback, meetu::AudioFrame* data) {
     if (env && jsCallback) {
       const size_t byteLen = data->samples.size() * sizeof(float);
       auto buf = Napi::ArrayBuffer::New(env, byteLen);
