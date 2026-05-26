@@ -2,10 +2,22 @@
 // System-Audio Loopback Capability Probe
 //
 // Pure function that decides whether the current OS can deliver the
-// Electron getDisplayMedia + audio:'loopback' path:
-//   - macOS 13+ wraps ScreenCaptureKit
-//   - Windows 10+ wraps WASAPI loopback
-//   - All other platforms (Linux, older macOS / Windows) are unsupported.
+// Electron getDisplayMedia + audio:'loopback' path. Per Electron 30's
+// own typedef (node_modules/electron/electron.d.ts):
+//
+//   "Specifying a loopback device will capture system audio, and is
+//    currently only supported on Windows."
+//
+// So the supported matrix today is:
+//   - Windows 10+         -> supported (wraps WASAPI loopback)
+//   - macOS (any version) -> NOT supported on this path; native
+//                            ScreenCaptureKit module ships in PR #4b
+//   - Linux / other       -> NOT supported
+//
+// The darwin branch still echoes the Screen Recording permission
+// status from Electron's systemPreferences for diagnostics only —
+// future code (or PR #4b) may surface it, but it never flips the
+// `supported` flag here.
 //
 // Extracted from `registerIPC()` so the version-parsing branches can
 // be unit-tested without standing up an Electron app/session.

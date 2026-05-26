@@ -275,9 +275,14 @@ function registerIPC(): void {
   // ScreenCaptureKit is on the roadmap and ships through a native
   // N-API module (PR #4b) rather than this Electron wrapper path.
   ipcMain.handle('system-audio:probe', async () => {
-    // On darwin we additionally surface the Screen Recording permission
-    // status — macOS will not deliver loopback audio without it. The
-    // call would appear to succeed but the audio track would be silent.
+    // On darwin we read the Screen Recording permission state purely
+    // for diagnostics. It is informational only on this PR — darwin
+    // returns `supported:false` regardless of the permission value
+    // (per Electron 30 typedef, this loopback path is Windows-only).
+    // When PR #4b lands the native ScreenCaptureKit module, the same
+    // permission status will gate the macOS path; we surface it now
+    // so the renderer and the future native path read a consistent
+    // value.
     let screenPermission: string | undefined;
     if (process.platform === 'darwin') {
       try {
