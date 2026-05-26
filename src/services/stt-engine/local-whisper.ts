@@ -24,11 +24,28 @@
 import type {
   STTEngine, STTEngineId, STTConfig, TranscriptResult, AudioDeliveryMode,
 } from './types';
+import { looksLikeHallucination } from './whisper-hallucinations';
 
 const SAMPLE_RATE = 16000;
 const WINDOW_SECONDS = 12;
 const WINDOW_SAMPLES = SAMPLE_RATE * WINDOW_SECONDS;
 const WINDOW_MS = Math.round((WINDOW_SAMPLES / SAMPLE_RATE) * 1000);
+// RMS energy below which a window is treated as silence and skipped
+// entirely (no IPC, no native inference). whisper.cpp hallucinates
+// confident garbage on silence (the "thank you for watching" failure
+// mode), so dropping silent windows both saves CPU and prevents those
+// phantom captions. Normalized Float32 PCM: ambient room noise sits
+// around 0.001–0.004 RMS; even quiet speech is well above 0.01. 0.006
+// is a conservative cut that won't clip real (if soft) speech.
+const SILENCE_RMS_THRESHOLD = 0.006;
+
+/** Root-mean-square amplitude of a Float32 PCM window. */
+function rms(samples: Float32Array): number {
+  if (samples.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / samples.length);
+}
 
 export class LocalWhisperEngine implements STTEngine {
   readonly id: STTEngineId = 'local_whisper';
@@ -127,6 +144,15 @@ export class LocalWhisperEngine implements STTEngine {
     const durationMs = Math.round((windowed.length / SAMPLE_RATE) * 1000);
     this.windowOffsetMs += durationMs;
 
+    // Silence gate: skip near-silent windows without touching native
+    // inference. This avoids both wasted CPU and whisper.cpp's
+    // silence-hallucination output. We still advance the emit cursor
+    // (via a synchronous skip) so timeline order stays consistent.
+    if (rms(windowed) < SILENCE_RMS_THRESHOLD) {
+      this.deliver(offsetMs, durationMs, '');
+      return;
+    }
+
     const work = (async () => {
       try {
         // NOTE: ipcRenderer.invoke structured-clones the buffer (no
@@ -136,9 +162,17 @@ export class LocalWhisperEngine implements STTEngine {
         const res = await window.electronAPI?.audio.localWhisper.transcribe(
           windowed.buffer as ArrayBuffer, { language: this.language },
         );
-        const text = res?.ok ? (res.text || '').trim() : '';
+        let text = res?.ok ? (res.text || '').trim() : '';
         if (res && !res.ok) {
           console.error('[STT] Local Whisper transcribe failed:', res.error);
+        }
+        // Drop known Whisper silence-hallucinations (shared with the
+        // cloud Whisper API engine). The RMS gate catches most silence,
+        // but low-level non-speech noise can still slip a window through
+        // and produce a phantom "thank you for watching".
+        if (text && looksLikeHallucination(text)) {
+          console.log('[STT] Local Whisper dropping likely-hallucination text');
+          text = '';
         }
         this.deliver(offsetMs, durationMs, text);
       } catch (err) {

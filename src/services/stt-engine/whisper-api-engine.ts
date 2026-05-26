@@ -18,6 +18,12 @@
 import type {
   STTEngine, STTEngineId, STTConfig, TranscriptResult, AudioDeliveryMode,
 } from './types';
+// Shared with the offline Local Whisper engine — same model, same
+// silence-hallucination patterns. Re-exported below so existing
+// imports of `looksLikeHallucination` from this module keep working.
+import { looksLikeHallucination } from './whisper-hallucinations';
+
+export { looksLikeHallucination };
 
 const SEGMENT_DURATION_MS = 5000;
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
@@ -258,38 +264,3 @@ export class WhisperAPIEngine implements STTEngine {
   }
 }
 
-/**
- * Heuristic filter for Whisper hallucination patterns. Whisper is known
- * to confidently transcribe silence as a small set of recurring strings
- * (the "thank you for watching" failure mode and Chinese-subtitle
- * variants). Exported for unit testing.
- */
-export function looksLikeHallucination(text: string): boolean {
-  const trimmed = text.trim();
-  // For letter-based patterns we strip trailing `.` / `!` so that
-  // "Thank you", "Thank you.", "Thank you!" all collapse to the same
-  // normalized form. We do NOT strip punctuation from the
-  // punctuation-only cases ("..." / ". .") — those are checked against
-  // `trimmed` directly below.
-  const normalized = trimmed.toLowerCase().replace(/[!.]+$/, '');
-  return (
-    // English silent-segment hallucinations
-    normalized === 'thank you' ||
-    normalized === 'thanks for watching' ||
-    normalized === 'thank you for watching' ||
-    normalized === 'thank you so much for watching' ||
-    normalized === 'thanks for watching everyone' ||
-    normalized === 'thanks for watching the video' ||
-    normalized === 'thank you very much' ||
-    // Punctuation-only emissions Whisper produces on silence
-    trimmed === '...' ||
-    trimmed === '. .' ||
-    trimmed === '。' ||
-    // Common Chinese-subtitle hallucinations Whisper emits on silence.
-    // The `\s*` is intentional: Whisper inserts spaces between Han and
-    // Latin in its output ("字幕 by ..."), and the bare `字幕组` form
-    // has no space.
-    /^字幕\s*(组|by|提供)/i.test(trimmed) ||
-    /^请订阅|^请关注/.test(trimmed)
-  );
-}

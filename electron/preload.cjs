@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     localWhisper: {
       probe: () => ipcRenderer.invoke('local-whisper:probe'),
       downloadModel: (name) => ipcRenderer.invoke('local-whisper:download-model', name),
+      deleteModel: (name) => ipcRenderer.invoke('local-whisper:delete-model', name),
       start: (opts) => ipcRenderer.invoke('local-whisper:start', opts),
       transcribe: (pcm, opts) => ipcRenderer.invoke('local-whisper:transcribe', pcm, opts),
       stop: () => ipcRenderer.invoke('local-whisper:stop'),

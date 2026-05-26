@@ -56,7 +56,11 @@ function installStub(opts: { available?: boolean; hasAnyModel?: boolean; autoTex
 }
 
 function frame(n: number): ArrayBuffer {
-  return new Float32Array(n).fill(0.1).buffer;
+  return new Float32Array(n).fill(0.1).buffer; // RMS 0.1 — well above the silence gate
+}
+
+function silentFrame(n: number): ArrayBuffer {
+  return new Float32Array(n).fill(0.001).buffer; // RMS 0.001 — below the 0.006 gate
 }
 
 describe('LocalWhisperEngine.testConnection', () => {
@@ -176,5 +180,64 @@ describe('LocalWhisperEngine windowing', () => {
     const e = new LocalWhisperEngine();
     await expect(e.startSession({ sampleRate: SAMPLE_RATE })).rejects.toThrow(/model not downloaded/);
     expect(e.isRunning()).toBe(false);
+  });
+});
+
+describe('LocalWhisperEngine quality gates', () => {
+  it('skips a near-silent window entirely — no transcribe IPC, no caption', async () => {
+    const stub = installStub({ autoText: () => 'should not be called' });
+    const e = new LocalWhisperEngine();
+    const results: TranscriptResult[] = [];
+    e.onTranscript((r) => results.push(r));
+    await e.startSession({ sampleRate: SAMPLE_RATE });
+    e.feedAudio(silentFrame(WINDOW_SAMPLES));
+    await e.stopSession();
+    // The silent window never reached native inference...
+    expect(stub.transcribeCalls.length).toBe(0);
+    // ...and produced no caption.
+    expect(results).toEqual([]);
+  });
+
+  it('still transcribes a loud window and keeps the timeline cursor consistent across a silent gap', async () => {
+    const stub = installStub();
+    const e = new LocalWhisperEngine();
+    const results: TranscriptResult[] = [];
+    e.onTranscript((r) => results.push(r));
+    await e.startSession({ sampleRate: SAMPLE_RATE });
+    e.feedAudio(frame(WINDOW_SAMPLES));        // window 0 — speech (async)
+    e.feedAudio(silentFrame(WINDOW_SAMPLES));  // window 1 — silent (skipped synchronously)
+    e.feedAudio(frame(WINDOW_SAMPLES));        // window 2 — speech (async)
+    expect(stub.transcribeCalls.length).toBe(2); // only the two loud windows
+    stub.transcribeCalls[0].resolve('first');
+    stub.transcribeCalls[1].resolve('third');
+    await e.stopSession();
+    expect(results.map(r => r.text)).toEqual(['first', 'third']);
+    // window 2 starts at 2× the window duration (the silent window
+    // still advanced the timeline), so its startMs is strictly later.
+    expect(results[1].startMs).toBeGreaterThan(results[0].startMs + 1);
+  });
+
+  it('drops a Whisper silence-hallucination ("Thank you for watching.") returned by a non-silent window', async () => {
+    const stub = installStub();
+    const e = new LocalWhisperEngine();
+    const results: TranscriptResult[] = [];
+    e.onTranscript((r) => results.push(r));
+    await e.startSession({ sampleRate: SAMPLE_RATE });
+    e.feedAudio(frame(WINDOW_SAMPLES)); // loud enough to transcribe
+    stub.transcribeCalls[0].resolve('Thank you for watching.');
+    await e.stopSession();
+    expect(results).toEqual([]); // hallucination filtered out
+  });
+
+  it('keeps real text that merely contains a hallucination-like phrase', async () => {
+    const stub = installStub();
+    const e = new LocalWhisperEngine();
+    const results: TranscriptResult[] = [];
+    e.onTranscript((r) => results.push(r));
+    await e.startSession({ sampleRate: SAMPLE_RATE });
+    e.feedAudio(frame(WINDOW_SAMPLES));
+    stub.transcribeCalls[0].resolve('Thank you for the proposal, let us revisit it next week.');
+    await e.stopSession();
+    expect(results.map(r => r.text)).toEqual(['Thank you for the proposal, let us revisit it next week.']);
   });
 });

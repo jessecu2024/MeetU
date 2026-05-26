@@ -63,6 +63,8 @@ IPC → on-device transcription → captions on screen.
 3. Start recording and speak (or play speech audio). Confirm captions appear ~12 s after speech begins (the window size), fully offline — **disconnect the network** to prove no audio leaves the device.
 4. Stop recording; confirm the trailing partial window's words still land (last sentence isn't dropped).
 5. **No-model fallback:** with no model downloaded, start recording and confirm it falls back to demo/mock mode with the "no model" warning (does not hang or crash).
+6. **Silence handling:** stay silent for a stretch mid-recording; confirm no phantom captions appear (no "Thank you for watching" / 字幕组 hallucinations — silent windows are gated out before inference, and any that slip through are filtered).
+7. **Model management:** confirm each downloaded model shows its size (MB); click **Delete** and confirm the file is removed (size reclaimed) and the row returns to a Download button.
 
 **Expected**
 - ✅ Captions appear offline; pulling the network changes nothing.

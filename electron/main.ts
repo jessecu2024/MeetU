@@ -438,6 +438,10 @@ function registerIPC(): void {
     if (!isTrustedRequest(event)) return { ok: false, error: 'rejected: untrusted frame' };
     return localWhisperIpc.downloadModel(String(name));
   });
+  ipcMain.handle('local-whisper:delete-model', (event, name: string) => {
+    if (!isTrustedRequest(event)) return { ok: false, error: 'rejected: untrusted frame' };
+    return localWhisperIpc.deleteModel(String(name));
+  });
   ipcMain.handle('local-whisper:start', (event, opts: { model: string }) => {
     if (!isTrustedRequest(event)) return { ok: false, error: 'rejected: untrusted frame' };
     return localWhisperIpc.start({ model: String(opts?.model ?? '') });
