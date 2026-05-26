@@ -21,18 +21,28 @@
 // which made it possible for the two copies to drift apart silently.
 // ============================================================
 
-export type ExportFormat = 'docx' | 'markdown';
+export type ExportFormat = 'docx' | 'markdown' | 'pdf';
+
+/** Map an export format to its file extension (with leading dot). */
+function extForFormat(format: string): string {
+  switch (format) {
+    case 'docx': return '.docx';
+    case 'pdf': return '.pdf';
+    default: return '.md'; // markdown (and any unknown format)
+  }
+}
 
 export function sanitizeFilenameForExport(input: string, format: string): string {
   const cleaned = input
     .replace(/[^a-zA-Z0-9一-鿿_\-.]/g, '_')
     .slice(0, 100);
 
+  const expectedExt = extForFormat(format);
+
   if (!cleaned || cleaned === '.' || cleaned === '..') {
-    return `minutes_${Date.now()}.${format === 'docx' ? 'docx' : 'md'}`;
+    return `minutes_${Date.now()}${expectedExt}`;
   }
 
-  const expectedExt = format === 'docx' ? '.docx' : '.md';
   return cleaned.toLowerCase().endsWith(expectedExt)
     ? cleaned
     : cleaned + expectedExt;

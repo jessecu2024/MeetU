@@ -17,7 +17,7 @@
 | 所有 7 个 AI Provider (Claude/OpenAI/Gemini/DeepSeek/Qwen/MiniMax/GLM) | ✅ Stable | OpenAI 兼容协议 + Gemini 特例 |
 | Markdown 纪要导出 | ✅ Stable | 主进程写 `~/MeetingAI/minutes/*.md` |
 | Word (.docx) 纪要导出 | ✅ Stable | `electron/export/docx-generator.ts` 使用 `docx@^8` 在主进程生成 Word 文档（标题/摘要/讨论议题/Action Items 表格/未解决问题/下一步/免责声明），renderer 通过 `file:export` IPC 传 minutes payload，主进程写到 `~/MeetingAI/minutes/*.docx` |
-| PDF 纪要导出 | ❌ Not planned right now | 此前装的 `pdfkit` 依赖已删除（曾在 `package.json` 但全代码 0 引用）；如未来需要 PDF 导出，请再添加依赖并真实现 |
+| PDF 纪要导出 | ✅ Stable | `electron/export/pdf-generator.ts` 用 Electron 自带 Chromium 的 `webContents.printToPDF` 渲染——`buildMinutesHtml()` 把 minutes 拼成内联 CSS 的 HTML(所有插值 HTML-escape),在隐藏的、禁用 JS 的 BrowserWindow 里 print 成 PDF,写到 `~/MeetingAI/minutes/*.pdf`。**零新依赖、CJK 用系统字体自动渲染**(双语 app 关键),不需要打包 8MB 中文字体。SummaryView 有"PDF"导出按钮 |
 | i18n 多语言 | ❌ 未引入框架 | 渲染层用硬编码 `"English / 中文"` 双语字符串，扩展到日韩需要先引入 i18n 框架 |
 | GPL/AGPL 许可证审计 | ✅ Stable | `npm run check-licenses` 已实现 |
 | 单元测试 / CI | ✅ Stable | Vitest (`npm test`)、ESLint v9 flat config (`npm run lint`)、`tsc --noEmit` (`npm run typecheck`)、`.github/workflows/ci.yml` 在 push/PR 时跑 typecheck + lint + test + license 审计 |
@@ -40,7 +40,7 @@
 2. **实时翻译** — 中英双向翻译（可扩展更多语言）
 3. **@检测与发言准备** — 检测用户被点名/提问，自动生成回复建议
 4. **实时摘要** — 每5分钟提取会议要点
-5. **会后纪要** — 结构化文档自动生成（Markdown + Word/.docx 均已可用；PDF 目前不打算实现）
+5. **会后纪要** — 结构化文档自动生成（Markdown + Word/.docx + PDF 三种格式均已可用）
 
 ## 核心架构原则
 
@@ -163,7 +163,7 @@ ScreenCaptureKit(需授权系统录屏权限,支持按 app 捕获)。
 | docx (docx-js) | MIT | ✅ 安全 |
 | lucide-react | ISC | ✅ 安全 |
 
-> `pdfkit` (MIT) 之前列在此表中,但因 PDF 导出未实现已删除,避免幽灵 dep。`docx` (docx-js, MIT) 已在 Word 导出真实实现后重新加回(见 `electron/export/docx-generator.ts`)。
+> `docx` (docx-js, MIT) 已在 Word 导出真实实现后重新加回(见 `electron/export/docx-generator.ts`)。PDF 导出**不依赖任何 PDF 库**——用 Electron 自带的 `webContents.printToPDF`(Chromium),所以 `pdfkit` 等依赖始终不需要,且 CJK 由系统字体渲染,无需打包字体文件。
 
 > **禁止清单：** BlackHole(GPL-3.0)、Soundflower(GPL)、ffmpeg CLI(GPL)、任何 GPL/AGPL 库。引入新依赖前必须运行 `npm run check-licenses`。
 

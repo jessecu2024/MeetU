@@ -107,6 +107,7 @@ shaping with mocks, but a live key confirms the real endpoint.
 ## Export & misc (quick to eyeball)
 
 - **DOCX/Markdown export** (PR #2): finish a meeting → export → confirm a `.docx` / `.md` lands in `~/MeetingAI/minutes/` and opens cleanly, with the AI-generated disclaimer footer.
+- **PDF export**: from the Summary view, click **PDF**; confirm a `.pdf` lands in `~/MeetingAI/minutes/` and opens cleanly. **Critically, with a Chinese-language meeting**, confirm the Chinese text renders (not boxes/tofu) — the PDF is produced by Electron's Chromium `printToPDF`, which uses the OS's CJK fonts; the HTML builder is unit-tested but the actual render needs a running app. Check the action-items table and the bilingual disclaimer footer survive page layout.
 - **Legal disclaimer + recording consent**: first launch shows the legal disclaimer (must accept to continue); each recording start shows the consent reminder.
 
 ---
