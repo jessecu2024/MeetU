@@ -22,6 +22,26 @@ import TranslationView from './views/TranslationView';
 import SpeechAssistView from './views/SpeechAssistView';
 import SummaryView from './views/SummaryView';
 
+/**
+ * Browser-preview guard. The renderer is only fully functional inside
+ * the Electron window (window.electronAPI preload bridge): STT
+ * engines, AI proxying, settings persistence, and the recording file
+ * writer all ride on IPC. Opening the Vite URL directly in a browser
+ * silently degrades everything to demo behavior, which confused real
+ * users — so say it explicitly. Rendered in ALL app states (disclaimer,
+ * onboarding, main UI) because a browser visit always starts from the
+ * first-launch flow; renders nothing inside Electron.
+ */
+function BrowserPreviewBanner() {
+  if (window.electronAPI) return null;
+  return (
+    <div className="flex-shrink-0 px-4 py-1.5 bg-amber-500 text-white text-[11px] text-center font-medium">
+      Browser preview — STT, AI &amp; storage are unavailable here. Use the MeetU desktop window.
+      / 浏览器预览模式 —— STT、AI 与存储不可用，请使用 MeetU 桌面窗口。
+    </div>
+  );
+}
+
 export default function App() {
   const legalAccepted = useSettingsStore((s) => s.legalAccepted);
   const acceptLegal = useSettingsStore((s) => s.acceptLegal);
@@ -99,31 +119,32 @@ export default function App() {
     );
   }
 
+  // A browser visit ALWAYS starts at the disclaimer/onboarding stage
+  // (nothing persists without the bridge), so the preview banner must
+  // wrap those early returns too — not just the main UI.
   if (!legalAccepted) {
-    return <LegalDisclaimer onAccept={acceptLegal} />;
+    return (
+      <>
+        <BrowserPreviewBanner />
+        <LegalDisclaimer onAccept={acceptLegal} />
+      </>
+    );
   }
 
   if (isFirstLaunch) {
-    return <OnboardingWizard />;
+    return (
+      <>
+        <BrowserPreviewBanner />
+        <OnboardingWizard />
+      </>
+    );
   }
 
   const hasAiKey = !!aiConfig.apiKeys[aiConfig.defaultProvider];
 
   return (
     <div className="h-screen flex flex-col bg-white dark:bg-zinc-900">
-      {/* Browser-preview guard. The renderer is only fully functional
-          inside the Electron window (window.electronAPI preload
-          bridge): STT engines, AI proxying, settings persistence, and
-          the recording file writer all ride on IPC. Opening the Vite
-          URL directly in a browser silently degrades everything to
-          demo behavior, which confused real users — so say it
-          explicitly instead. */}
-      {!window.electronAPI && (
-        <div className="flex-shrink-0 px-4 py-1.5 bg-amber-500 text-white text-[11px] text-center font-medium">
-          Browser preview — STT, AI &amp; storage are unavailable here. Use the MeetU desktop window.
-          / 浏览器预览模式 —— STT、AI 与存储不可用，请使用 MeetU 桌面窗口。
-        </div>
-      )}
+      <BrowserPreviewBanner />
 
       {/* Modals & Overlays */}
       {settingsModalOpen && <SettingsModal />}
