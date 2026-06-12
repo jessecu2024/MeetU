@@ -111,6 +111,20 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-white dark:bg-zinc-900">
+      {/* Browser-preview guard. The renderer is only fully functional
+          inside the Electron window (window.electronAPI preload
+          bridge): STT engines, AI proxying, settings persistence, and
+          the recording file writer all ride on IPC. Opening the Vite
+          URL directly in a browser silently degrades everything to
+          demo behavior, which confused real users — so say it
+          explicitly instead. */}
+      {!window.electronAPI && (
+        <div className="flex-shrink-0 px-4 py-1.5 bg-amber-500 text-white text-[11px] text-center font-medium">
+          Browser preview — STT, AI &amp; storage are unavailable here. Use the MeetU desktop window.
+          / 浏览器预览模式 —— STT、AI 与存储不可用，请使用 MeetU 桌面窗口。
+        </div>
+      )}
+
       {/* Modals & Overlays */}
       {settingsModalOpen && <SettingsModal />}
       {historyModalOpen && <HistoryModal />}

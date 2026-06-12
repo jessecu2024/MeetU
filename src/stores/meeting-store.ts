@@ -457,7 +457,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   },
 
   stopRecording: async () => {
-    const { useMock, _durationInterval, _sttEngine, meetingId, recordingDuration } = get();
+    const { useMock, sttMock, _durationInterval, _sttEngine, meetingId, recordingDuration } = get();
 
     if (_durationInterval) clearInterval(_durationInterval);
 
@@ -476,13 +476,25 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       await _sttEngine.stopSession().catch(() => {});
     }
 
-    // Update meeting in database with temp path for now
-    if (meetingId && meetingId > 0 && tempPath) {
+    // Update meeting in database with temp path for now. Demo (mock-STT)
+    // sessions are throwaway by definition: their transcripts are
+    // simulated dialogue, so persisting the meeting row would pollute
+    // the History browser with fake meetings that read as real
+    // (real-machine testing surfaced exactly this — 4 of 5 history rows
+    // were demo data). Delete the row instead; ON DELETE CASCADE clears
+    // any stray transcript rows. The on-disk audio recording (if any)
+    // is unaffected — the save/discard flow below handles that file
+    // independently of the DB row.
+    if (meetingId && meetingId > 0) {
       try {
-        await window.electronAPI?.db.query(
-          "UPDATE meetings SET end_time = datetime('now'), duration_sec = ?, audio_path = ?, status = 'ended' WHERE id = ?",
-          [recordingDuration, tempPath, meetingId]
-        );
+        if (sttMock) {
+          await window.electronAPI?.db.query('DELETE FROM meetings WHERE id = ?', [meetingId]);
+        } else if (tempPath) {
+          await window.electronAPI?.db.query(
+            "UPDATE meetings SET end_time = datetime('now'), duration_sec = ?, audio_path = ?, status = 'ended' WHERE id = ?",
+            [recordingDuration, tempPath, meetingId]
+          );
+        }
       } catch { /* DB not available */ }
     }
 
@@ -530,6 +542,16 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       bluetoothDetected: false,
       showSaveConfirm: !!tempPath,
       pendingTempPath: tempPath || '',
+      // Session-scoped status must not outlive the session. The mock
+      // capture manager reports "Mock mode — using simulated audio"
+      // through the error channel; without clearing it here, that
+      // informational message lingers on the idle header styled as a
+      // red error after Stop (seen in real-machine UI testing). Any
+      // genuine start-failure error is set AFTER stop completes, so
+      // clearing here cannot mask it.
+      audioError: null,
+      useMock: false,
+      sttMock: false,
     });
   },
 

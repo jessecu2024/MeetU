@@ -307,9 +307,11 @@ export default function SettingsModal() {
                           </p>
                         )}
 
-                        {/* Edit Key Inline */}
+                        {/* Edit Key Inline. The <form> wrapper keeps
+                            password managers / Chrome happy about a
+                            bare password field; submit is a no-op. */}
                         {editingProvider === p.id && (
-                          <div className="mt-2 flex gap-2">
+                          <form className="mt-2 flex gap-2" onSubmit={(e) => e.preventDefault()}>
                             <input
                               type="password"
                               value={editingKey}
@@ -332,7 +334,7 @@ export default function SettingsModal() {
                               className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700">
                               Save
                             </button>
-                          </div>
+                          </form>
                         )}
                       </div>
                     );
@@ -451,7 +453,10 @@ export default function SettingsModal() {
                     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
                       {currentEngine.nameEn} API Key
                     </label>
-                    <div className="flex gap-2">
+                    {/* <form> wrapper for the password field (Chrome
+                        DOM warning + password-manager behavior);
+                        submit is a no-op. */}
+                    <form className="flex gap-2" onSubmit={(e) => e.preventDefault()}>
                       <input
                         type="password"
                         value={sttKeyDraft || savedKey}
@@ -472,7 +477,7 @@ export default function SettingsModal() {
                         className="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700">
                         Save
                       </button>
-                    </div>
+                    </form>
 
                     {/* STT test result — persists across modal open/close */}
                     {sttTestResult.status !== 'idle' && (

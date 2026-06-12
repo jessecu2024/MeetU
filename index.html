@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MeetU</title>
+    <!-- Inline SVG favicon (data: URI, allowed by img-src `data:`).
+         Only matters in dev / browser preview — Electron windows have
+         no tab icon — but it silences the dev-console favicon 404. -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%8E%99%3C/text%3E%3C/svg%3E" />
     <!--
       script-src + worker-src include `blob:` so the PCM AudioWorklet
       (used by the iFlytek STT path) can be loaded from an inline

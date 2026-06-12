@@ -78,7 +78,7 @@ export const useTranscriptStore = create<TranscriptState>((set, _get) => ({
           newEntries[existingIdx] = entry;
 
           // Persist to SQLite
-          persistTranscript(state.meetingId, entry);
+          if (!state.isMockMode) persistTranscript(state.meetingId, entry);
 
           return { entries: newEntries };
         }
@@ -86,7 +86,7 @@ export const useTranscriptStore = create<TranscriptState>((set, _get) => ({
 
       // New entry
       if (result.isFinal) {
-        persistTranscript(state.meetingId, entry);
+        if (!state.isMockMode) persistTranscript(state.meetingId, entry);
       }
 
       return { entries: [...state.entries, entry] };
