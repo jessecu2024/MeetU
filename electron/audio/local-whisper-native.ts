@@ -45,8 +45,11 @@ const MAX_TRANSCRIBE_SAMPLES = 16000 * 60;
 // anything odd into the native params.
 const LANGUAGE_RE = /^[a-z]{2,5}(-[a-z]{2,5})?$/i;
 
-// smart-whisper's public surface (subset we use). Typed loosely
-// because the package is an optionalDependency that may be absent.
+// smart-whisper's surface, NORMALIZED by us (subset we use). Typed
+// loosely because the package is an optionalDependency that may be
+// absent. `MODELS` here is always the resolved model-URL map — see
+// normalizeSmartWhisperModule for where it actually lives in the
+// real package.
 interface SmartWhisperModule {
   Whisper: new (file: string, config?: { gpu?: boolean; offload?: number }) => SmartWhisperInstance;
   MODELS: Record<string, string>;
@@ -70,13 +73,59 @@ const requireFromHere = createRequire(path.join(dirname, '__virtual__.cjs'));
 
 let cachedLoader: LocalWhisperLoader | null = null;
 
+/**
+ * Validate the raw smart-whisper module and normalize it to the shape
+ * the rest of this file consumes ({ Whisper, MODELS }).
+ *
+ * IMPORTANT: in the real smart-whisper@0.8.x the model-URL map is NOT
+ * a root export — the root exports are Binding / TranscribeTask /
+ * Whisper / WhisperModel / WhisperSamplingStrategy / binding /
+ * manager, and the map lives at `manager.MODELS` (dist/index.js).
+ * An earlier version of this loader read `module.MODELS` directly,
+ * which is `undefined` against the real package — so probe() and
+ * downloadModel() threw `Cannot read properties of undefined` the
+ * moment the native module actually built, and the Settings model
+ * manager was broken precisely when Local Whisper was usable. Unit
+ * tests never caught it because their fake loaders provided a
+ * root-level MODELS. This normalizer accepts BOTH shapes (root map
+ * first for forward-compat, then manager.MODELS) and refuses the
+ * module with an actionable reason if neither exists, so a future
+ * smart-whisper layout change degrades to "engine unavailable"
+ * instead of a runtime TypeError. Exported for unit tests, which pin
+ * the real-package shape (manager.MODELS, no root MODELS).
+ */
+export function normalizeSmartWhisperModule(mod: unknown): LocalWhisperLoader {
+  if (!mod || typeof mod !== 'object') {
+    return { available: false, reason: 'smart-whisper loaded but its module export is not an object' };
+  }
+  const raw = mod as {
+    Whisper?: unknown;
+    MODELS?: unknown;
+    manager?: { MODELS?: unknown };
+  };
+  if (typeof raw.Whisper !== 'function') {
+    return { available: false, reason: 'smart-whisper loaded but Whisper export is missing' };
+  }
+  const candidate = raw.MODELS ?? raw.manager?.MODELS;
+  if (!candidate || typeof candidate !== 'object') {
+    return {
+      available: false,
+      reason: 'smart-whisper loaded but its model map (MODELS / manager.MODELS) is missing — package layout may have changed; offline Whisper disabled',
+    };
+  }
+  return {
+    available: true,
+    module: {
+      Whisper: raw.Whisper as SmartWhisperModule['Whisper'],
+      MODELS: candidate as Record<string, string>,
+    },
+  };
+}
+
 function loadSmartWhisper(): LocalWhisperLoader {
   try {
-    const mod = requireFromHere('smart-whisper') as SmartWhisperModule;
-    if (!mod || typeof mod.Whisper !== 'function') {
-      return { available: false, reason: 'smart-whisper loaded but Whisper export is missing' };
-    }
-    return { available: true, module: mod };
+    const mod = requireFromHere('smart-whisper');
+    return normalizeSmartWhisperModule(mod);
   } catch (err) {
     return {
       available: false,
