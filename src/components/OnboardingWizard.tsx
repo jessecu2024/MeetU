@@ -223,20 +223,26 @@ export default function OnboardingWizard() {
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
                 {providerRegistry.get(currentProviderId)?.name} API Key
               </label>
-              <input
-                type="password"
-                placeholder={keyPattern.placeholder}
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                className={`w-full px-3 py-2.5 rounded-lg border
-                  bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white
-                  focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                  keyFormatValid === false
-                    ? 'border-amber-400 dark:border-amber-500'
-                    : keyFormatValid === true
-                      ? 'border-green-400 dark:border-green-500'
-                      : 'border-zinc-300 dark:border-zinc-600'
-                }`} />
+              {/* Password inputs live inside a <form> so password
+                  managers / Chrome treat them properly (the bare input
+                  triggers a DOM warning). display:contents keeps the
+                  form out of layout; submit is a no-op. */}
+              <form className="contents" onSubmit={(e) => e.preventDefault()}>
+                <input
+                  type="password"
+                  placeholder={keyPattern.placeholder}
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  className={`w-full px-3 py-2.5 rounded-lg border
+                    bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white
+                    focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    keyFormatValid === false
+                      ? 'border-amber-400 dark:border-amber-500'
+                      : keyFormatValid === true
+                        ? 'border-green-400 dark:border-green-500'
+                        : 'border-zinc-300 dark:border-zinc-600'
+                  }`} />
+              </form>
               {keyFormatValid === false && (
                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-1.5">
                   This doesn't look like a valid {providerRegistry.get(currentProviderId)?.nameEn} API Key. {keyPattern.hint}
@@ -391,7 +397,12 @@ export default function OnboardingWizard() {
                     <div className="flex items-center justify-between">
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-zinc-900 dark:text-white">{engine.nameEn}</p>
-                        <p className="text-xs text-zinc-500">{engine.name}</p>
+                        {/* The Chinese name line is omitted when it equals the
+                            English one (Deepgram, Whisper API) — rendering
+                            "Deepgram / Deepgram" reads like a bug. */}
+                        {engine.name !== engine.nameEn && (
+                          <p className="text-xs text-zinc-500">{engine.name}</p>
+                        )}
                         <p className="text-sm text-zinc-400 mt-0.5">
                           {engine.descriptionEn}
                         </p>
@@ -433,10 +444,10 @@ export default function OnboardingWizard() {
             <div className="mt-3 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/50
               border border-zinc-200 dark:border-zinc-700">
               <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                Four STT engines: Deepgram (streaming, low-latency, best for English), OpenAI Whisper API (5-second segments, 99 languages), and iFlytek (PCM streaming, best for Mandarin and Chinese dialects) — three cloud engines that use your own key — plus Local Whisper (offline, no key, beta), which transcribes on your device after a one-time model download in Settings. With a cloud engine, audio is sent directly to the provider you choose; with Local Whisper it never leaves your device. Recordings, transcripts, and your encrypted API Keys are stored on your local device; MeetU operates no servers and never receives, stores, or proxies any of this data.
+                Cloud STT engines (your own key): Deepgram (streaming, low-latency, best for English), OpenAI Whisper API (5-second segments, 99 languages), and — for the China region — iFlytek (PCM streaming, best for Mandarin and Chinese dialects). Plus Local Whisper (offline, no key, beta), which transcribes on your device after a one-time model download in Settings. With a cloud engine, audio is sent directly to the provider you choose; with Local Whisper it never leaves your device. Recordings, transcripts, and your encrypted API Keys are stored on your local device; MeetU operates no servers and never receives, stores, or proxies any of this data.
               </p>
               <p className="text-xs text-zinc-500 mt-1">
-                四个 STT 引擎可选：Deepgram（流式、低延迟、英文最佳）、OpenAI Whisper API（5 秒分段、99 种语言）、讯飞（PCM 流式、普通话和方言识别最佳）这三个云端引擎使用你自己的 Key，外加 Local Whisper（离线、无需 Key、beta）——在设置中一次性下载模型后完全在本机转写。使用云端引擎时音频直接发送到你选择的服务商；使用 Local Whisper 时音频不出设备。本地设备上会保存录音、转写文本与加密后的 API Key；MeetU 服务器不接收、不存储、不代理这些内容。
+                云端 STT 引擎（使用你自己的 Key）：Deepgram（流式、低延迟、英文最佳）、OpenAI Whisper API（5 秒分段、99 种语言），以及中国区专属的讯飞（PCM 流式、普通话和方言识别最佳）。另有 Local Whisper（离线、无需 Key、beta）——在设置中一次性下载模型后完全在本机转写。使用云端引擎时音频直接发送到你选择的服务商；使用 Local Whisper 时音频不出设备。本地设备上会保存录音、转写文本与加密后的 API Key；MeetU 服务器不接收、不存储、不代理这些内容。
               </p>
             </div>
 
