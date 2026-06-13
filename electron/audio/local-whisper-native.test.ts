@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeLocalWhisperIpc, type LocalWhisperLoader } from './local-whisper-native';
+import { makeLocalWhisperIpc, normalizeSmartWhisperModule, type LocalWhisperLoader } from './local-whisper-native';
 
 let tmpUserData: string;
 beforeEach(() => {
@@ -69,6 +69,67 @@ function fakeFetch(bytes: Uint8Array, ok = true, status = 200): typeof fetch {
     };
   }) as unknown as typeof fetch;
 }
+
+describe('normalizeSmartWhisperModule', () => {
+  // Regression pin for a REAL bug found by the on-machine e2e harness:
+  // smart-whisper@0.8.1 does NOT export MODELS at the module root —
+  // the URL map lives at `manager.MODELS`. The loader used to read
+  // `module.MODELS` directly, so probe()/downloadModel() threw a
+  // TypeError exactly when the native module was actually available,
+  // and unit tests missed it because their fakes provided a root map.
+  // These tests pin the real-package shape so CI catches any future
+  // drift back to the broken assumption.
+  const FakeWhisper = class {};
+
+  it('resolves the model map from manager.MODELS (the REAL smart-whisper@0.8.x layout)', () => {
+    const r = normalizeSmartWhisperModule({
+      Whisper: FakeWhisper,
+      // No root-level MODELS — exactly like the real package.
+      manager: { MODELS: { tiny: 'https://example.test/ggml-tiny.bin' } },
+    });
+    expect(r.available).toBe(true);
+    if (r.available) {
+      expect(r.module.MODELS.tiny).toBe('https://example.test/ggml-tiny.bin');
+      expect(r.module.Whisper).toBe(FakeWhisper);
+    }
+  });
+
+  it('still accepts a root-level MODELS map (forward compat)', () => {
+    const r = normalizeSmartWhisperModule({
+      Whisper: FakeWhisper,
+      MODELS: { base: 'https://example.test/ggml-base.bin' },
+    });
+    expect(r.available).toBe(true);
+    if (r.available) expect(r.module.MODELS.base).toBe('https://example.test/ggml-base.bin');
+  });
+
+  it('prefers the root map when both exist', () => {
+    const r = normalizeSmartWhisperModule({
+      Whisper: FakeWhisper,
+      MODELS: { tiny: 'root-url' },
+      manager: { MODELS: { tiny: 'manager-url' } },
+    });
+    expect(r.available).toBe(true);
+    if (r.available) expect(r.module.MODELS.tiny).toBe('root-url');
+  });
+
+  it('reports unavailable (NOT a throw) when neither map exists', () => {
+    const r = normalizeSmartWhisperModule({ Whisper: FakeWhisper, manager: {} });
+    expect(r.available).toBe(false);
+    if (!r.available) expect(r.reason).toMatch(/model map|MODELS/);
+  });
+
+  it('reports unavailable when Whisper export is missing', () => {
+    const r = normalizeSmartWhisperModule({ manager: { MODELS: { tiny: 'x' } } });
+    expect(r.available).toBe(false);
+    if (!r.available) expect(r.reason).toMatch(/Whisper export/);
+  });
+
+  it('reports unavailable for null / non-object modules', () => {
+    expect(normalizeSmartWhisperModule(null).available).toBe(false);
+    expect(normalizeSmartWhisperModule('nope').available).toBe(false);
+  });
+});
 
 describe('makeLocalWhisperIpc — probe', () => {
   it('reports unavailable with reason when the loader is unavailable', async () => {

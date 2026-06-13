@@ -14,3 +14,9 @@ native/macos/build/
 native/**/Release/
 native/**/Debug/
 native/**/*.node
+
+# Local e2e smoke tooling (not shipped)
+/smoke/
+/smoke-artifacts/
+/recordings/
+.playwright-mcp/
